@@ -1,0 +1,277 @@
+{
+  "pageDimensions": [
+    2550,
+    3301
+  ],
+  "bubbleDimensions": [
+    40,
+    40
+  ],
+  "preProcessors": [
+    {
+      "name": "CropPage",
+      "options": {
+        "morphKernel": [
+          10,
+          10
+        ]
+      }
+    }
+  ],
+  "cropOnMarkersConfig": {
+    "markerCentersInTemplate": {
+      "TL": [
+        180,
+        558
+      ],
+      "TR": [
+        2378,
+        560
+      ],
+      "BR": [
+        2370,
+        3054
+      ],
+      "BL": [
+        174,
+        3052
+      ]
+    }
+  },
+  "customLabels": {
+    "CCCD": [
+      "cccd1..12"
+    ],
+    "SoBaoDanh": [
+      "sbd1..8"
+    ],
+    "MaDe": [
+      "made1..3"
+    ],
+    "CaThi": [
+      "cathi1..2"
+    ],
+    "MaCTDT": [
+      "mactdt1..2"
+    ],
+    "TuChon": [
+      "tuchon1..2"
+    ]
+  },
+  "fieldBlocks": {
+    "Block_CCCD": {
+      "fieldType": "QTYPE_INT_FROM_1",
+      "bubbleDimensions": [
+        32,
+        32
+      ],
+      "origin": [
+        265,
+        924
+      ],
+      "bubblesGap": 43,
+      "labelsGap": 52,
+      "fieldLabels": [
+        "cccd1..12"
+      ],
+      "roiExpandPx": 3
+    },
+    "Block_SBD": {
+      "fieldType": "QTYPE_INT_FROM_1",
+      "bubbleDimensions": [
+        32,
+        32
+      ],
+      "origin": [
+        947,
+        925
+      ],
+      "bubblesGap": 43,
+      "labelsGap": 52,
+      "fieldLabels": [
+        "sbd1..8"
+      ],
+      "roiExpandPx": 3
+    },
+    "Block_MaDe": {
+      "fieldType": "QTYPE_INT_FROM_1",
+      "bubbleDimensions": [
+        32,
+        32
+      ],
+      "origin": [
+        1419,
+        926
+      ],
+      "bubblesGap": 43,
+      "labelsGap": 52,
+      "fieldLabels": [
+        "made1..3"
+      ],
+      "roiExpandPx": 3
+    },
+    "Block_CaThi": {
+      "fieldType": "QTYPE_INT_FROM_1",
+      "bubbleDimensions": [
+        32,
+        32
+      ],
+      "origin": [
+        1628,
+        926
+      ],
+      "bubblesGap": 43,
+      "labelsGap": 52,
+      "fieldLabels": [
+        "cathi1..2"
+      ],
+      "roiExpandPx": 3
+    },
+    "Block_MaCTDT": {
+      "fieldType": "QTYPE_INT_FROM_1",
+      "bubbleDimensions": [
+        32,
+        32
+      ],
+      "origin": [
+        1890,
+        927
+      ],
+      "bubblesGap": 43,
+      "labelsGap": 52,
+      "fieldLabels": [
+        "mactdt1..2"
+      ],
+      "roiExpandPx": 3
+    },
+    "Block_TuChon": {
+      "fieldType": "QTYPE_INT_FROM_1",
+      "bubbleDimensions": [
+        32,
+        32
+      ],
+      "origin": [
+        2152,
+        925
+      ],
+      "bubblesGap": 43,
+      "labelsGap": 52,
+      "fieldLabels": [
+        "tuchon1..2"
+      ],
+      "roiExpandPx": 3
+    },
+    "Block_PTBV": {
+      "fieldType": "QTYPE_MCQ4",
+      "origin": [
+        852,
+        1937
+      ],
+      "bubblesGap": 105,
+      "labelsGap": 67,
+      "fieldLabels": [
+        "ptbv1..5"
+      ],
+      "bubbleDimensions": [
+        40,
+        40
+      ]
+    },
+    "Block_VatLy": {
+      "fieldType": "QTYPE_MCQ4",
+      "origin": [
+        851,
+        2341
+      ],
+      "bubblesGap": 105,
+      "labelsGap": 67,
+      "fieldLabels": [
+        "vl1..10"
+      ],
+      "bubbleDimensions": [
+        40,
+        40
+      ]
+    },
+    "Block_HoaHoc": {
+      "fieldType": "QTYPE_MCQ4",
+      "origin": [
+        1376,
+        1938
+      ],
+      "bubblesGap": 105,
+      "labelsGap": 67,
+      "fieldLabels": [
+        "hh1..10"
+      ],
+      "bubbleDimensions": [
+        40,
+        40
+      ]
+    },
+    "Block_SinhHoc_1_5": {
+      "fieldType": "QTYPE_MCQ4",
+      "origin": [
+        1373,
+        2676
+      ],
+      "bubblesGap": 106,
+      "labelsGap": 67,
+      "fieldLabels": [
+        "sh1..5"
+      ],
+      "bubbleDimensions": [
+        40,
+        40
+      ]
+    },
+    "Block_SinhHoc_6_10": {
+      "fieldType": "QTYPE_MCQ4",
+      "origin": [
+        1897,
+        1937
+      ],
+      "bubblesGap": 105,
+      "labelsGap": 67,
+      "fieldLabels": [
+        "sh6..10"
+      ],
+      "bubbleDimensions": [
+        40,
+        40
+      ]
+    },
+    "Block_CNNN": {
+      "fieldType": "QTYPE_MCQ4",
+      "origin": [
+        1900,
+        2340
+      ],
+      "bubblesGap": 105,
+      "labelsGap": 67,
+      "fieldLabels": [
+        "cnnn1..10"
+      ],
+      "bubbleDimensions": [
+        40,
+        40
+      ]
+    },
+    "Block_Toan": {
+      "fieldType": "QTYPE_MCQ4",
+      "origin": [
+        329,
+        1935
+      ],
+      "bubbleDimensions": [
+        40,
+        40
+      ],
+      "bubblesGap": 105,
+      "labelsGap": 67,
+      "fieldLabels": [
+        "toan1..15"
+      ]
+    }
+  }
+}

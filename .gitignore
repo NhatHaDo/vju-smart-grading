@@ -1,0 +1,84 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+build/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+backend/*.db
+backend/*.sqlite
+backend/*.sqlite3
+
+# Runtime / generated data
+uploads/
+outputs/
+backend/uploads/
+backend/outputs/
+backend/results/
+backend/workdir/
+backend/tmp/
+backend/temp/
+
+# Custom/user-generated runtime data
+backend/data/custom_forms/
+backend/data/uploads/
+backend/data/outputs/
+
+# Debug artifacts
+debug/
+debug_*/
+*_debug.*
+*_overlay.*
+*_aligned.*
+*_warnings.*
+*_marked_only.*
+*_means.json
+*_preview.*
+calibrate_*.jpg
+calibrate_*.png
+auto_crop_test.*
+no_crop_test.*
+
+# App exports
+Results_*.csv
+scored*.csv
+*.xlsx
+*.xls
+
+# Logs
+*.log
+logs/
+
+# Local debug scripts
+backend/scripts/debug_*.py
+backend/test_write.txt

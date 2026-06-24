@@ -1,0 +1,107 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* VJU Brand */
+  --primary: #C8102E;
+  --primary-dark: #B5101F;
+  --primary-light: #FEECEC;
+  --primary-muted: #FEE2E2;
+  --accent: #1B5E20;
+  --accent-light: #D1FAE5;
+
+  /* Surfaces */
+  --background: #FFFFFF;
+  --foreground: #1E1E1E;
+  --muted: #F9FAFB;
+  --muted-foreground: #6B7280;
+  --border: #E5E7EB;
+  --input: #F3F4F6;
+
+  /* Sidebar — icon-only white */
+  --sidebar-background: #FFFFFF;
+  --sidebar-foreground: #6B7280;
+  --sidebar-border: #E5E7EB;
+  --sidebar-item-hover: #FEF2F2;
+  --sidebar-item-active-bg: #FEECEC;
+  --sidebar-item-active-color: #C8102E;
+  --sidebar-width: 58px;
+
+  /* Top bar */
+  --topbar-bg: #C8102E;
+  --topbar-height: 64px;
+
+  /* Status */
+  --warning: #FCB900;
+  --success: #39B54A;
+  --info: #066AAB;
+  --destructive: #CF2E2E;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 6px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.06);
+  --shadow-lg: 0 10px 15px rgba(0,0,0,0.10), 0 4px 6px rgba(0,0,0,0.05);
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.06), 0 4px 14px rgba(0,0,0,0.04);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Be Vietnam Pro', ui-sans-serif, system-ui, sans-serif;
+  background-color: var(--background);
+  color: var(--foreground);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted-foreground); }
+
+/* ─── Wizard step transitions ─────────────────────────────────────────────── */
+@keyframes wiz-slide-right {
+  from { opacity: 0; transform: translateX(30px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes wiz-slide-left {
+  from { opacity: 0; transform: translateX(-30px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.wiz-enter-right { animation: wiz-slide-right 0.25s ease forwards; }
+.wiz-enter-left  { animation: wiz-slide-left  0.25s ease forwards; }
+
+/* ─── Wizard button hovers ────────────────────────────────────────────────── */
+.wiz-btn-red:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(200,16,46,0.35) !important;
+}
+.wiz-btn-green:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(22,163,74,0.35) !important;
+}
+.wiz-btn-gray:hover:not(:disabled) {
+  background: #eae9e6 !important;
+  transform: translateY(-1px);
+}
+
+/* ─── Wizard 2-col grid — responsive ─────────────────────────────────────── */
+@media (max-width: 520px) {
+  .wiz-grid-2 { grid-template-columns: 1fr !important; }
+}
+
+/* ─── EditModal 2-column body — mobile stack ─────────────────────────────── */
+@media (max-width: 768px) {
+  .edit-modal-body {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: auto 1fr;
+    overflow-y: auto;
+  }
+}

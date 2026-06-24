@@ -1,0 +1,296 @@
+{
+  "pageDimensions": [
+    2550,
+    3301
+  ],
+  "bubbleDimensions": [
+    18,
+    18
+  ],
+  "preProcessors": [
+    {
+      "name": "CropPage",
+      "options": {
+        "morphKernel": [
+          10,
+          10
+        ]
+      }
+    }
+  ],
+  "customLabels": {
+    "CCCD": [
+      "cccd1",
+      "cccd2",
+      "cccd3",
+      "cccd4",
+      "cccd5",
+      "cccd6",
+      "cccd7",
+      "cccd8",
+      "cccd9",
+      "cccd10",
+      "cccd11",
+      "cccd12"
+    ],
+    "SoBaoDanh": [
+      "sbd1",
+      "sbd2",
+      "sbd3",
+      "sbd4"
+    ],
+    "MaDe": [
+      "made1",
+      "made2",
+      "made3"
+    ],
+    "CaThi": [
+      "cathi1",
+      "cathi2"
+    ],
+    "MaCTDT": [
+      "mactdt1",
+      "mactdt2"
+    ],
+    "TuChon": [
+      "tuchon1",
+      "tuchon2"
+    ]
+  },
+  "fieldBlocks": {
+    "Block_CCCD": {
+      "fieldType": "QTYPE_INT_FROM_1",
+      "origin": [
+        266,
+        924
+      ],
+      "bubbleDimensions": [
+        32,
+        32
+      ],
+      "bubblesGap": 43,
+      "labelsGap": 52,
+      "fieldLabels": [
+        "cccd1..12"
+      ],
+      "roiExpandPx": 3
+    },
+    "Block_SBD": {
+      "fieldType": "QTYPE_INT_FROM_1",
+      "origin": [
+        945,
+        926
+      ],
+      "bubbleDimensions": [
+        32,
+        32
+      ],
+      "bubblesGap": 43,
+      "labelsGap": 53,
+      "fieldLabels": [
+        "sbd1..4"
+      ],
+      "roiExpandPx": 3
+    },
+    "Block_MaDe": {
+      "fieldType": "QTYPE_INT_FROM_1",
+      "origin": [
+        1210,
+        924
+      ],
+      "bubbleDimensions": [
+        32,
+        32
+      ],
+      "bubblesGap": 43,
+      "labelsGap": 52,
+      "fieldLabels": [
+        "made1..3"
+      ],
+      "roiExpandPx": 3
+    },
+    "Block_CaThi": {
+      "fieldType": "QTYPE_INT_FROM_1",
+      "origin": [
+        1418,
+        924
+      ],
+      "bubbleDimensions": [
+        32,
+        32
+      ],
+      "bubblesGap": 44,
+      "labelsGap": 52,
+      "fieldLabels": [
+        "cathi1..2"
+      ],
+      "roiExpandPx": 3
+    },
+    "Block_MaCTDT": {
+      "fieldType": "QTYPE_INT_FROM_1",
+      "origin": [
+        1680,
+        926
+      ],
+      "bubbleDimensions": [
+        32,
+        32
+      ],
+      "bubblesGap": 43,
+      "labelsGap": 53,
+      "fieldLabels": [
+        "mactdt1..2"
+      ],
+      "roiExpandPx": 3
+    },
+    "Block_TuChon": {
+      "fieldType": "QTYPE_INT_FROM_1",
+      "origin": [
+        1940,
+        926
+      ],
+      "bubbleDimensions": [
+        32,
+        32
+      ],
+      "bubblesGap": 43,
+      "labelsGap": 53,
+      "fieldLabels": [
+        "tuchon1..2"
+      ],
+      "roiExpandPx": 3
+    },
+    "Block_Toan": {
+      "fieldType": "QTYPE_MCQ4",
+      "origin": [
+        329,
+        1938
+      ],
+      "bubbleDimensions": [
+        40,
+        40
+      ],
+      "bubblesGap": 105,
+      "labelsGap": 67,
+      "fieldLabels": [
+        "toan1..15"
+      ]
+    },
+    "Block_PTBV": {
+      "fieldType": "QTYPE_MCQ4",
+      "origin": [
+        851,
+        1936
+      ],
+      "bubbleDimensions": [
+        40,
+        40
+      ],
+      "bubblesGap": 105,
+      "labelsGap": 68,
+      "fieldLabels": [
+        "ptbv1..5"
+      ]
+    },
+    "Block_VatLy": {
+      "fieldType": "QTYPE_MCQ4",
+      "origin": [
+        850,
+        2340
+      ],
+      "bubbleDimensions": [
+        40,
+        40
+      ],
+      "bubblesGap": 105,
+      "labelsGap": 67,
+      "fieldLabels": [
+        "vl1..10"
+      ]
+    },
+    "Block_HoaHoc": {
+      "fieldType": "QTYPE_MCQ4",
+      "origin": [
+        1376,
+        1939
+      ],
+      "bubbleDimensions": [
+        40,
+        40
+      ],
+      "bubblesGap": 104,
+      "labelsGap": 67,
+      "fieldLabels": [
+        "hh1..10"
+      ]
+    },
+    "Block_SinhHoc_1_5": {
+      "fieldType": "QTYPE_MCQ4",
+      "origin": [
+        1374,
+        2676
+      ],
+      "bubbleDimensions": [
+        40,
+        40
+      ],
+      "bubblesGap": 105,
+      "labelsGap": 67,
+      "fieldLabels": [
+        "sh1..5"
+      ]
+    },
+    "Block_SinhHoc_6_10": {
+      "fieldType": "QTYPE_MCQ4",
+      "origin": [
+        1898,
+        1938
+      ],
+      "bubbleDimensions": [
+        40,
+        40
+      ],
+      "bubblesGap": 105,
+      "labelsGap": 67,
+      "fieldLabels": [
+        "sh6..10"
+      ]
+    },
+    "Block_CNNN": {
+      "fieldType": "QTYPE_MCQ4",
+      "origin": [
+        1896,
+        2340
+      ],
+      "bubbleDimensions": [
+        40,
+        40
+      ],
+      "bubblesGap": 105,
+      "labelsGap": 67,
+      "fieldLabels": [
+        "cnnn1..10"
+      ]
+    }
+  },
+  "cropOnMarkersConfig": {
+    "markerCentersInTemplate": {
+      "TL": [
+        180,
+        558
+      ],
+      "TR": [
+        2378,
+        560
+      ],
+      "BR": [
+        2370,
+        3054
+      ],
+      "BL": [
+        174,
+        3052
+      ]
+    }
+  }
+}
