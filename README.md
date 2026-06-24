@@ -1,6 +1,6 @@
 # VJU Smart Grading
 
-Hệ thống chấm thi trắc nghiệm tự động cho Trường Đại học Việt Nhật (VJU) sử dụng OMR (Optical Mark Recognition).
+Hệ thống chấm thi trắc nghiệm tự động sử dụng OMR (Optical Mark Recognition).
 
 ## Stack
 
