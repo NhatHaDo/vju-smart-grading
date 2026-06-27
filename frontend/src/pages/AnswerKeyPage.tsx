@@ -4,15 +4,16 @@ import { normalizeUploadFile } from '../utils/fileConversion';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import PageHeader from '../components/layout/PageHeader';
-import { Download, Upload, Trash2, FileJson, Save, CheckCircle2, Loader2, ArrowLeft, Zap } from 'lucide-react';
+import { Download, Upload, Trash2, FileJson, Save, CheckCircle2, Loader2, ArrowLeft, Zap, AlertTriangle } from 'lucide-react';
 import {
-  SECTION_MAP,
+  VJU_PRESET_SCHEMA,
   type AnswerKeyStore,
   type ScoringWeights,
   type TemplateVariant,
   type ImageSource,
   type BatchGradeState,
   type OmrGradeResult,
+  type TemplateSchema,
   TEMPLATE_VARIANT_LABEL,
   DEFAULT_SCORING,
   loadAnswerKey,
@@ -21,9 +22,16 @@ import {
 } from '../types/grading';
 
 const CHOICES = ['—', 'A', 'B', 'C', 'D'];
-const ALL_LABELS = Object.values(SECTION_MAP).flat();
 const API_BASE = 'http://localhost:8000/api/v1/omr/debug-grade';
 const BATCH_LS_KEY = 'vju_last_batch_grade';
+
+function loadTemplateSchemaFromStorage(): TemplateSchema | null {
+  try {
+    const raw = sessionStorage.getItem('vju_template_schema');
+    if (!raw) return null;
+    return JSON.parse(raw) as TemplateSchema;
+  } catch { return null; }
+}
 
 interface GradingModeState {
   mode: 'before-grading';
@@ -35,6 +43,8 @@ interface GradingModeState {
   templateMode?:       'vju' | 'custom';
   customTemplateId?:   number | null;
   customTemplateName?: string | null;
+  /** Full schema passed from SheetReviewPage — avoids sessionStorage dependency */
+  templateSchema?:     TemplateSchema | null;
 }
 
 export default function AnswerKeyPage() {
@@ -50,6 +60,28 @@ export default function AnswerKeyPage() {
   const templateMode:       'vju' | 'custom' = isGradingMode ? (navState.templateMode ?? 'vju') : 'vju';
   const customTemplateId:   number | null = isGradingMode ? (navState.customTemplateId   ?? null) : null;
   const customTemplateName: string | null = isGradingMode ? (navState.customTemplateName ?? null) : null;
+
+  // Resolve template schema:
+  // 1. navState.templateSchema (passed from SheetReviewPage) — primary
+  // 2. sessionStorage (set by TemplatePage.handleLoad) — fallback
+  // 3. null for custom (never fall back to VJU!) — show error
+  // 4. VJU_PRESET_SCHEMA for vju mode
+  const templateSchema: TemplateSchema | null = (() => {
+    if (templateMode === 'custom') {
+      const fromState   = isGradingMode ? (navState?.templateSchema ?? null) : null;
+      const fromStorage = loadTemplateSchemaFromStorage();
+      const resolved    = fromState ?? fromStorage;
+      console.log('[AnswerKeyPage] templateSchema', {
+        templateMode, customTemplateId, customTemplateName,
+        fromState: fromState ? `${fromState.infoFields.length} info, ${fromState.answerSections.length} sections` : null,
+        fromStorage: fromStorage ? `${fromStorage.infoFields.length} info, ${fromStorage.answerSections.length} sections` : null,
+      });
+      return resolved;
+    }
+    return VJU_PRESET_SCHEMA;
+  })();
+  const activeSections = templateSchema?.answerSections ?? [];
+  const activeLabels   = activeSections.flatMap(s => s.labels);
 
   const existing = loadAnswerKey();
   const [answers,   setAnswers]   = useState<Record<string, string>>(() => existing?.answers ?? {});
@@ -120,7 +152,7 @@ export default function AnswerKeyPage() {
 
   const handleSampleDownload = () => {
     const sample: Record<string, string> = {};
-    ALL_LABELS.forEach((lbl, i) => { sample[lbl] = ['A', 'B', 'C', 'D'][i % 4]; });
+    activeLabels.forEach((lbl, i) => { sample[lbl] = ['A', 'B', 'C', 'D'][i % 4]; });
     const store: AnswerKeyStore = { answers: sample, scoring: DEFAULT_SCORING, updatedAt: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(store, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
@@ -203,6 +235,7 @@ export default function AnswerKeyPage() {
       templateMode:        templateMode,
       customTemplateId:    customTemplateId   ?? null,
       customTemplateName:  customTemplateName ?? null,
+      templateSchema:      templateMode === 'custom' ? templateSchema : null,
     };
 
     try { localStorage.setItem(BATCH_LS_KEY, JSON.stringify(batch)); } catch { /* ignore */ }
@@ -211,8 +244,8 @@ export default function AnswerKeyPage() {
     navigate('/app/results', { state: batch });
   };
 
-  const filled = Object.values(answers).filter(Boolean).length;
-  const total  = ALL_LABELS.length;
+  const filled = activeLabels.filter(l => answers[l]).length;
+  const total  = activeLabels.length;
 
   const primaryButton = isGradingMode ? (
     grading ? (
@@ -275,6 +308,27 @@ export default function AnswerKeyPage() {
 
       <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 20 }}>
 
+        {/* Custom template schema missing — error banner */}
+        {isGradingMode && templateMode === 'custom' && !templateSchema && (
+          <div style={{ background: '#FEF2F2', border: '1.5px solid #FCA5A5', borderRadius: 12, padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 14 }}>
+            <AlertTriangle size={20} color="#EF4444" style={{ flexShrink: 0 }} />
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#991B1B', marginBottom: 2 }}>
+                Không tải được cấu trúc custom template
+              </div>
+              <div style={{ fontSize: 13, color: '#374151' }}>
+                Schema của template <strong>{customTemplateName ?? `#${customTemplateId}`}</strong> chưa được tải.{' '}
+                <button
+                  onClick={() => navigate('/app/upload')}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#C8102E', fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: 0 }}
+                >
+                  Quay lại Upload →
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Grading mode banner */}
         {isGradingMode && (
           <div style={{ background: '#FFF5F5', border: '1.5px solid #C8102E', borderRadius: 12, padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 14 }}>
@@ -316,7 +370,7 @@ export default function AnswerKeyPage() {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {(['A','B','C','D'] as const).map(ch => (
               <button key={ch}
-                onClick={() => setAnswers(Object.fromEntries(ALL_LABELS.map(l => [l, ch])))}
+                onClick={() => setAnswers(Object.fromEntries(activeLabels.map(l => [l, ch])))}
                 disabled={grading}
                 style={{ padding: '6px 16px', borderRadius: 8, border: '1.5px solid #E5E7EB', background: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}
               >
@@ -351,7 +405,13 @@ export default function AnswerKeyPage() {
         </div>
 
         {/* Sections */}
-        {Object.entries(SECTION_MAP).map(([section, labels]) => {
+        {activeSections.length === 0 && templateMode === 'custom' ? (
+          <Card>
+            <div style={{ fontSize: 13, color: '#6B7280', textAlign: 'center', padding: '20px 0' }}>
+              Template này không có trường MCQ — không cần nhập đáp án.
+            </div>
+          </Card>
+        ) : activeSections.map(({ name: section, labels }) => {
           const sectionFilled = labels.filter(l => answers[l]).length;
           return (
             <Card key={section}>

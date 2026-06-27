@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { X, AlertTriangle, CheckCircle2 } from 'lucide-react';
-import type { OmrGradeResult, AnswerKeyStore, ManualCorrection, InfoFieldColumn } from '../../types/grading';
-import { SECTION_MAP, computeScore } from '../../types/grading';
+import type { OmrGradeResult, AnswerKeyStore, ManualCorrection, InfoFieldColumn, TemplateSchema, TemplateAnswerSection } from '../../types/grading';
+import { VJU_PRESET_SCHEMA, computeScore } from '../../types/grading';
+import { buildSchemaFromAnswerKeys } from '../../utils/templateSchema';
+import { getInfoFieldValue } from '../../utils/resultMapping';
 import SheetImageViewer from './SheetImageViewer';
 
-const ALL_LABELS = Object.values(SECTION_MAP).flat();
 type Filter = 'all' | 'correct' | 'wrong' | 'blank' | 'warn';
 
 interface Props {
@@ -12,6 +13,8 @@ interface Props {
   correction: ManualCorrection | undefined;
   answerKey: AnswerKeyStore | null;
   onClose: () => void;
+  /** Dynamic schema — drives info header + answer grid. Falls back to VJU preset. */
+  templateSchema?: TemplateSchema | null;
 }
 
 const STATUS_COLOR:  Record<string, string> = { correct:'#D1FAE5', wrong:'#FEE2E2', blank:'#fff',     warn:'#EDE9FE', 'no-key':'#F3F4F6' };
@@ -66,8 +69,23 @@ function InfoFieldValue({ label, raw, columns }: InfoFieldValueProps) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function ResultDetailModal({ r, correction, answerKey, onClose }: Props) {
+export default function ResultDetailModal({ r, correction, answerKey, onClose, templateSchema }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
+  const schema = templateSchema ?? VJU_PRESET_SCHEMA;
+
+  // Safety net: if schema has no answer sections but the row has actual answers,
+  // derive sections from the answer keys. This handles the case where schema
+  // hasn't been fetched yet or was lost during DB round-trip.
+  const effectiveAnswerSections: TemplateAnswerSection[] = (() => {
+    if (schema.answerSections.length > 0) return schema.answerSections;
+    const rawAnswers = r.answers ?? {};
+    const nonNullKeys = Object.keys(rawAnswers).filter(k => rawAnswers[k] !== null && rawAnswers[k] !== undefined);
+    if (nonNullKeys.length === 0) return [];
+    return buildSchemaFromAnswerKeys(nonNullKeys).answerSections;
+  })();
+  const schemaDerived = schema.answerSections.length === 0 && effectiveAnswerSections.length > 0;
+
+  const allAnswerLabels = effectiveAnswerSections.flatMap(s => s.labels);
 
   // Merge correction
   const student_info = correction
@@ -141,20 +159,13 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose }:
                 )}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 18px' }}>
-                {([
-                  ['CCCD',    student_info?.cccd,    'cccd'   ],
-                  ['SBD',     student_info?.sbd,     'sbd'    ],
-                  ['Mã đề',   student_info?.ma_de,   'ma_de'  ],
-                  ['Ca thi',  student_info?.ca_thi,  'ca_thi' ],
-                  ['Mã CTĐT', student_info?.ma_ctdt, 'ma_ctdt'],
-                  ['Tự chọn', student_info?.tu_chon, 'tu_chon'],
-                ] as [string, string | null | undefined, string][]).map(([lbl, val, infoKey]) => (
-                  <div key={lbl} style={{ fontSize: 12 }}>
-                    <span style={{ color: 'rgba(255,255,255,0.6)' }}>{lbl}: </span>
+                {schema.infoFields.map(field => (
+                  <div key={field.key} style={{ fontSize: 12 }}>
+                    <span style={{ color: 'rgba(255,255,255,0.6)' }}>{field.displayName}: </span>
                     <InfoFieldValue
-                      label={lbl}
-                      raw={val}
-                      columns={r.info_field_columns?.[infoKey as keyof typeof r.info_field_columns]}
+                      label={field.displayName}
+                      raw={getInfoFieldValue(student_info, r.info_field_columns, field) || student_info?.[field.key] || null}
+                      columns={r.info_field_columns?.[field.key]}
                     />
                   </div>
                 ))}
@@ -215,7 +226,18 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose }:
                 ))}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {Object.entries(SECTION_MAP).map(([section, labels]) => {
+                {effectiveAnswerSections.length === 0 && (
+                  <div style={{ fontSize: 12, color: '#9CA3AF', textAlign: 'center', padding: '12px 0' }}>
+                    Template này không có câu hỏi MCQ.
+                  </div>
+                )}
+                {schemaDerived && (
+                  <div style={{ fontSize: 10, color: '#92400E', background: '#FEF9C3', borderRadius: 6, padding: '4px 8px', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <AlertTriangle size={10} />
+                    Hiển thị từ dữ liệu thực — schema đang tải hoặc chưa lưu
+                  </div>
+                )}
+                {effectiveAnswerSections.map(({ name: section, labels }) => {
                   const visible = labels.filter(lbl => filter === 'all' || qStatus(lbl) === filter);
                   if (visible.length === 0) return null;
                   return (
@@ -225,7 +247,7 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose }:
                         {visible.map(lbl => {
                           const st  = qStatus(lbl);
                           const ans = answers[lbl];
-                          const gi  = ALL_LABELS.indexOf(lbl) + 1;
+                          const gi  = allAnswerLabels.indexOf(lbl) + 1;
                           return (
                             <div key={lbl} style={{
                               width: 42, height: 42, borderRadius: 8,

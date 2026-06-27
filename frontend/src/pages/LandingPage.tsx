@@ -237,7 +237,7 @@ export default function LandingPage() {
             {[
               {
                 img: 'https://images.unsplash.com/photo-1612198188060-c7c2a3b66eae?w=900&q=80',
-                tag: 'OCR & NHẬN DẠNG',
+                tag: 'OMR & NHẬN DẠNG',
                 title: 'Nhận dạng phiếu thi cực nhanh',
                 desc: 'Công nghệ computer vision nhận diện từng ô trả lời chính xác tới từng pixel.',
               },

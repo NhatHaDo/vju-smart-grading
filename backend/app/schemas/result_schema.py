@@ -55,6 +55,10 @@ class BatchResultOut(BaseModel):
     sbd:                     str | None
     ma_de:                   str | None
     ca_thi:                  str | None
+    ma_ctdt:                 str | None = None
+    tu_chon:                 str | None = None
+    # Flat dict of all VJU info fields for easy frontend consumption
+    info_values:             dict[str, str | None] | None = None
     answers_json:            str
     scores_json:             str
     section_json:            str
@@ -90,6 +94,8 @@ class ResultBatchSaveItem(BaseModel):
     sbd:              str | None               = None
     ma_de:            str | None               = None
     ca_thi:           str | None               = None
+    ma_ctdt:          str | None               = None
+    tu_chon:          str | None               = None
 
     # Answers + scoring
     answers:          dict[str, Any]           = {}

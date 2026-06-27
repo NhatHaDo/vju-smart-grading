@@ -15,17 +15,23 @@ Endpoints:
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import re
 import shutil
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+import cv2
+import numpy as np
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.security.permissions import get_current_user
+from app.core.omr.crop_on_markers import crop_on_markers
+from app.core.omr.preprocessor import crop_page, resize_to_template
 from app.core.templates.template_compiler import (
     CompileError,
     DEFAULT_PAGE_SIZE,
@@ -58,6 +64,7 @@ class CompileRequest(BaseModel):
     pageDimensions:    list[int] = list(DEFAULT_PAGE_SIZE)
     areas:             list[dict] = []
     use_crop_on_markers: bool = False
+    template_id:       int | None = None  # When set, update this template by ID (edit mode)
 
 
 class RenameRequest(BaseModel):
@@ -93,6 +100,22 @@ def _get_owned_or_404(template_id: int, user: User, repo: TemplateRepository):
     if tpl is None:
         raise HTTPException(404, "Không tìm thấy custom template")
     return tpl
+
+
+def _extract_info_fields(areas: list[dict]) -> list[dict]:
+    """Return non-answer (INT info) fields from an areas list."""
+    result = []
+    for area in areas:
+        if area.get("type") != "omr":
+            continue
+        if area.get("includeInAnswerKey", True):
+            continue  # answer field — skip
+        result.append({
+            "key":         area.get("blockName", ""),
+            "displayName": area.get("label") or area.get("blockName", ""),
+            "fieldType":   area.get("fieldType", "QTYPE_INT"),
+        })
+    return result
 
 
 def _area_count_from_path(areas_path: str | None) -> int:
@@ -160,6 +183,7 @@ def get_custom_form(
             compiled = {}
 
     answer_fields = extract_answer_fields_from_template(compiled, areas)
+    info_fields   = _extract_info_fields(areas)
 
     return {
         "id":            tpl.id,
@@ -169,6 +193,7 @@ def get_custom_form(
         "areas":         areas,
         "template":      compiled,
         "answerFields":  answer_fields,
+        "infoFields":    info_fields,
         "updated_at":    tpl.updated_at.isoformat(),
     }
 
@@ -207,29 +232,45 @@ def compile_custom_form(
 
     # Upsert DB row
     repo = TemplateRepository(db)
-    existing = repo.list_custom_by_owner(user.id)
-    match = next((t for t in existing if t.name == payload.name), None)
 
-    if match:
-        tpl = repo.update(
-            match,
-            file_path=str(tpl_path),
-            areas_path=str(areas_path),
-            page_width=page_dims[0],
-            page_height=page_dims[1],
-        )
+    if payload.template_id is not None:
+        # Edit mode: update by ID (prevents creating duplicates when editing)
+        match = repo.get_custom_by_id_and_owner(payload.template_id, user.id)
+        if match:
+            tpl = repo.update(
+                match,
+                name=payload.name,
+                file_path=str(tpl_path),
+                areas_path=str(areas_path),
+                page_width=page_dims[0],
+                page_height=page_dims[1],
+            )
+        else:
+            raise HTTPException(404, "Không tìm thấy template để cập nhật")
     else:
-        tpl = repo.create(
-            name=payload.name,
-            type="custom",
-            version="1.0",
-            file_path=str(tpl_path),
-            areas_path=str(areas_path),
-            page_width=page_dims[0],
-            page_height=page_dims[1],
-            owner_user_id=user.id,
-            is_default=False,
-        )
+        # Create mode: upsert by name (existing behavior)
+        existing = repo.list_custom_by_owner(user.id)
+        match = next((t for t in existing if t.name == payload.name), None)
+        if match:
+            tpl = repo.update(
+                match,
+                file_path=str(tpl_path),
+                areas_path=str(areas_path),
+                page_width=page_dims[0],
+                page_height=page_dims[1],
+            )
+        else:
+            tpl = repo.create(
+                name=payload.name,
+                type="custom",
+                version="1.0",
+                file_path=str(tpl_path),
+                areas_path=str(areas_path),
+                page_width=page_dims[0],
+                page_height=page_dims[1],
+                owner_user_id=user.id,
+                is_default=False,
+            )
 
     answer_fields = extract_answer_fields_from_template(compiled, payload.areas)
 
@@ -240,6 +281,72 @@ def compile_custom_form(
         "answerFields": answer_fields,
         "file_path":    str(tpl_path),
         "areas_path":   str(areas_path),
+    }
+
+
+@router.post("/align-image")
+async def align_image_for_picker(
+    file: UploadFile = File(...),
+    _:    None        = Depends(get_current_user),
+):
+    """
+    Preprocess an uploaded image exactly as the OMR engine would before reading:
+      CropOnMarkers (VJU corner markers) → CropPage fallback → resize to DEFAULT_PAGE_SIZE.
+
+    Returns the aligned JPEG as base64 so the coordinate picker can pick
+    coordinates in the correct grading space (1000 × 1414).
+
+    The frontend MUST use this preprocessed image — NOT the raw upload — to
+    ensure template coordinates match the space the engine reads at.
+    """
+    ALIGN_SIZE = list(DEFAULT_PAGE_SIZE)   # [1000, 1414]
+
+    # ── Decode uploaded file ─────────────────────────────────────────────
+    raw_bytes = await file.read()
+    arr = np.frombuffer(raw_bytes, np.uint8)
+    raw = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+    if raw is None:
+        raise HTTPException(400, "Không đọc được ảnh — hãy dùng JPEG/PNG")
+
+    # ── Step 1: CropOnMarkers (no custom marker centers; legacy auto-detect) ─
+    mr = crop_on_markers(
+        raw,
+        target_size=(ALIGN_SIZE[0], ALIGN_SIZE[1]),
+        debug=False,
+        marker_centers_in_template=None,
+        # Use default quality gate (0.45) — same as engine's auto mode
+    )
+
+    if mr.success and mr.warp_used and mr.image is not None:
+        aligned = mr.image
+        method  = "markers"
+    else:
+        # ── Step 2: CropPage fallback ────────────────────────────────────
+        cp = crop_page(raw)
+        if cp.success and cp.image is not None:
+            aligned = cp.image
+            method  = "croppage"
+        else:
+            # ── Step 3: No crop — just use raw ───────────────────────────
+            aligned = raw
+            method  = "none"
+
+    # ── Step 4: Resize to standard template size ─────────────────────────
+    aligned = resize_to_template(aligned, ALIGN_SIZE)
+
+    # ── Encode as JPEG base64 ────────────────────────────────────────────
+    ok, buf = cv2.imencode(".jpg", aligned, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    if not ok:
+        raise HTTPException(500, "Lỗi encode ảnh")
+
+    b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+    return {
+        "image":          b64,
+        "mime":           "image/jpeg",
+        "width":          ALIGN_SIZE[0],
+        "height":         ALIGN_SIZE[1],
+        "align_method":   method,
+        "pageDimensions": ALIGN_SIZE,
     }
 
 

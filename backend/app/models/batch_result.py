@@ -44,10 +44,12 @@ class BatchResult(Base):
     file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # ── Student info ──────────────────────────────────────────────────────────
-    cccd:   Mapped[str | None] = mapped_column(String(20),  nullable=True)
-    sbd:    Mapped[str | None] = mapped_column(String(10),  nullable=True)
-    ma_de:  Mapped[str | None] = mapped_column(String(10),  nullable=True)
-    ca_thi: Mapped[str | None] = mapped_column(String(50),  nullable=True)
+    cccd:    Mapped[str | None] = mapped_column(String(20),  nullable=True)
+    sbd:     Mapped[str | None] = mapped_column(String(10),  nullable=True)
+    ma_de:   Mapped[str | None] = mapped_column(String(10),  nullable=True)
+    ca_thi:  Mapped[str | None] = mapped_column(String(50),  nullable=True)
+    ma_ctdt: Mapped[str | None] = mapped_column(String(50),  nullable=True)
+    tu_chon: Mapped[str | None] = mapped_column(String(10),  nullable=True)
 
     # ── Grading result (JSON-serialised) ─────────────────────────────────────
     answers_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")

@@ -12,7 +12,7 @@ import ResultsPage       from '../pages/ResultsPage';
 import ReviewErrorsPage  from '../pages/ReviewErrorsPage';
 import AnswerKeyPage     from '../pages/AnswerKeyPage';
 import TemplatePage      from '../pages/TemplatePage';
-import OcrQrPage         from '../pages/OcrQrPage';
+import TemplateCoordinatePage from '../pages/TemplateCoordinatePage';
 import AnalyticsPage     from '../pages/AnalyticsPage';
 import ExcelPreviewPage  from '../pages/ExcelPreviewPage';
 
@@ -45,7 +45,8 @@ export default function AppRoutes() {
         <Route path="review-errors"   element={<ReviewErrorsPage />} />
         <Route path="answer-key"      element={<AnswerKeyPage />} />
         <Route path="templates"       element={<TemplatePage />} />
-        <Route path="ocr-qr"          element={<OcrQrPage />} />
+        <Route path="template-coordinate" element={<TemplateCoordinatePage />} />
+        <Route path="ocr-qr"               element={<Navigate to="/app/template-coordinate" replace />} />
         <Route path="analytics"       element={<AnalyticsPage />} />
         <Route path="excel-preview"   element={<ExcelPreviewPage />} />
         <Route path="settings"        element={<SettingsPage />} />

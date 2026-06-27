@@ -36,6 +36,23 @@ from app.schemas.result_schema import (
     ResultListOut,
 )
 
+
+# ── Serialisation helper ──────────────────────────────────────────────────────
+
+def _row_to_out(row) -> BatchResultOut:
+    """Convert a BatchResult ORM row to BatchResultOut, populating info_values."""
+    out = BatchResultOut.model_validate(row)
+    out.info_values = {
+        'cccd':    row.cccd,
+        'sbd':     row.sbd,
+        'ma_de':   row.ma_de,
+        'ca_thi':  row.ca_thi,
+        'ma_ctdt': getattr(row, 'ma_ctdt', None),
+        'tu_chon': getattr(row, 'tu_chon', None),
+    }
+    return out
+
+
 router = APIRouter(prefix="/results", tags=["results"])
 
 
@@ -66,7 +83,7 @@ def list_results(
         offset=offset,
     )
     items, total = repo.list_all(filters)
-    return ResultListOut(total=total, items=[BatchResultOut.model_validate(r) for r in items])
+    return ResultListOut(total=total, items=[_row_to_out(r) for r in items])
 
 
 # ── POST /results/batch  (B5) — MUST come before /{id} ───────────────────────
@@ -124,7 +141,7 @@ def get_result(
     row  = repo.get_by_id(result_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"Result {result_id} not found")
-    return BatchResultOut.model_validate(row)
+    return _row_to_out(row)
 
 
 # ── DELETE /results/{id} ──────────────────────────────────────────────────────
@@ -187,4 +204,4 @@ def save_correction(
     row  = repo.save_correction(result_id, payload)
     if row is None:
         raise HTTPException(status_code=404, detail=f"Result {result_id} not found")
-    return BatchResultOut.model_validate(row)
+    return _row_to_out(row)

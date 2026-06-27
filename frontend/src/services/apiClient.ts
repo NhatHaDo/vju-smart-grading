@@ -283,6 +283,9 @@ export interface BatchResultOut {
   sbd:                     string | null;
   ma_de:                   string | null;
   ca_thi:                  string | null;
+  ma_ctdt?:                string | null;
+  tu_chon?:                string | null;
+  info_values?:            Record<string, string | null> | null;
   answers_json:            string;
   scores_json:             string;
   section_json:            string;
@@ -314,6 +317,8 @@ export interface ResultBatchSaveItem {
   sbd?:               string | null;
   ma_de?:             string | null;
   ca_thi?:            string | null;
+  ma_ctdt?:           string | null;
+  tu_chon?:           string | null;
   answers?:           Record<string, unknown>;
   scores?:            Record<string, unknown>;
   sections?:          Record<string, unknown>;
@@ -398,12 +403,38 @@ export interface CustomFormMeta {
   updated_at:  string;
 }
 
+/** Shape returned by GET /api/v1/custom-forms/{id} */
+export interface CustomFormDetail {
+  id:           number;
+  name:         string;
+  page_width:   number | null;
+  page_height:  number | null;
+  areas:        unknown[];
+  template:     unknown;
+  /** MCQ answer fields (includeInAnswerKey === true) */
+  answerFields: {
+    key:        string;
+    label:      string;
+    blockName:  string;
+    options:    string[];
+    composite?: boolean;
+    sourceFields?: string[];
+  }[];
+  /** INT info fields (includeInAnswerKey === false) */
+  infoFields: {
+    key:         string;
+    displayName: string;
+    fieldType:   string;
+  }[];
+  updated_at:  string;
+}
+
 export const customFormsApi = {
   list: () =>
     request<{ forms: CustomFormMeta[] }>('/api/v1/custom-forms'),
 
   get: (id: number) =>
-    request<{ areas: unknown[] }>(`/api/v1/custom-forms/${id}`),
+    request<CustomFormDetail>(`/api/v1/custom-forms/${id}`),
 
   rename: (id: number, name: string) =>
     request<CustomFormMeta>(`/api/v1/custom-forms/${id}/rename`, {

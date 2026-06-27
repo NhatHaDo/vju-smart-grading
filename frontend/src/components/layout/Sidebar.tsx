@@ -34,7 +34,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/app/review-errors',icon: <AlertTriangle size={20} />, label: 'Kiểm tra lỗi' },
   { to: '/app/answer-key',   icon: <Key          size={20} />, label: 'Answer Key' },
   { to: '/app/templates',    icon: <FileText     size={20} />, label: 'Template phiếu' },
-  { to: '/app/ocr-qr',       icon: <ScanLine     size={20} />, label: 'OCR/QR & Define Areas' },
+  { to: '/app/template-coordinate', icon: <ScanLine size={20} />, label: 'Tạo Template Tọa Độ' },
 ];
 
 const BOTTOM_ITEMS: NavItem[] = [

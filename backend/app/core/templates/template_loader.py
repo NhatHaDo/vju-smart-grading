@@ -43,8 +43,10 @@ FIELD_TYPES: dict[str, dict[str, Any]] = {
     },
 }
 
-# Regex for range strings like "cccd1..12", "toan1..15"
-_RANGE_REGEX = re.compile(r"([^\d.]+)(\d+)\.{2,3}(\d+)")
+# Regex for range strings like "cccd1..12", "toan1..15".
+# Also handles "cccd1..cccd12" (repeated prefix) for backward compatibility
+# with area JSONs saved by older frontend versions.
+_RANGE_REGEX = re.compile(r"([^\d.]+)(\d+)\.{2,3}(?:[^\d.]+)?(\d+)")
 
 
 # ── Data-classes ──────────────────────────────────────────────────────────

@@ -52,12 +52,14 @@ export const TEMPLATE_VARIANT_LABEL: Record<TemplateVariant, string> = {
 };
 
 export interface OmrStudentInfo {
-  cccd:      string | null;
-  sbd:       string | null;
-  ma_de:     string | null;
-  ca_thi:    string | null;
-  ma_ctdt:   string | null;
-  tu_chon:   string | null;
+  cccd?:    string | null;
+  sbd?:     string | null;
+  ma_de?:   string | null;
+  ca_thi?:  string | null;
+  ma_ctdt?: string | null;
+  tu_chon?: string | null;
+  /** Custom template fields keyed by blockName */
+  [key: string]: string | null | undefined;
 }
 
 export interface OmrWarning {
@@ -82,11 +84,9 @@ export interface InfoFieldColumn {
 }
 
 /** Map from student-info key → per-column breakdown.
- *  Keys match OmrStudentInfo: "cccd" | "sbd" | "ma_de" | "ca_thi" | "ma_ctdt" | "tu_chon" */
-export type InfoFieldColumns = Partial<Record<
-  'cccd' | 'sbd' | 'ma_de' | 'ca_thi' | 'ma_ctdt' | 'tu_chon',
-  InfoFieldColumn[]
->>;
+ *  VJU: "cccd" | "sbd" | "ma_de" | "ca_thi" | "ma_ctdt" | "tu_chon"
+ *  Custom templates: blockName (e.g. "custom_1782375370047") */
+export type InfoFieldColumns = Record<string, InfoFieldColumn[] | undefined>;
 
 export interface OmrScore {
   total:   number | null;
@@ -165,7 +165,52 @@ export interface OmrGradeResult {
   _error?:             string;
   /** client-side only — set after POST /results/batch succeeds; used for DB delete/correction */
   db_id?:              number;
+  /** client-side only — per-row template tracking (set from DB rows for mixed-template batches) */
+  template_type?:         string | null;
+  template_id?:           number | null;
+  template_variant_row?:  string | null;
 }
+
+// ── Template schema ──────────────────────────────────────────────────────────
+
+/** One info field (INT-type, e.g. CCCD / SBD) — drives table columns + modal header */
+export interface TemplateInfoField {
+  /** resultKey: VJU = "cccd"/"sbd"/..., Custom = blockName */
+  key:         string;
+  /** Human display label: "CCCD", "SBD", "Câu lạc bộ" */
+  displayName: string;
+}
+
+/** One answer section (MCQ group) */
+export interface TemplateAnswerSection {
+  name:   string;    // "Toán (Bắt buộc)", "Câu hỏi MCQ"
+  labels: string[];  // ["toan1","toan2",...] or ["q1","q2",...]
+}
+
+export interface TemplateSchema {
+  infoFields:     TemplateInfoField[];
+  answerSections: TemplateAnswerSection[];
+}
+
+/** VJU preset schema — mirrors hardcoded SECTION_MAP */
+export const VJU_PRESET_SCHEMA: TemplateSchema = {
+  infoFields: [
+    { key: 'cccd',    displayName: 'CCCD'    },
+    { key: 'sbd',     displayName: 'SBD'     },
+    { key: 'ma_de',   displayName: 'Mã đề'   },
+    { key: 'ca_thi',  displayName: 'Ca thi'  },
+    { key: 'ma_ctdt', displayName: 'Mã CTĐT' },
+    { key: 'tu_chon', displayName: 'Tự chọn' },
+  ],
+  answerSections: Object.entries({
+    'Toán (Bắt buộc)': Array.from({ length: 15 }, (_, i) => `toan${i + 1}`),
+    'PTBV (Bắt buộc)': Array.from({ length: 5 },  (_, i) => `ptbv${i + 1}`),
+    'Vật lý':          Array.from({ length: 10 }, (_, i) => `vl${i + 1}`),
+    'Hóa học':         Array.from({ length: 10 }, (_, i) => `hh${i + 1}`),
+    'Sinh học':        Array.from({ length: 10 }, (_, i) => `sh${i + 1}`),
+    'CNNN':            Array.from({ length: 10 }, (_, i) => `cnnn${i + 1}`),
+  }).map(([name, labels]) => ({ name, labels })),
+};
 
 export interface BatchGradeState {
   templateVariant:     TemplateVariant;
@@ -177,6 +222,8 @@ export interface BatchGradeState {
   templateMode?:       'vju' | 'custom';
   customTemplateId?:   number | null;
   customTemplateName?: string | null;
+  /** Dynamic schema — drives info columns, answer sections, modal headers */
+  templateSchema?:     TemplateSchema | null;
 }
 
 // ── Answer Key ───────────────────────────────────────────────────────────────

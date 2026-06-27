@@ -92,6 +92,104 @@ def _extract_answers(omr_result) -> dict:
 _INT_FIELD_TYPES = {"QTYPE_INT_FROM_1", "QTYPE_INT"}
 
 
+# ── Custom-template extraction helpers ────────────────────────────────────────
+
+def _extract_student_info_custom(omr_result, template) -> dict:
+    """For custom templates: assemble INT block values as composite strings.
+    Key = block.name (e.g. "custom_1782375370047")."""
+    info: dict[str, str | None] = {}
+    for block in template.field_blocks:
+        if block.field_type not in _INT_FIELD_TYPES:
+            continue
+        parts = []
+        for lbl in block.field_labels:
+            fr = omr_result.field_results.get(lbl)
+            if fr and fr.selected_value and fr.status != _FieldStatus.BLANK:
+                parts.append(fr.selected_value)
+            else:
+                parts.append("_")
+        composite = "".join(parts)
+        # Return None if entirely blank
+        info[block.name] = None if all(c == "_" for c in composite) else composite
+    return info
+
+
+def _extract_answers_custom(omr_result, template) -> dict:
+    """For custom templates: extract all MCQ block label values."""
+    answers: dict[str, str | None] = {}
+    for block in template.field_blocks:
+        if block.field_type in _INT_FIELD_TYPES:
+            continue
+        for lbl in block.field_labels:
+            fr = omr_result.field_results.get(lbl)
+            answers[lbl] = fr.selected_value if fr else None
+    return answers
+
+
+def _extract_warnings_custom(omr_result, template) -> list[dict]:
+    """MCQ-field warnings for custom templates (not filtered by MCQ_PREFIXES)."""
+    warnings = []
+    for block in template.field_blocks:
+        if block.field_type in _INT_FIELD_TYPES:
+            continue
+        for lbl in block.field_labels:
+            result = omr_result.field_results.get(lbl)
+            if result is None:
+                continue
+            if result.status == _FieldStatus.MULTI_MARK:
+                warnings.append({"field": lbl, "type": "multi_mark", "candidates": result.selected_values})
+            elif result.status == _FieldStatus.TOO_LIGHT:
+                warnings.append({"field": lbl, "type": "too_light", "candidates": result.selected_values})
+            elif result.status == _FieldStatus.NEEDS_REVIEW:
+                warnings.append({"field": lbl, "type": "needs_review", "candidates": result.selected_values})
+    return warnings
+
+
+def _extract_info_warnings_custom(omr_result, template) -> list[dict]:
+    """INT-field warnings for custom templates, keyed by blockName."""
+    warnings = []
+    # Build label → blockName mapping
+    lbl_to_block: dict[str, str] = {}
+    for block in template.field_blocks:
+        if block.field_type not in _INT_FIELD_TYPES:
+            continue
+        for lbl in block.field_labels:
+            lbl_to_block[lbl] = block.name
+    for lbl, fr in omr_result.field_results.items():
+        block_name = lbl_to_block.get(lbl)
+        if block_name is None:
+            continue
+        if fr.status == _FieldStatus.MULTI_MARK:
+            warnings.append({"field": block_name, "column": lbl, "type": "multi_mark_info_field", "candidates": fr.selected_values})
+        elif fr.status == _FieldStatus.TOO_LIGHT:
+            warnings.append({"field": block_name, "column": lbl, "type": "too_light_info_field", "candidates": fr.selected_values})
+    return warnings
+
+
+def _build_info_field_columns_custom(omr_result, template) -> dict:
+    """Per-column breakdown of INT blocks for custom templates, keyed by blockName."""
+    result: dict[str, list[dict]] = {}
+    for block in template.field_blocks:
+        if block.field_type not in _INT_FIELD_TYPES:
+            continue
+        columns: list[dict] = []
+        for idx, lbl in enumerate(block.field_labels):
+            fr = omr_result.field_results.get(lbl)
+            if fr is None or fr.status == _FieldStatus.BLANK:
+                columns.append({"columnIndex": idx, "value": "_", "digits": [], "status": "blank"})
+            elif fr.status == _FieldStatus.MULTI_MARK:
+                digits = fr.selected_values or []
+                columns.append({"columnIndex": idx, "value": "".join(digits), "digits": digits, "status": "multi_mark"})
+            elif fr.status == _FieldStatus.TOO_LIGHT:
+                digits = fr.selected_values or []
+                columns.append({"columnIndex": idx, "value": "".join(digits) if digits else "_", "digits": digits, "status": "too_light"})
+            else:
+                digits = fr.selected_values or []
+                columns.append({"columnIndex": idx, "value": fr.selected_value or "_", "digits": digits, "status": "single"})
+        result[block.name] = columns
+    return result
+
+
 def _build_info_field_columns(omr_result, template) -> dict:
     """
     Build structured per-column representation of all INT custom labels.
@@ -440,19 +538,29 @@ async def debug_grade(
         )
 
     # ── 6. Build response ─────────────────────────────────────────────────
-    logger.info(
-        "OMR custom_values keys: %s",
-        {k: v[0] for k, v in omr_result.custom_values.items()},
-    )
-    student_info       = _extract_student_info(omr_result)
-    answers            = _extract_answers(omr_result)
-    warnings           = _extract_warnings(omr_result)
-    info_warnings      = _extract_info_warnings(omr_result, template)
-    info_field_columns = _build_info_field_columns(omr_result, template)
-    score              = _extract_score(omr_result)
-    # Merge INT-field warnings into the main warnings list
-    # (frontend filters by "type" to style them differently)
-    warnings = warnings + info_warnings
+    is_custom = _tpl_meta is not None
+    if is_custom:
+        # Custom template: use block-based extraction (no CUSTOM_LABEL_KEYS / MCQ_PREFIXES)
+        student_info       = _extract_student_info_custom(omr_result, template)
+        answers            = _extract_answers_custom(omr_result, template)
+        info_field_columns = _build_info_field_columns_custom(omr_result, template)
+        warnings           = (
+            _extract_warnings_custom(omr_result, template)
+            + _extract_info_warnings_custom(omr_result, template)
+        )
+    else:
+        # VJU preset: use legacy CUSTOM_LABEL_KEYS / MCQ_PREFIXES extraction
+        logger.info(
+            "OMR custom_values keys: %s",
+            {k: v[0] for k, v in omr_result.custom_values.items()},
+        )
+        student_info       = _extract_student_info(omr_result)
+        answers            = _extract_answers(omr_result)
+        info_field_columns = _build_info_field_columns(omr_result, template)
+        info_warnings      = _extract_info_warnings(omr_result, template)
+        warnings           = _extract_warnings(omr_result) + info_warnings
+
+    score = _extract_score(omr_result)
 
     # original_image_path: relative path served under /uploads/...
     # e.g. "uploads/debug/abc123.jpg" → http://host:8000/uploads/debug/abc123.jpg

@@ -6,24 +6,24 @@ import PageHeader from '../components/layout/PageHeader';
 import { AlertTriangle, CheckCircle2, Edit3, RotateCcw, X, Save } from 'lucide-react';
 import SheetImageViewer from '../components/results/SheetImageViewer';
 import {
-  SECTION_MAP,
   TEMPLATE_VARIANT_LABEL,
+  VJU_PRESET_SCHEMA,
   type BatchGradeState,
   type OmrGradeResult,
   type AnswerKeyStore,
   type ManualCorrection,
   type CorrectionsStore,
-  type InfoFieldColumns,
+  type TemplateSchema,
   loadAnswerKey,
   loadCorrections,
   saveCorrections,
   computeScore,
 } from '../types/grading';
-import { resultsApi, type BatchResultOut } from '../services/apiClient';
+import { resultsApi } from '../services/apiClient';
+import { dbRowToOmrResult, parseJson, getInfoFieldValue } from '../utils/resultMapping';
 
 const BATCH_LS_KEY  = 'vju_last_batch_grade';
 const CHOICES = ['—', 'A', 'B', 'C', 'D'];
-const ALL_LABELS = Object.values(SECTION_MAP).flat();
 
 function loadBatch(): BatchGradeState | null {
   try {
@@ -35,51 +35,14 @@ function loadBatch(): BatchGradeState | null {
   } catch { return null; }
 }
 
-// ── DB row → OmrGradeResult (same shape as ResultsPage) ──────────────────────
-
-function parseJson<T>(s: string | null | undefined, fallback: T): T {
-  if (!s) return fallback;
-  try { return JSON.parse(s) as T; } catch { return fallback; }
-}
-
-function dbRowToOmrResult(row: BatchResultOut): OmrGradeResult & { db_id: number } {
-  const debugPaths = parseJson<Record<string, string | null>>(row.debug_paths_json, {});
-  return {
-    db_id: row.id,
-    input: { filename: row.file_name ?? '(unknown)', saved_as: '' },
-    student_info: {
-      cccd: row.cccd ?? null, sbd: row.sbd ?? null,
-      ma_de: row.ma_de ?? null, ca_thi: row.ca_thi ?? null,
-      ma_ctdt: null, tu_chon: null,
-    },
-    answers:            parseJson<Record<string, string | null>>(row.answers_json, {}),
-    warnings:           parseJson(row.warnings_json, []),
-    info_field_columns: parseJson<InfoFieldColumns | undefined>(row.info_field_columns_json, undefined),
-    score: {
-      total: row.total_score, max: null, correct: null,
-      wrong: null, blank: row.empty_count,
-    },
-    debug: {
-      threshold: 0, mean_mode: '', prep_method: '', alignment_info: '',
-      alignment_warnings: [], image_source: null, preprocess_strategy_used: null,
-      marker_centers_detected: null, target_marker_centers: null, homography_matrix: null,
-      marker_quality_score: null, warp_used: null, warp_rejected_reason: null,
-      original_image_path: null, aligned_image_path: null, aligned_candidate_path: null,
-      markers_debug_path: null,
-      overlay_all_path:         debugPaths['overlay_all_path']         ?? null,
-      overlay_marked_only_path: debugPaths['overlay_marked_only_path'] ?? null,
-      overlay_warnings_path:    debugPaths['overlay_warnings_path']    ?? null,
-      means_json_path: null,
-    },
-  };
-}
-
 /** Classify whether a result needs review */
-function needsReview(r: OmrGradeResult, ak: AnswerKeyStore | null): boolean {
+function needsReview(r: OmrGradeResult, ak: AnswerKeyStore | null, schema?: TemplateSchema | null): boolean {
   if ((r.warnings ?? []).length > 0) return true;
   const info = r.student_info ?? {};
-  const infoFields = [info.cccd, info.sbd, info.ma_de, info.ma_ctdt, info.tu_chon];
-  if (infoFields.some(v => v && String(v).includes('_'))) return true;
+  // Use schema info keys when available, fall back to VJU keys
+  const infoKeys = schema?.infoFields.map(f => f.key)
+    ?? ['cccd', 'sbd', 'ma_de', 'ma_ctdt', 'tu_chon'];
+  if (infoKeys.some(k => info[k] && String(info[k]).includes('_'))) return true;
   if (r._error) return true;
   if (ak) {
     const sc = computeScore(r.answers ?? {}, ak);
@@ -92,30 +55,53 @@ function needsReview(r: OmrGradeResult, ak: AnswerKeyStore | null): boolean {
 interface ModalProps {
   r: OmrGradeResult;
   correction: ManualCorrection | undefined;
+  schema: TemplateSchema;
   onSave: (c: ManualCorrection) => void;
   onReset: () => void;
   onClose: () => void;
 }
 
-function EditModal({ r, correction, onSave, onReset, onClose }: ModalProps) {
-  const base_info = r.student_info ?? {};
+function EditModal({ r, correction, schema, onSave, onReset, onClose }: ModalProps) {
+  const base_info    = r.student_info ?? {};
   const base_answers = r.answers ?? {};
 
-  const [info, setInfo] = useState({
-    cccd:     String(correction?.corrected_student_info?.cccd    ?? base_info.cccd    ?? ''),
-    sbd:      String(correction?.corrected_student_info?.sbd     ?? base_info.sbd     ?? ''),
-    ma_de:    String(correction?.corrected_student_info?.ma_de   ?? base_info.ma_de   ?? ''),
-    ca_thi:   String(correction?.corrected_student_info?.ca_thi  ?? base_info.ca_thi  ?? ''),
-    ma_ctdt:  String(correction?.corrected_student_info?.ma_ctdt ?? base_info.ma_ctdt ?? ''),
-    tu_chon:  String(correction?.corrected_student_info?.tu_chon ?? base_info.tu_chon ?? ''),
+  // Dynamic info state — keys from schema.infoFields
+  // getInfoFieldValue is used as safety-net: covers alias keys + info_field_columns
+  const [info, setInfo] = useState<Record<string, string>>(() => {
+    const result: Record<string, string> = {};
+    for (const field of schema.infoFields) {
+      result[field.key] = String(
+        // 1. Manual correction takes priority
+        correction?.corrected_student_info?.[field.key]
+        // 2. student_info direct key (now populated from info_field_columns by dbRowToOmrResult)
+        ?? (base_info[field.key] != null ? base_info[field.key] : undefined)
+        // 3. Safety-net: fuzzy lookup across aliases + info_field_columns
+        ?? getInfoFieldValue(base_info, r.info_field_columns, field)
+        ?? ''
+      );
+    }
+
+    // ── Debug log: helps diagnose any remaining blank fields ──────────────────
+    console.log('[ReviewErrors info debug]', {
+      file:             r.input?.filename,
+      schemaInfoFields: schema.infoFields.map(f => ({ key: f.key, displayName: f.displayName })),
+      student_info:     base_info,
+      info_field_columns: r.info_field_columns ?? '(none)',
+      correction:       correction?.corrected_student_info ?? '(none)',
+      initialInfoValues: result,
+    });
+
+    return result;
   });
 
+  // Dynamic answers state — labels from schema.answerSections
+  const allLabels = schema.answerSections.flatMap(s => s.labels);
   const [answers, setAnswers] = useState<Record<string, string>>(() => {
-    const merged: Record<string, string> = {};
-    for (const lbl of ALL_LABELS) {
-      merged[lbl] = String(correction?.corrected_answers?.[lbl] ?? base_answers[lbl] ?? '');
+    const result: Record<string, string> = {};
+    for (const lbl of allLabels) {
+      result[lbl] = String(correction?.corrected_answers?.[lbl] ?? base_answers[lbl] ?? '');
     }
-    return merged;
+    return result;
   });
 
   const setAns = (lbl: string, val: string) =>
@@ -159,19 +145,13 @@ function EditModal({ r, correction, onSave, onReset, onClose }: ModalProps) {
           </button>
         </div>
 
-        {/* ── Sticky action bar — always visible without scrolling ── */}
+        {/* ── Sticky action bar ── */}
         <div style={{
-          flexShrink: 0,
-          display: 'flex', alignItems: 'center', gap: 8,
-          padding: '8px 16px',
-          background: '#FFF9F9',
-          borderBottom: '1px solid #FECACA',
+          flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 16px', background: '#FFF9F9', borderBottom: '1px solid #FECACA',
         }}>
-          <Button
-            icon={<Save size={13} />}
-            onClick={handleSave}
-            style={{ background: '#C8102E', color: '#fff', borderColor: '#C8102E', fontWeight: 700, fontSize: 12, padding: '6px 14px' }}
-          >
+          <Button icon={<Save size={13} />} onClick={handleSave}
+            style={{ background: '#C8102E', color: '#fff', borderColor: '#C8102E', fontWeight: 700, fontSize: 12, padding: '6px 14px' }}>
             Lưu sửa
           </Button>
           <Button variant="secondary" icon={<RotateCcw size={13} />} onClick={onReset}
@@ -179,23 +159,17 @@ function EditModal({ r, correction, onSave, onReset, onClose }: ModalProps) {
             Reset về OMR gốc
           </Button>
           <div style={{ flex: 1 }} />
-          <Button variant="secondary" onClick={onClose}
-            style={{ fontSize: 12, padding: '6px 14px' }}>
-            Đóng
-          </Button>
+          <Button variant="secondary" onClick={onClose} style={{ fontSize: 12, padding: '6px 14px' }}>Đóng</Button>
         </div>
 
         {/* ── Body: 2-column grid ── */}
         <div className="edit-modal-body" style={{
-          flex: 1, display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          minHeight: 0,
+          flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', minHeight: 0,
         }}>
 
           {/* ── Left: form (scrollable) ── */}
           <div style={{
-            overflowY: 'auto',
-            padding: '20px',
+            overflowY: 'auto', padding: '20px',
             borderRight: '1px solid #F3F4F6',
             display: 'flex', flexDirection: 'column', gap: 20,
           }}>
@@ -203,35 +177,34 @@ function EditModal({ r, correction, onSave, onReset, onClose }: ModalProps) {
             {/* Thông tin sinh viên */}
             <div>
               <div style={{ fontWeight: 700, fontSize: 13, color: '#C8102E', marginBottom: 12 }}>Thông tin sinh viên</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-                {([
-                  { key: 'cccd',    label: 'CCCD' },
-                  { key: 'sbd',     label: 'SBD' },
-                  { key: 'ma_de',   label: 'Mã đề' },
-                  { key: 'ca_thi',  label: 'Ca thi' },
-                  { key: 'ma_ctdt', label: 'Mã CTĐT' },
-                  { key: 'tu_chon', label: 'Tự chọn' },
-                ] as { key: keyof typeof info; label: string }[]).map(f => (
-                  <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <label style={{ fontSize: 11, fontWeight: 600, color: '#6B7280' }}>{f.label}</label>
-                    <input
-                      value={info[f.key]}
-                      onChange={e => setInfo(prev => ({ ...prev, [f.key]: e.target.value }))}
-                      style={{
-                        padding: '8px 10px', borderRadius: 8,
-                        border: `1.5px solid ${info[f.key].includes('_') ? '#EF4444' : '#E5E7EB'}`,
-                        fontSize: 13, fontFamily: 'monospace', outline: 'none',
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
+              {schema.infoFields.length === 0 ? (
+                <div style={{ fontSize: 12, color: '#9CA3AF' }}>Không có trường thông tin.</div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+                  {schema.infoFields.map(field => (
+                    <div key={field.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <label style={{ fontSize: 11, fontWeight: 600, color: '#6B7280' }}>{field.displayName}</label>
+                      <input
+                        value={info[field.key] ?? ''}
+                        onChange={e => setInfo(prev => ({ ...prev, [field.key]: e.target.value }))}
+                        style={{
+                          padding: '8px 10px', borderRadius: 8,
+                          border: `1.5px solid ${(info[field.key] ?? '').includes('_') ? '#EF4444' : '#E5E7EB'}`,
+                          fontSize: 13, fontFamily: 'monospace', outline: 'none',
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Đáp án */}
             <div>
               <div style={{ fontWeight: 700, fontSize: 13, color: '#C8102E', marginBottom: 12 }}>Đáp án</div>
-              {Object.entries(SECTION_MAP).map(([section, labels]) => (
+              {schema.answerSections.length === 0 ? (
+                <div style={{ fontSize: 12, color: '#9CA3AF' }}>Template này không có phần đáp án cần sửa.</div>
+              ) : schema.answerSections.map(({ name: section, labels }) => (
                 <div key={section} style={{ marginBottom: 14 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8 }}>{section}</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -262,13 +235,10 @@ function EditModal({ r, correction, onSave, onReset, onClose }: ModalProps) {
               ))}
             </div>
 
-            {/* Actions */}
+            {/* Bottom actions */}
             <div style={{ display: 'flex', gap: 10, paddingTop: 4, borderTop: '1px solid #F3F4F6', marginTop: 'auto' }}>
-              <Button
-                icon={<Save size={14} />}
-                onClick={handleSave}
-                style={{ background: '#C8102E', color: '#fff', borderColor: '#C8102E', fontWeight: 700 }}
-              >
+              <Button icon={<Save size={14} />} onClick={handleSave}
+                style={{ background: '#C8102E', color: '#fff', borderColor: '#C8102E', fontWeight: 700 }}>
                 Lưu sửa
               </Button>
               <Button variant="secondary" icon={<RotateCcw size={14} />} onClick={onReset} style={{ color: '#6B7280' }}>
@@ -281,11 +251,7 @@ function EditModal({ r, correction, onSave, onReset, onClose }: ModalProps) {
 
           {/* ── Right: image viewer ── */}
           <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <SheetImageViewer
-              debug={r.debug}
-              originalFallback={r.input?.saved_as}
-              defaultTab="detect"
-            />
+            <SheetImageViewer debug={r.debug} originalFallback={r.input?.saved_as} defaultTab="detect" />
           </div>
         </div>
       </div>
@@ -307,7 +273,6 @@ export default function ReviewErrorsPage() {
   // DB-first load: filter by exam_id from localStorage batch if available
   const loadData = useCallback(async () => {
     setAnswerKey(loadAnswerKey());
-    setCorrections(loadCorrections());
 
     // Resolve exam context from localStorage
     const lsBatch = loadBatch();
@@ -321,12 +286,40 @@ export default function ReviewErrorsPage() {
       if (resp.items.length > 0) {
         const converted = resp.items.map(dbRowToOmrResult);
         const first = resp.items[0];
+
+        // ── Seed corrections from both localStorage AND DB manual_corrections_json ──
+        // DB corrections are the source-of-truth when localStorage was cleared.
+        const localCorrs = loadCorrections();
+        const mergedCorrs: CorrectionsStore = { ...localCorrs };
+        for (const row of resp.items) {
+          const fname = row.file_name ?? '';
+          if (!mergedCorrs[fname] && row.manual_corrections_json) {
+            const dbCorr = parseJson<{
+              corrected_student_info?: Record<string, string>;
+              corrected_answers?:      Record<string, string>;
+              updated_at?:             string;
+            }>(row.manual_corrections_json, {});
+            if (dbCorr.corrected_student_info || dbCorr.corrected_answers) {
+              mergedCorrs[fname] = {
+                corrected_student_info: dbCorr.corrected_student_info ?? {},
+                corrected_answers:      dbCorr.corrected_answers      ?? {},
+                updatedAt:              dbCorr.updated_at             ?? new Date().toISOString(),
+              };
+            }
+          }
+        }
+        setCorrections(mergedCorrs);
+
         const syntheticBatch: BatchGradeState = {
-          templateVariant: (first.template_variant as BatchGradeState['templateVariant']) ?? 'sbd8',
-          results:         converted,
-          gradedAt:        first.graded_at,
-          examId:          first.exam_id ?? examId,
-          examName:        examName,
+          templateVariant:    (first.template_variant as BatchGradeState['templateVariant']) ?? 'sbd8',
+          results:            converted,
+          gradedAt:           first.graded_at,
+          examId:             first.exam_id ?? examId,
+          examName:           examName,
+          templateMode:       first.template_type === 'custom' ? 'custom' : 'vju',
+          customTemplateId:   first.template_id ?? null,
+          customTemplateName: lsBatch?.customTemplateName ?? null,
+          templateSchema:     lsBatch?.templateSchema ?? null,
         };
         setBatch(syntheticBatch);
         setLoading(false);
@@ -336,6 +329,7 @@ export default function ReviewErrorsPage() {
       console.warn('[ReviewErrors] DB load failed, fallback localStorage:', err);
     }
     // Fallback: last graded batch from localStorage
+    setCorrections(loadCorrections());
     setBatch(lsBatch);
     setLoading(false);
   }, []);
@@ -375,7 +369,13 @@ export default function ReviewErrorsPage() {
   }
 
   const safeResults = batch.results ?? [];
-  const reviewRows  = safeResults.filter(r => needsReview(r, answerKey));
+
+  // Derive active schema — custom uses batch.templateSchema (or empty), VJU uses preset
+  const schema: TemplateSchema = batch.templateMode === 'custom'
+    ? (batch.templateSchema ?? { infoFields: [], answerSections: [] })
+    : VJU_PRESET_SCHEMA;
+
+  const reviewRows  = safeResults.filter(r => needsReview(r, answerKey, schema));
   const displayRows = showAll ? safeResults : reviewRows;
 
   const handleSave = (filename: string, c: ManualCorrection) => {
@@ -453,7 +453,10 @@ export default function ReviewErrorsPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
                 <tr style={{ background: '#C8102E' }}>
-                  {['STT', 'File', 'CCCD', 'SBD', 'Mã đề', 'Blank', 'Cảnh báo', 'Trạng thái', 'Thao tác'].map(h => (
+                  {['STT', 'File',
+                    ...(schema.infoFields.slice(0, 3).map(f => f.displayName)),
+                    'Blank', 'Cảnh báo', 'Trạng thái', 'Thao tác',
+                  ].map(h => (
                     <th key={h} style={{ textAlign: 'left', padding: '10px 10px', fontWeight: 600, color: '#fff', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -472,7 +475,8 @@ export default function ReviewErrorsPage() {
                   const sc = answerKey ? computeScore((corr?.corrected_answers ?? r.answers) ?? {}, answerKey) : null;
                   const info = corr ? { ...r.student_info, ...corr.corrected_student_info } : r.student_info;
                   const warnCount = (r.warnings ?? []).length;
-                  const hasUnderscore = [info?.cccd, info?.sbd, info?.ma_de].some(v => v && String(v).includes('_'));
+                  const infoKeys = schema.infoFields.map(f => f.key);
+                  const hasUnderscore = infoKeys.some(k => info?.[k] && String(info[k]).includes('_'));
                   const isError = !!r._error;
 
                   return (
@@ -484,13 +488,14 @@ export default function ReviewErrorsPage() {
                       <td style={{ padding: '10px 10px', fontWeight: 600, color: '#1E1E1E', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {filename}
                       </td>
-                      <td style={{ padding: '10px 10px', fontFamily: 'monospace', color: (info?.cccd ?? '').includes('_') ? '#EF4444' : '#374151' }}>
-                        {info?.cccd ?? '—'}
-                      </td>
-                      <td style={{ padding: '10px 10px', fontFamily: 'monospace', color: (info?.sbd ?? '').includes('_') ? '#EF4444' : '#374151' }}>
-                        {info?.sbd ?? '—'}
-                      </td>
-                      <td style={{ padding: '10px 10px', fontFamily: 'monospace' }}>{info?.ma_de ?? '—'}</td>
+                      {schema.infoFields.slice(0, 3).map(f => {
+                        const val = String(info?.[f.key] ?? '');
+                        return (
+                          <td key={f.key} style={{ padding: '10px 10px', fontFamily: 'monospace', color: val.includes('_') ? '#EF4444' : '#374151' }}>
+                            {val || '—'}
+                          </td>
+                        );
+                      })}
                       <td style={{ padding: '10px 10px', fontWeight: 600, color: sc && sc.blank > 0 ? '#F59E0B' : '#6B7280' }}>
                         {sc ? sc.blank : '—'}
                       </td>
@@ -539,6 +544,7 @@ export default function ReviewErrorsPage() {
         <EditModal
           r={selected}
           correction={corrections[selected.input?.filename ?? '']}
+          schema={schema}
           onSave={c => handleSave(selected.input?.filename ?? '', c)}
           onReset={() => handleReset(selected.input?.filename ?? '')}
           onClose={() => setSelected(null)}

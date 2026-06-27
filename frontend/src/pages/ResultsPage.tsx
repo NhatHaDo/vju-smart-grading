@@ -5,11 +5,12 @@ import Button from '../components/common/Button';
 import Badge from '../components/common/Badge';
 import PageHeader from '../components/layout/PageHeader';
 import { Download, Eye, AlertTriangle, CheckCircle2, Trash2, ArrowLeft, Key, Database, WifiOff, TableProperties, ChevronDown } from 'lucide-react';
-import type { BatchGradeState, OmrGradeResult, AnswerKeyStore, CorrectionsStore, InfoFieldColumns } from '../types/grading';
-import { TEMPLATE_VARIANT_LABEL, loadAnswerKey, loadCorrections, saveCorrections, clearCorrections, computeScore, applyCorrection } from '../types/grading';
+import type { BatchGradeState, OmrGradeResult, AnswerKeyStore, CorrectionsStore, InfoFieldColumns, TemplateSchema } from '../types/grading';
+import { TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, loadAnswerKey, loadCorrections, saveCorrections, clearCorrections, computeScore, applyCorrection } from '../types/grading';
 import ResultDetailModal from '../components/results/ResultDetailModal';
 import ExcelPreviewModal from '../components/results/ExcelPreviewModal';
-import { resultsApi, examsApi, hasToken, ApiError, type BatchResultOut, type ResultBatchSaveRequest } from '../services/apiClient';
+import { resultsApi, examsApi, customFormsApi, hasToken, ApiError, type BatchResultOut, type ResultBatchSaveRequest } from '../services/apiClient';
+import { buildSchemaFromDetail } from '../utils/templateSchema';
 import type { ExamOut } from '../types/exam';
 
 const LS_KEY = 'vju_last_batch_grade';
@@ -46,7 +47,10 @@ function parseJson<T>(s: string | null | undefined, fallback: T): T {
 function dbRowToOmrResult(row: BatchResultOut): OmrGradeResult & { db_id: number } {
   const debugPaths = parseJson<Record<string, string | null>>(row.debug_paths_json, {});
   return {
-    db_id:   row.id,
+    db_id:               row.id,
+    template_type:       row.template_type,
+    template_id:         row.template_id,
+    template_variant_row: row.template_variant,
     input:   { filename: row.file_name ?? '(unknown)', saved_as: '' },
     student_info: {
       cccd:    row.cccd    ?? null,
@@ -90,6 +94,36 @@ function getBatchTemplateLabel(b: BatchGradeState): string {
   return TEMPLATE_VARIANT_LABEL[b.templateVariant] ?? b.templateVariant;
 }
 
+// ── Template filter helpers ────────────────────────────────────────────────
+
+type TemplateFilterOption = {
+  key:           string;
+  label:         string;
+  templateMode:  'vju' | 'custom';
+  templateId?:   number | null;
+  templateSchema: TemplateSchema;
+};
+
+function getRowTemplateKey(r: OmrGradeResult, fallbackBatch?: BatchGradeState | null): string {
+  const ttype = r.template_type ?? (fallbackBatch?.templateMode === 'custom' ? 'custom' : 'vju');
+  if (ttype === 'custom') {
+    const tid = r.template_id ?? fallbackBatch?.customTemplateId ?? null;
+    return `custom:${tid ?? 'unknown'}`;
+  }
+  const tvar = r.template_variant_row ?? fallbackBatch?.templateVariant ?? 'sbd8';
+  return `vju:${tvar}`;
+}
+
+function getRowTemplateLabel(r: OmrGradeResult, fallbackBatch?: BatchGradeState | null): string {
+  const key = getRowTemplateKey(r, fallbackBatch);
+  if (key.startsWith('custom:')) {
+    const name = fallbackBatch?.customTemplateName ?? null;
+    return name ? `Custom - ${name}` : `Custom #${r.template_id ?? fallbackBatch?.customTemplateId ?? '?'}`;
+  }
+  const tvar = r.template_variant_row ?? fallbackBatch?.templateVariant ?? 'sbd8';
+  return TEMPLATE_VARIANT_LABEL[tvar as keyof typeof TEMPLATE_VARIANT_LABEL] ?? tvar.toUpperCase();
+}
+
 // ── Batch save request builder ─────────────────────────────────────────────
 
 function buildBatchSaveRequest(batch: BatchGradeState, examId?: number | null): ResultBatchSaveRequest {
@@ -110,7 +144,9 @@ function buildBatchSaveRequest(batch: BatchGradeState, examId?: number | null): 
         cccd:               r.student_info?.cccd   ?? null,
         sbd:                r.student_info?.sbd    ?? null,
         ma_de:              r.student_info?.ma_de  ?? null,
-        ca_thi:             r.student_info?.ca_thi ?? null,
+        ca_thi:             r.student_info?.ca_thi  ?? null,
+        ma_ctdt:            r.student_info?.ma_ctdt ?? null,
+        tu_chon:            r.student_info?.tu_chon ?? null,
         answers:            r.answers              ?? {},
         scores:             {},
         sections:           {},
@@ -172,21 +208,26 @@ function buildInfoWarningsCsv(r: OmrGradeResult): string {
   return parts.join('; ');
 }
 
-function exportCsv(batch: BatchGradeState, answerKey: AnswerKeyStore | null) {
-  const tplSlug = batch.templateMode === 'custom'
-    ? (batch.customTemplateName ?? 'custom').replace(/\s+/g, '_')
-    : batch.templateVariant;
+function exportCsv(
+  batch: BatchGradeState,
+  answerKey: AnswerKeyStore | null,
+  results?: OmrGradeResult[],
+  tplLabel?: string,
+) {
+  const tplSlug = (tplLabel ?? (batch.templateMode === 'custom'
+    ? (batch.customTemplateName ?? 'custom')
+    : batch.templateVariant)).replace(/\s+/g, '_');
   const headers = [
-    'filename','status','cccd','sbd','ma_de','ca_thi','ma_ctdt','tu_chon',
+    'filename','status','template','cccd','sbd','ma_de','ca_thi','ma_ctdt','tu_chon',
     'warnings_count','warnings_json','info_field_warnings','answers_json',
-    'correct_count','wrong_count','blank_count','score_total',
-    'template','graded_at',
+    'correct_count','wrong_count','blank_count','score_total','graded_at',
   ];
-  const rows = (batch.results ?? []).map(r => {
+  const rows = (results ?? batch.results ?? []).map(r => {
     const sc = answerKey ? computeScore(r.answers ?? {}, answerKey) : null;
     return [
       r.input?.filename ?? '',
       r._error ? 'error' : 'ok',
+      getRowTemplateLabel(r, batch),
       r.student_info?.cccd ?? '', r.student_info?.sbd ?? '',
       r.student_info?.ma_de ?? '', r.student_info?.ca_thi ?? '',
       r.student_info?.ma_ctdt ?? '', r.student_info?.tu_chon ?? '',
@@ -195,7 +236,7 @@ function exportCsv(batch: BatchGradeState, answerKey: AnswerKeyStore | null) {
       buildInfoWarningsCsv(r),
       JSON.stringify(r.answers ?? {}),
       sc?.correct ?? '', sc?.wrong ?? '', sc?.blank ?? '', sc?.total ?? '',
-      tplSlug, batch.gradedAt,
+      batch.gradedAt,
     ];
   });
   const csv = [headers, ...rows].map(row => row.map(csvCell).join(',')).join('\r\n');
@@ -217,14 +258,17 @@ function fmtDate(iso: string) {
 
 // ── RealRow ────────────────────────────────────────────────────────────────
 
-function RealRow({ idx, r, merged, corrected, sc, onOpen, onDelete }: {
-  idx:      number;
-  r:        OmrGradeResult;
-  merged:   { student_info: OmrGradeResult['student_info']; answers: Record<string, string | null> };
-  corrected:boolean;
-  sc:       { correct: number; wrong: number; blank: number; total: number } | null;
-  onOpen:   () => void;
-  onDelete: () => void;
+function RealRow({ idx, r, merged, corrected, sc, onOpen, onDelete, infoFields, showTemplateCol, templateLabel }: {
+  idx:             number;
+  r:               OmrGradeResult;
+  merged:          { student_info: OmrGradeResult['student_info']; answers: Record<string, string | null> };
+  corrected:       boolean;
+  sc:              { correct: number; wrong: number; blank: number; total: number } | null;
+  onOpen:          () => void;
+  onDelete:        () => void;
+  infoFields:      import('../types/grading').TemplateInfoField[];
+  showTemplateCol?: boolean;
+  templateLabel?:  string;
 }) {
   const warn   = hasWarnings(r);
   const hasIMM = hasInfoMultiMark(r);
@@ -233,7 +277,7 @@ function RealRow({ idx, r, merged, corrected, sc, onOpen, onDelete }: {
 
   function InfoCell({ value, iKey, label, extraStyle = {} }: {
     value:       string | null | undefined;
-    iKey:        keyof InfoFieldColumns;
+    iKey:        string;
     label:       string;
     extraStyle?: React.CSSProperties;
   }) {
@@ -265,12 +309,22 @@ function RealRow({ idx, r, merged, corrected, sc, onOpen, onDelete }: {
         </div>
         {r._error && <div style={{ fontSize: 10, color: '#EF4444', marginTop: 2 }}>{r._error.slice(0, 80)}</div>}
       </td>
-      <InfoCell value={info?.cccd}    iKey="cccd"    label="CCCD"    extraStyle={{ color: '#C8102E', fontWeight: 600 }} />
-      <InfoCell value={info?.sbd}     iKey="sbd"     label="SBD"     />
-      <InfoCell value={info?.ma_de}   iKey="ma_de"   label="Mã đề"   />
-      <InfoCell value={info?.ca_thi}  iKey="ca_thi"  label="Ca thi"  />
-      <InfoCell value={info?.ma_ctdt} iKey="ma_ctdt" label="Mã CTĐT" />
-      <InfoCell value={info?.tu_chon} iKey="tu_chon" label="Tự chọn" />
+      {showTemplateCol
+        ? <td style={{ padding: '11px 10px', fontSize: 11 }}>
+            <span style={{ background: '#EFF6FF', color: '#1D4ED8', borderRadius: 9999, padding: '2px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>
+              {templateLabel ?? '—'}
+            </span>
+          </td>
+        : infoFields.map((field, fi) => (
+            <InfoCell
+              key={field.key}
+              value={info?.[field.key] ?? null}
+              iKey={field.key}
+              label={field.displayName}
+              extraStyle={fi === 0 ? { color: '#C8102E', fontWeight: 600 } : undefined}
+            />
+          ))
+      }
       {sc !== null && <>
         <td style={{ padding: '11px 10px', color: '#065F46', fontWeight: 600 }}>{sc.correct}</td>
         <td style={{ padding: '11px 10px', color: '#991B1B', fontWeight: 600 }}>{sc.wrong}</td>
@@ -347,10 +401,16 @@ export default function ResultsPage() {
   const [dataSource,    setDataSource]     = useState<DataSource>('init');
   const [dbSaveStatus,  setDbSaveStatus]   = useState<DbSaveStatus>('idle');
 
-  // ── Exam context ──────────────────────────────────────────────────────────
-  const [selectedExamId,   setSelectedExamId]   = useState<number | null>(null);
-  const [selectedExamName, setSelectedExamName] = useState<string | null>(null);
-  const [exams,            setExams]            = useState<ExamOut[]>([]);
+  // ── Exam + template filter context ───────────────────────────────────────
+  const [selectedExamId,      setSelectedExamId]      = useState<number | null>(null);
+  const [selectedExamName,    setSelectedExamName]    = useState<string | null>(null);
+  const [exams,               setExams]               = useState<ExamOut[]>([]);
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState<string>('all');
+
+  // Schema cache for custom templates loaded from DB (which don't carry templateSchema)
+  const [fetchedSchemas, setFetchedSchemas] = useState<Map<number, TemplateSchema>>(new Map());
+  // Track which IDs have already been fetched (or attempted) — prevents duplicate requests
+  const fetchedSchemaIdsRef = useRef<Set<number>>(new Set());
 
   // Prevents calling saveBatch more than once for the same grading session
   // (guards against React StrictMode double-invoke and HMR re-mounts).
@@ -470,11 +530,46 @@ export default function ResultsPage() {
 
   useEffect(() => { initData(); }, [initData]);
 
+  // ── Auto-fetch schemas for custom-template rows that have no schema ────────
+  //    (happens when results come from DB — syntheticBatch has no templateSchema)
+  useEffect(() => {
+    if (!batch) return;
+    const safeR = batch.results && Array.isArray(batch.results) ? batch.results : [];
+    const missingIds: number[] = [];
+    for (const r of safeR) {
+      if (r.template_type === 'custom' && r.template_id != null) {
+        const alreadyInBatch = batch.templateSchema != null && batch.customTemplateId === r.template_id;
+        if (!alreadyInBatch && !fetchedSchemaIdsRef.current.has(r.template_id)) {
+          fetchedSchemaIdsRef.current.add(r.template_id); // mark immediately — prevent double-fetch
+          missingIds.push(r.template_id);
+        }
+      }
+    }
+    if (missingIds.length === 0) return;
+    Promise.all(
+      missingIds.map(id =>
+        customFormsApi.get(id)
+          .then(detail => ({ id, schema: buildSchemaFromDetail(detail) }))
+          .catch(() => null)
+      )
+    ).then(results => {
+      const updates = results.filter(Boolean) as { id: number; schema: TemplateSchema }[];
+      if (updates.length === 0) return;
+      setFetchedSchemas(prev => {
+        const next = new Map(prev);
+        for (const { id, schema } of updates) next.set(id, schema);
+        return next;
+      });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batch]);
+
   // ── Reload DB results when user switches exam ─────────────────────────────
 
   const loadByExam = useCallback(async (eid: number | null, ename: string | null) => {
     setSelectedExamId(eid);
     setSelectedExamName(ename);
+    setSelectedTemplateKey('all'); // reset template filter when exam changes
     setBatch(null);
     setDataSource('init');
     try {
@@ -558,19 +653,69 @@ export default function ResultsPage() {
   const hasBatch    = safeResults.length > 0;
   const hasKey      = !!answerKey && Object.keys(answerKey.answers ?? {}).length > 0;
 
-  const scoredRows = safeResults.map(r => {
+  // Build template options from all rows in the current exam
+  const templateOptions: TemplateFilterOption[] = (() => {
+    const seen = new Map<string, TemplateFilterOption>();
+    for (const r of safeResults) {
+      const key = getRowTemplateKey(r, batch);
+      if (!seen.has(key)) {
+        const isCustom = key.startsWith('custom:');
+        const tid = isCustom ? (r.template_id ?? batch?.customTemplateId ?? null) : null;
+        const schema: TemplateSchema = isCustom
+          ? (batch?.templateSchema && batch.customTemplateId === tid
+              ? batch.templateSchema
+              : (tid != null && fetchedSchemas.has(tid)
+                  ? fetchedSchemas.get(tid)!
+                  : { infoFields: [], answerSections: [] }))
+          : VJU_PRESET_SCHEMA;
+        seen.set(key, {
+          key,
+          label:         getRowTemplateLabel(r, batch),
+          templateMode:  isCustom ? 'custom' : 'vju',
+          templateId:    tid,
+          templateSchema: schema,
+        });
+      }
+    }
+    return Array.from(seen.values());
+  })();
+
+  const multipleTemplates  = templateOptions.length > 1;
+  const isAllMode          = selectedTemplateKey === 'all';
+  const selectedTemplateOpt = templateOptions.find(o => o.key === selectedTemplateKey) ?? null;
+
+  // Per-row schema resolution (used by modal)
+  const resolveRowSchema = (r: OmrGradeResult): TemplateSchema => {
+    const key = getRowTemplateKey(r, batch);
+    return templateOptions.find(o => o.key === key)?.templateSchema
+      ?? { infoFields: [], answerSections: [] };
+  };
+
+  // Active info fields for table columns (empty in all-mode)
+  const activeInfoFields = isAllMode ? [] : (selectedTemplateOpt?.templateSchema.infoFields ?? []);
+
+  // schemaMissing: warn when a known custom batch has no schema stored
+  const schemaMissing = !!(batch?.templateMode === 'custom' && !batch?.templateSchema);
+
+  // All rows scored
+  const allScoredRows = safeResults.map(r => {
     const filename = r.input?.filename ?? '';
     const corr     = corrections[filename];
     const merged   = applyCorrection(r, corr);
     return { r, merged, corr, sc: hasKey ? computeScore(merged.answers ?? {}, answerKey!) : null };
   });
 
-  const scores     = scoredRows.map(x => x.sc?.total ?? null).filter((s): s is number => s !== null);
-  const avgScore   = scores.length ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100 : null;
-  const maxScore   = scores.length ? Math.max(...scores) : null;
-  const minScore   = scores.length ? Math.min(...scores) : null;
-  const warnCount  = safeResults.filter(hasWarnings).length;
-  const totalSheets= safeResults.length;
+  // Rows visible after template filter
+  const visibleScoredRows = isAllMode
+    ? allScoredRows
+    : allScoredRows.filter(({ r }) => getRowTemplateKey(r, batch) === selectedTemplateKey);
+
+  const scores      = visibleScoredRows.map(x => x.sc?.total ?? null).filter((s): s is number => s !== null);
+  const avgScore    = scores.length ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100 : null;
+  const maxScore    = scores.length ? Math.max(...scores) : null;
+  const minScore    = scores.length ? Math.min(...scores) : null;
+  const warnCount   = visibleScoredRows.filter(({ r }) => hasWarnings(r)).length;
+  const totalSheets = visibleScoredRows.length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
@@ -579,9 +724,27 @@ export default function ResultsPage() {
         subtitle="Xem điểm, ảnh detect, tải CSV và chấm lại khi cần"
         actions={<>
           <Button variant="secondary" size="sm" icon={<ArrowLeft size={14} />} onClick={() => navigate('/app/upload')}>Quay lại Upload</Button>
-          {hasBatch && <Button variant="secondary" size="sm" icon={<AlertTriangle size={14} />} onClick={() => navigate('/app/review-errors')}>Kiểm tra lỗi</Button>}
           {hasBatch && (
-            <Button variant="secondary" size="sm" icon={<TableProperties size={14} />} onClick={() => navigate('/app/excel-preview')}>
+            <Button variant="secondary" size="sm" icon={<AlertTriangle size={14} />}
+              onClick={() => navigate('/app/review-errors', {
+                state: {
+                  examId:         selectedExamId,
+                  templateKey:    selectedTemplateKey,
+                  templateSchema: selectedTemplateOpt?.templateSchema ?? null,
+                }
+              })}>
+              Kiểm tra lỗi
+            </Button>
+          )}
+          {hasBatch && (
+            <Button variant="secondary" size="sm" icon={<TableProperties size={14} />}
+              onClick={() => {
+                if (isAllMode && multipleTemplates) {
+                  alert('Vui lòng chọn một mẫu phiếu cụ thể trước khi xem trước Excel.');
+                  return;
+                }
+                navigate('/app/excel-preview');
+              }}>
               Xem trước Excel
             </Button>
           )}
@@ -589,12 +752,25 @@ export default function ResultsPage() {
             variant="secondary" size="sm" icon={<Download size={14} />}
             onClick={() => {
               if (!hasBatch || !batch) { alert('Chưa có kết quả để xuất Excel.'); return; }
+              if (isAllMode && multipleTemplates) {
+                alert('Vui lòng chọn một mẫu phiếu cụ thể trước khi xuất Excel.');
+                return;
+              }
               setShowExcelPreview(true);
             }}
             style={!hasBatch ? { opacity: 0.45, pointerEvents: 'none' } : undefined}
           >Xuất Excel</Button>
           {hasBatch && batch && (
-            <Button variant="secondary" size="sm" icon={<Download size={14} />} onClick={() => exportCsv(batch, answerKey)}>Xuất CSV</Button>
+            <Button variant="secondary" size="sm" icon={<Download size={14} />}
+              onClick={() => {
+                if (isAllMode && multipleTemplates) {
+                  alert('Vui lòng chọn một mẫu phiếu cụ thể trước khi xuất CSV.');
+                  return;
+                }
+                exportCsv(batch, answerKey, visibleScoredRows.map(x => x.r), selectedTemplateOpt?.label);
+              }}>
+              Xuất CSV
+            </Button>
           )}
           {hasBatch && (
             <Button variant="secondary" size="sm" icon={<Trash2 size={14} />} onClick={handleClear}
@@ -607,37 +783,66 @@ export default function ResultsPage() {
 
       <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-        {/* ── Exam selector ─────────────────────────────────────────────── */}
-        {exams.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: '#fff', border: '1px solid #E5E7EB', borderRadius: 12, padding: '10px 16px' }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: '#374151', whiteSpace: 'nowrap' }}>Kỳ thi:</span>
-            <div style={{ position: 'relative', flex: 1, maxWidth: 360 }}>
-              <select
-                value={selectedExamId ?? ''}
-                onChange={e => {
-                  const eid = Number(e.target.value);
-                  const exam = exams.find(ex => ex.id === eid) ?? null;
-                  loadByExam(exam?.id ?? null, exam?.name ?? null);
-                }}
-                style={{ width: '100%', padding: '7px 32px 7px 12px', borderRadius: 9, border: '1.5px solid #E5E7EB', fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff', appearance: 'none', cursor: 'pointer' }}
+        {/* ── Exam + Template filter ─────────────────────────────────────── */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: '#fff', border: '1px solid #E5E7EB', borderRadius: 12, padding: '12px 16px' }}>
+          {/* Row 1: Exam selector */}
+          {exams.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#374151', whiteSpace: 'nowrap', minWidth: 76 }}>Kỳ thi:</span>
+              <div style={{ position: 'relative', flex: 1, maxWidth: 360 }}>
+                <select
+                  value={selectedExamId ?? ''}
+                  onChange={e => {
+                    const eid = Number(e.target.value);
+                    const exam = exams.find(ex => ex.id === eid) ?? null;
+                    loadByExam(exam?.id ?? null, exam?.name ?? null);
+                  }}
+                  style={{ width: '100%', padding: '7px 32px 7px 12px', borderRadius: 9, border: '1.5px solid #E5E7EB', fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff', appearance: 'none', cursor: 'pointer' }}
+                >
+                  <option value="">-- Chọn kỳ thi --</option>
+                  {exams.map(e => (
+                    <option key={e.id} value={e.id}>
+                      {e.name}{e.subject ? ` · ${e.subject}` : ''}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={14} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: '#9CA3AF' }} />
+              </div>
+              <button
+                onClick={() => navigate('/app/exams')}
+                style={{ border: '1.5px solid #E5E7EB', borderRadius: 9, padding: '7px 14px', background: '#fff', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600, color: '#6B7280', whiteSpace: 'nowrap' }}
               >
-                <option value="">-- Chọn kỳ thi --</option>
-                {exams.map(e => (
-                  <option key={e.id} value={e.id}>
-                    {e.name}{e.subject ? ` · ${e.subject}` : ''}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={14} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: '#9CA3AF' }} />
+                + Tạo kỳ thi
+              </button>
             </div>
-            <button
-              onClick={() => navigate('/app/exams')}
-              style={{ border: '1.5px solid #E5E7EB', borderRadius: 9, padding: '7px 14px', background: '#fff', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600, color: '#6B7280', whiteSpace: 'nowrap' }}
-            >
-              + Tạo kỳ thi
-            </button>
-          </div>
-        )}
+          )}
+          {/* Row 2: Template filter — always show when batch exists */}
+          {hasBatch && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#374151', whiteSpace: 'nowrap', minWidth: 76 }}>Mẫu phiếu:</span>
+              <div style={{ position: 'relative', flex: 1, maxWidth: 360 }}>
+                <select
+                  value={selectedTemplateKey}
+                  onChange={e => setSelectedTemplateKey(e.target.value)}
+                  style={{ width: '100%', padding: '7px 32px 7px 12px', borderRadius: 9, border: `1.5px solid ${isAllMode && multipleTemplates ? '#FCD34D' : '#E5E7EB'}`, fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff', appearance: 'none', cursor: 'pointer' }}
+                >
+                  <option value="all">Tất cả mẫu phiếu ({safeResults.length})</option>
+                  {templateOptions.map(opt => (
+                    <option key={opt.key} value={opt.key}>
+                      {opt.label} ({allScoredRows.filter(({ r }) => getRowTemplateKey(r, batch) === opt.key).length})
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={14} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: '#9CA3AF' }} />
+              </div>
+              {isAllMode && multipleTemplates && (
+                <span style={{ fontSize: 11, color: '#B45309', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 7, padding: '3px 10px', whiteSpace: 'nowrap' }}>
+                  ⚠ Chọn 1 mẫu để xuất Excel/CSV
+                </span>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* DB save status banner — only relevant when results are loaded */}
         {hasBatch && <DbStatusBanner status={dbSaveStatus} />}
@@ -679,6 +884,18 @@ export default function ResultsPage() {
           </div>
         )}
 
+        {/* Custom template schema missing warning */}
+        {hasBatch && schemaMissing && (
+          <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <AlertTriangle size={16} color="#EF4444" style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: 13, color: '#991B1B' }}>
+              Schema của custom template <strong>{batch.customTemplateName ?? `#${batch.customTemplateId}`}</strong> không có trong batch này.
+              Các cột thông tin và đáp án có thể không hiển thị đúng.
+              Để chấm lại với schema đúng, vui lòng quay lại Upload và chọn lại template.
+            </span>
+          </div>
+        )}
+
         {/* No answer key warning */}
         {hasBatch && !hasKey && (
           <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
@@ -699,7 +916,7 @@ export default function ResultsPage() {
             {[
               { label: 'Tổng phiếu',  value: String(totalSheets), sub: 'Đã xử lý' },
               { label: 'Cần xem lại', value: String(warnCount),   sub: 'Trước khi export', accent: '#FCB900' },
-              { label: 'Template',    value: batch!.templateMode === 'custom' ? 'Custom' : batch!.templateVariant.toUpperCase(), sub: getBatchTemplateLabel(batch!), small: true },
+              { label: 'Template', value: isAllMode ? 'Tất cả' : (selectedTemplateOpt?.templateMode === 'custom' ? 'Custom' : 'VJU'), sub: isAllMode ? `${templateOptions.length} mẫu phiếu` : (selectedTemplateOpt?.label ?? '—'), small: true },
               ...(hasKey ? [
                 { label: 'Phiếu có điểm', value: String(scores.length), sub: `/ ${totalSheets} phiếu`, accent: '#6366F1' },
                 { label: 'Điểm TB',   value: avgScore !== null ? String(avgScore) : '—', sub: 'Trung bình', accent: '#10B981' },
@@ -725,7 +942,7 @@ export default function ResultsPage() {
               <AlertTriangle size={16} />
               <strong>{warnCount} phiếu có cảnh báo</strong> — kiểm tra trước khi tải Excel!
             </div>
-            <Button size="sm" variant="secondary" onClick={() => navigate('/app/review-errors')}>Kiểm tra ngay →</Button>
+            <Button size="sm" variant="secondary" onClick={() => navigate('/app/review-errors', { state: { examId: selectedExamId, templateKey: selectedTemplateKey, templateSchema: selectedTemplateOpt?.templateSchema ?? null } })}>Kiểm tra ngay →</Button>
           </div>
         )}
 
@@ -745,7 +962,8 @@ export default function ResultsPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: '#C8102E' }}>
-                    {['STT','File','CCCD','SBD','Mã đề','Ca thi','Mã CTĐT','Tự chọn',
+                    {['STT', 'File',
+                      ...(isAllMode ? ['Mẫu phiếu'] : activeInfoFields.map(f => f.displayName)),
                       ...(hasKey ? ['Đúng','Sai','Trống','Điểm'] : []),
                       'Thao tác',
                     ].map(h => (
@@ -754,12 +972,15 @@ export default function ResultsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {scoredRows.map(({ r, merged, corr, sc }, i) => (
+                  {visibleScoredRows.map(({ r, merged, corr, sc }, i) => (
                     <RealRow
                       key={r.db_id ?? r.input?.filename ?? i}
                       idx={i + 1} r={r} merged={merged} corrected={!!corr} sc={sc}
                       onOpen={() => setModalRow(r)}
                       onDelete={() => handleDeleteRow(r.input?.filename ?? '', r.db_id)}
+                      infoFields={activeInfoFields}
+                      showTemplateCol={isAllMode}
+                      templateLabel={getRowTemplateLabel(r, batch)}
                     />
                   ))}
                 </tbody>
@@ -795,13 +1016,14 @@ export default function ResultsPage() {
           correction={corrections[modalRow.input?.filename ?? '']}
           answerKey={answerKey}
           onClose={() => setModalRow(null)}
+          templateSchema={resolveRowSchema(modalRow)}
         />
       )}
 
       {showExcelPreview && batch && (
         <ExcelPreviewModal
-          batch={batch}
-          results={safeResults}
+          batch={{ ...batch, templateSchema: selectedTemplateOpt?.templateSchema ?? batch.templateSchema }}
+          results={visibleScoredRows.map(x => x.r)}
           answerKey={answerKey}
           corrections={corrections}
           dataSource={dataSource === 'db' ? 'Database' : 'Trình duyệt (localStorage)'}

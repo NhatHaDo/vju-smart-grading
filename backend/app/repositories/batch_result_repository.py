@@ -97,6 +97,8 @@ class BatchResultRepository:
             sbd               = item.sbd,
             ma_de             = item.ma_de,
             ca_thi            = item.ca_thi,
+            ma_ctdt           = item.ma_ctdt,
+            tu_chon           = item.tu_chon,
             answers_json      = _j(item.answers),
             scores_json       = _j(item.scores),
             section_json      = _j(item.sections),
@@ -175,6 +177,18 @@ class BatchResultRepository:
             corrections["notes"] = payload.notes
         corrections["updated_at"] = datetime.now(timezone.utc).isoformat()
         row.manual_corrections_json = json.dumps(corrections, ensure_ascii=False)
+
+        # Sync direct student-info columns from corrected_student_info if present
+        if payload.corrected_student_info:
+            csi = payload.corrected_student_info
+            if 'ma_ctdt' in csi:
+                row.ma_ctdt = csi['ma_ctdt'] or None
+            if 'tu_chon' in csi:
+                row.tu_chon = csi['tu_chon'] or None
+            # Keep legacy VJU fields in sync too
+            for col in ('cccd', 'sbd', 'ma_de', 'ca_thi'):
+                if col in csi:
+                    setattr(row, col, csi[col] or None)
 
         if payload.mark_as_reviewed:
             row.needs_review = False

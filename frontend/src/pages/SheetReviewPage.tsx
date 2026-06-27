@@ -4,11 +4,12 @@ import { useNavigate } from 'react-router-dom';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import PageHeader from '../components/layout/PageHeader';
-import type { TemplateVariant, ImageSource } from '../types/grading';
+import type { TemplateVariant, ImageSource, TemplateSchema } from '../types/grading';
 import { TEMPLATE_VARIANT_LABEL } from '../types/grading';
 import { examsApi, customFormsApi } from '../services/apiClient';
 import type { CustomFormMeta } from '../services/apiClient';
 import type { ExamOut } from '../types/exam';
+import { buildSchemaFromDetail } from '../utils/templateSchema';
 
 const SBD_TYPES: { label: string; variant: TemplateVariant }[] = [
   { label: 'SBD 4 số', variant: 'sbd4' },
@@ -39,6 +40,9 @@ export default function SheetReviewPage() {
   const [customForms,        setCustomForms]        = useState<CustomFormMeta[]>([]);
   const [customFormsLoading, setCustomFormsLoading] = useState(false);
   const [selectedCustomId,   setSelectedCustomId]   = useState<number | null>(null);
+  /** Full schema fetched from GET /custom-forms/{id} — drives dynamic columns downstream */
+  const [customTemplateSchema, setCustomTemplateSchema] = useState<TemplateSchema | null>(null);
+  const [schemaLoading,      setSchemaLoading]      = useState(false);
 
   // ── Other ─────────────────────────────────────────────────────────────────
   const [selectedSource, setSelectedSource] = useState(0);
@@ -102,6 +106,35 @@ export default function SheetReviewPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Fetch full template schema whenever selected custom template changes ──
+  useEffect(() => {
+    if (templateMode !== 'custom' || selectedCustomId === null) {
+      setCustomTemplateSchema(null);
+      return;
+    }
+    // Check sessionStorage first (set by TemplatePage.handleLoad)
+    try {
+      const raw = sessionStorage.getItem('vju_template_schema');
+      if (raw) {
+        const cached = JSON.parse(raw) as TemplateSchema;
+        setCustomTemplateSchema(cached);
+        return;
+      }
+    } catch { /* ignore, fall through to fetch */ }
+
+    setSchemaLoading(true);
+    customFormsApi.get(selectedCustomId)
+      .then(detail => {
+        const schema = buildSchemaFromDetail(detail);
+        setCustomTemplateSchema(schema);
+        // Cache for AnswerKeyPage fallback
+        try { sessionStorage.setItem('vju_template_schema', JSON.stringify(schema)); } catch { /* ignore */ }
+      })
+      .catch(() => setCustomTemplateSchema(null))
+      .finally(() => setSchemaLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCustomId, templateMode]);
+
   const handleFiles = (newFiles: FileList | null) => {
     if (!newFiles) return;
     setFiles(prev => [...prev, ...Array.from(newFiles)]);
@@ -129,6 +162,7 @@ export default function SheetReviewPage() {
         templateMode,
         customTemplateId:   templateMode === 'custom' ? (selectedCustomForm?.id   ?? null) : null,
         customTemplateName: templateMode === 'custom' ? (selectedCustomForm?.name ?? null) : null,
+        templateSchema:     templateMode === 'custom' ? customTemplateSchema : null,
       },
     });
   };
@@ -275,6 +309,16 @@ export default function SheetReviewPage() {
                       Template: <strong style={{ color: '#1E1E1E' }}>{selectedCustomForm.name}</strong>
                       {selectedCustomForm.page_width && selectedCustomForm.page_height && (
                         <span style={{ color: '#9CA3AF' }}>· {selectedCustomForm.page_width}×{selectedCustomForm.page_height}</span>
+                      )}
+                      {schemaLoading && <span style={{ color: '#9CA3AF' }}>· Đang tải schema…</span>}
+                      {!schemaLoading && customTemplateSchema && (
+                        <span style={{ color: '#10B981' }}>
+                          · {customTemplateSchema.infoFields.length} info field,{' '}
+                          {customTemplateSchema.answerSections.reduce((n, s) => n + s.labels.length, 0)} câu MCQ
+                        </span>
+                      )}
+                      {!schemaLoading && !customTemplateSchema && (
+                        <span style={{ color: '#EF4444' }}>· Không tải được schema</span>
                       )}
                     </div>
                   )}
