@@ -50,13 +50,29 @@ from app.core.omr.crop_on_markers import (
     draw_markers_debug,
     MarkerResult,
 )
-from app.core.omr.debug_overlay import (
-    draw_overlay_marked_only,
-    draw_overlay_projected,
-    draw_overlay_warnings,
-    draw_template_overlay,
-    save_overlay,
-)
+try:
+    from app.core.omr.debug_overlay import (
+        draw_overlay_marked_only,
+        draw_overlay_projected,
+        draw_overlay_warnings,
+        draw_template_overlay,
+        save_overlay,
+    )
+    _DEBUG_OVERLAY_AVAILABLE = True
+except ModuleNotFoundError:
+    _DEBUG_OVERLAY_AVAILABLE = False
+
+    def _overlay_disabled_return_image(image, *args, **kwargs):
+        return image
+
+    def _overlay_disabled_save(*args, **kwargs):
+        return None
+
+    draw_template_overlay = _overlay_disabled_return_image
+    draw_overlay_marked_only = _overlay_disabled_return_image
+    draw_overlay_projected = _overlay_disabled_return_image
+    draw_overlay_warnings = _overlay_disabled_return_image
+    save_overlay = _overlay_disabled_save
 from app.core.omr.field_reader import (
     FieldResult,
     FieldStatus,
@@ -739,6 +755,10 @@ class OMREngine:
 
         image = resize_to_template(image, self.template.page_dimensions)
 
+        if not _DEBUG_OVERLAY_AVAILABLE:
+            logger.warning("Debug overlay disabled: debug_overlay module is not available")
+            return None
+
         # Optionally compute mean values to show on overlay
         bubble_means: dict[str, float] | None = None
         if show_mean_values:
@@ -943,6 +963,10 @@ class OMREngine:
         field_results: dict[str, FieldResult],
         filename: str | None,
     ) -> str | None:
+        if not _DEBUG_OVERLAY_AVAILABLE:
+            logger.warning("Debug overlay disabled: debug_overlay module is not available")
+            return None
+
         try:
             overlay = draw_template_overlay(image, self.template, field_results=field_results)
             fname = filename or "debug_overlay.jpg"

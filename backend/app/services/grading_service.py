@@ -66,7 +66,7 @@ class GradingService:
         sheet_id: int,
         template_path: str | Path | None = None,
         mean_mode: str = "circle_mask",
-        save_debug_overlay: bool = True,
+        save_debug_overlay: bool = False,
     ) -> dict:
         """
         Run the full OMR pipeline for `sheet_id`.
