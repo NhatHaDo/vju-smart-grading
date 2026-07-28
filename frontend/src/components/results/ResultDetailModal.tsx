@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { X, AlertTriangle, CheckCircle2 } from 'lucide-react';
-import type { OmrGradeResult, AnswerKeyStore, ManualCorrection, InfoFieldColumn, TemplateSchema, TemplateAnswerSection } from '../../types/grading';
+import type { OmrGradeResult, AnswerKeyStore, ManualCorrection, InfoFieldColumn, TemplateSchema, TemplateAnswerSection, OmrWarning } from '../../types/grading';
 import { VJU_PRESET_SCHEMA, computeScore } from '../../types/grading';
 import { buildSchemaFromAnswerKeys } from '../../utils/templateSchema';
 import { getInfoFieldValue } from '../../utils/resultMapping';
@@ -100,6 +100,37 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
   const hasWarning = warnList.length > 0;
   const debug      = r.debug ?? {};
   const sc         = answerKey ? computeScore(answers, answerKey) : null;
+
+  // Turns a raw backend warning ({field:"tn27", type:"multi_mark", candidates:["C","D"]})
+  // into a plain-Vietnamese sentence a lecturer can act on without knowing the
+  // internal field naming or English status codes. Previously this rendered
+  // literally as "tn27: multi_mark (C,D)" — meaningless without reading code.
+  function describeWarning(w: OmrWarning): string {
+    const cands = w.candidates?.length ? w.candidates.join(' và ') : '';
+    const isInfo = w.type.endsWith('_info_field');
+
+    if (isInfo) {
+      const infoField  = schema.infoFields.find(f => f.key === w.field);
+      const fieldName  = infoField?.displayName || w.field;
+      const colMatch   = w.column?.match(/(\d+)$/);
+      const colLabel   = colMatch ? ` (cột ${colMatch[1]})` : '';
+      return w.type === 'multi_mark_info_field'
+        ? `${fieldName}${colLabel}: tô nhiều số (${cands}) — cần xem lại phiếu gốc`
+        : `${fieldName}${colLabel}: số "${cands}" tô hơi mờ — nên xác nhận lại`;
+    }
+
+    // MCQ-type: mirror the backend's own "Câu N" convention (trailing digits
+    // of the field key) so this always matches the number shown in the grid
+    // above, regardless of how sections are grouped.
+    const m = w.field.match(/(\d+)$/);
+    const qLabel = m ? `Câu ${parseInt(m[1], 10)}` : w.field;
+    if (w.type === 'multi_mark')   return `${qLabel}: tô nhiều đáp án (${cands}) — cần xem lại phiếu gốc`;
+    if (w.type === 'too_light')    return `${qLabel}: đáp án "${cands}" tô hơi mờ — nên xác nhận lại`;
+    // needs_review
+    return cands
+      ? `${qLabel}: chưa đủ rõ để phân biệt (${cands}) — cần xem lại phiếu gốc`
+      : `${qLabel}: chưa đủ rõ để xác định đáp án — cần xem lại phiếu gốc`;
+  }
 
   function qStatus(lbl: string): 'correct' | 'wrong' | 'blank' | 'warn' | 'no-key' {
     const warnQ = warnList.find(w => w.field === lbl);
@@ -228,7 +259,7 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {effectiveAnswerSections.length === 0 && (
                   <div style={{ fontSize: 12, color: '#9CA3AF', textAlign: 'center', padding: '12px 0' }}>
-                    Template này không có câu hỏi MCQ.
+                    Template này không có câu trắc nghiệm.
                   </div>
                 )}
                 {schemaDerived && (
@@ -237,9 +268,10 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                     Hiển thị từ dữ liệu thực — schema đang tải hoặc chưa lưu
                   </div>
                 )}
-                {effectiveAnswerSections.map(({ name: section, labels }) => {
+                {effectiveAnswerSections.map(({ name: section, labels, inputType }) => {
                   const visible = labels.filter(lbl => filter === 'all' || qStatus(lbl) === filter);
                   if (visible.length === 0) return null;
+                  const isText = inputType === 'text';
                   return (
                     <div key={section}>
                       <div style={{ fontSize: 10, fontWeight: 700, color: '#6B7280', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{section}</div>
@@ -250,12 +282,12 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                           const gi  = allAnswerLabels.indexOf(lbl) + 1;
                           return (
                             <div key={lbl} style={{
-                              width: 42, height: 42, borderRadius: 8,
+                              minWidth: isText ? 74 : 42, height: 42, borderRadius: 8, padding: isText ? '0 6px' : 0,
                               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1,
                               background: STATUS_COLOR[st], border: `1.5px solid ${STATUS_BORDER[st]}`,
                             }}>
                               <span style={{ fontSize: 9, color: STATUS_TEXT[st], fontWeight: 500 }}>C{gi}</span>
-                              <span style={{ fontSize: 13, fontWeight: 800, color: STATUS_TEXT[st] }}>{ans || '—'}</span>
+                              <span style={{ fontSize: isText ? 12 : 13, fontWeight: 800, color: STATUS_TEXT[st], fontFamily: isText ? 'monospace' : 'inherit', whiteSpace: 'nowrap' }}>{ans || '—'}</span>
                             </div>
                           );
                         })}
@@ -276,7 +308,7 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                 : warnList.map((w, i) => (
                     <div key={i} style={{ fontSize: 12, color: '#B45309', background: '#FFFBEB', borderRadius: 7, padding: '6px 10px', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
                       <AlertTriangle size={11} style={{ flexShrink: 0 }} />
-                      <span><strong>{w.field}</strong>: {w.type}{w.candidates?.length ? ` (${w.candidates.join(',')})` : ''}</span>
+                      <span>{describeWarning(w)}</span>
                     </div>
                   ))
               }

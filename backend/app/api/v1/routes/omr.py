@@ -101,6 +101,12 @@ def _extract_student_info_custom(omr_result, template) -> dict:
     for block in template.field_blocks:
         if block.field_type not in _INT_FIELD_TYPES:
             continue
+        # Sign/decimal-position/digit sub-blocks of a composite signed-decimal
+        # answer field (2026-07-28) are raw internals, not their own info
+        # field — the combined value already appears in `answers` via
+        # composite_answer_fields. Skip so they don't show up twice.
+        if set(block.field_labels) & template.composite_sub_labels:
+            continue
         parts = []
         for lbl in block.field_labels:
             fr = omr_result.field_results.get(lbl)
@@ -121,8 +127,20 @@ def _extract_answers_custom(omr_result, template) -> dict:
         if block.field_type in _INT_FIELD_TYPES:
             continue
         for lbl in block.field_labels:
+            # Sign/decimal-position sub-fields of a composite signed-decimal
+            # answer (2026-07-28) aren't independent answers — only the
+            # combined composite key (added below) should appear.
+            if lbl in template.composite_sub_labels:
+                continue
             fr = omr_result.field_results.get(lbl)
             answers[lbl] = fr.selected_value if fr else None
+    # Composite signed-decimal answers (2026-07-28): the combined value was
+    # injected into field_results under the composite key by engine.py, but
+    # the composite key isn't any block's field_label, so the loop above
+    # never sees it — add it explicitly.
+    for comp_key in template.composite_answer_fields:
+        fr = omr_result.field_results.get(comp_key)
+        answers[comp_key] = fr.selected_value if fr else None
     return answers
 
 
@@ -133,6 +151,8 @@ def _extract_warnings_custom(omr_result, template) -> list[dict]:
         if block.field_type in _INT_FIELD_TYPES:
             continue
         for lbl in block.field_labels:
+            if lbl in template.composite_sub_labels:
+                continue
             result = omr_result.field_results.get(lbl)
             if result is None:
                 continue
@@ -142,6 +162,18 @@ def _extract_warnings_custom(omr_result, template) -> list[dict]:
                 warnings.append({"field": lbl, "type": "too_light", "candidates": result.selected_values})
             elif result.status == _FieldStatus.NEEDS_REVIEW:
                 warnings.append({"field": lbl, "type": "needs_review", "candidates": result.selected_values})
+    # Composite signed-decimal answers: one warning for the whole question
+    # (not 3 separate ones for sign/decimal/digits — see aggregate_signed_decimal).
+    for comp_key in template.composite_answer_fields:
+        result = omr_result.field_results.get(comp_key)
+        if result is None:
+            continue
+        if result.status == _FieldStatus.MULTI_MARK:
+            warnings.append({"field": comp_key, "type": "multi_mark", "candidates": result.selected_values})
+        elif result.status == _FieldStatus.TOO_LIGHT:
+            warnings.append({"field": comp_key, "type": "too_light", "candidates": result.selected_values})
+        elif result.status == _FieldStatus.NEEDS_REVIEW:
+            warnings.append({"field": comp_key, "type": "needs_review", "candidates": result.selected_values})
     return warnings
 
 
@@ -156,6 +188,11 @@ def _extract_info_warnings_custom(omr_result, template) -> list[dict]:
         for lbl in block.field_labels:
             lbl_to_block[lbl] = block.name
     for lbl, fr in omr_result.field_results.items():
+        # Sub-labels of a composite signed-decimal field already get ONE
+        # combined warning above (via _extract_warnings_custom) — showing
+        # their raw per-column warnings too would just be confusing noise.
+        if lbl in template.composite_sub_labels:
+            continue
         block_name = lbl_to_block.get(lbl)
         if block_name is None:
             continue
@@ -171,6 +208,8 @@ def _build_info_field_columns_custom(omr_result, template) -> dict:
     result: dict[str, list[dict]] = {}
     for block in template.field_blocks:
         if block.field_type not in _INT_FIELD_TYPES:
+            continue
+        if set(block.field_labels) & template.composite_sub_labels:
             continue
         columns: list[dict] = []
         for idx, lbl in enumerate(block.field_labels):

@@ -128,6 +128,18 @@ export function dbRowToOmrResult(row: BatchResultOut): OmrGradeResult & { db_id:
 
   return {
     db_id:   row.id,
+    // 2026-07-29: these 3 fields were missing from this shared converter even
+    // though BatchResultOut carries them — ResultsPage.tsx had its own local
+    // copy of dbRowToOmrResult() that DID set them, but every other page
+    // importing this shared version (ExcelPreviewPage, ReviewErrorsPage) got
+    // rows with template_type/template_id/template_variant_row silently
+    // undefined. Anything keying off getRowTemplateKey()/getRowTemplateLabel()
+    // (custom-vs-preset detection per row) was broken for those pages —
+    // every DB-loaded row silently fell back to the batch-level default
+    // instead of its own real template.
+    template_type:        row.template_type,
+    template_id:          row.template_id,
+    template_variant_row: row.template_variant,
     input:   { filename: row.file_name ?? '(unknown)', saved_as: '' },
     student_info,
     answers:            parseJson<Record<string, string | null>>(row.answers_json, {}),
@@ -145,7 +157,9 @@ export function dbRowToOmrResult(row: BatchResultOut): OmrGradeResult & { db_id:
       alignment_warnings: [], image_source: null, preprocess_strategy_used: null,
       marker_centers_detected: null, target_marker_centers: null, homography_matrix: null,
       marker_quality_score: null, warp_used: null, warp_rejected_reason: null,
-      original_image_path: null, aligned_image_path: null, aligned_candidate_path: null,
+      original_image_path:       debugPaths['original_image_path']      ?? null,
+      aligned_image_path:        debugPaths['aligned_image_path']        ?? null,
+      aligned_candidate_path: null,
       markers_debug_path: null,
       overlay_all_path:          debugPaths['overlay_all_path']          ?? null,
       overlay_marked_only_path:  debugPaths['overlay_marked_only_path']  ?? null,

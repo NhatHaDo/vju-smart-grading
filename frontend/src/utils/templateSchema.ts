@@ -3,7 +3,8 @@
  * Used by TemplatePage and SheetReviewPage.
  */
 import type { CustomFormDetail } from '../services/apiClient';
-import type { TemplateSchema } from '../types/grading';
+import type { BatchGradeState, OmrGradeResult, TemplateSchema } from '../types/grading';
+import { TEMPLATE_VARIANT_LABEL } from '../types/grading';
 
 /**
  * Returns true if a custom-form area should be treated as an MCQ answer field.
@@ -34,13 +35,26 @@ export function buildSchemaFromDetail(detail: CustomFormDetail): TemplateSchema 
     displayName: f.displayName || f.key,
   }));
 
-  // Group non-composite MCQ answer fields by blockName into sections
-  const sectionMap = new Map<string, { name: string; labels: string[] }>();
+  // Group answer fields by blockName into sections. Composite fields (e.g. the
+  // signed-decimal field type) each get their own blockName === their key, so
+  // they naturally end up as a dedicated single-label section — just marked
+  // inputType: 'text' so the UI renders a text box instead of an A/B/C/D grid.
+  const sectionMap = new Map<string, { name: string; labels: string[]; inputType?: 'mcq' | 'text'; options?: string[] }>();
   for (const af of (detail.answerFields ?? [])) {
-    if (af.composite) continue;
     const key = af.blockName;
     if (!sectionMap.has(key)) {
-      sectionMap.set(key, { name: af.label || af.blockName, labels: [] });
+      // Prefer the user-given block display name (e.g. "TN1") over the
+      // per-question "Câu N" label, which used to leak through here and
+      // make every section look like it was named after its first question.
+      sectionMap.set(key, {
+        name: af.blockLabel || af.label || af.blockName,
+        labels: [],
+        inputType: af.composite ? 'text' : 'mcq',
+        // e.g. ["A","B","C","D"] or ["Đ","S"] — every field in one block
+        // shares the same bubbleValues, so the first entry's options apply
+        // to the whole section (drives the dropdown choices in the UI).
+        options: af.options && af.options.length > 0 ? af.options : undefined,
+      });
     }
     sectionMap.get(key)!.labels.push(af.key);
   }
@@ -72,4 +86,52 @@ export function buildSchemaFromAnswerKeys(answerKeys: string[]): TemplateSchema 
     }),
   }));
   return { infoFields: [], answerSections };
+}
+
+// ── Per-row template identification (2026-07-29) ────────────────────────────
+// Moved here from ResultsPage.tsx so ExcelPreviewPage can build the same
+// "which template does this row belong to" grouping when the user picks a
+// different kỳ thi/mẫu phiếu on the export-preview page itself, instead of
+// only ever reflecting whatever ResultsPage last had selected. Single source
+// of truth — ResultsPage now imports these instead of keeping its own copy.
+
+export type TemplateFilterOption = {
+  key:            string;
+  label:          string;
+  templateMode:   'vju' | 'custom';
+  templateId?:    number | null;
+  templateSchema: TemplateSchema;
+};
+
+/** Stable per-row key identifying which template a DB/localStorage row belongs
+ *  to — "vju:sbd8" or "custom:123". Falls back to the parent batch's own
+ *  template when the row itself doesn't carry template_type/template_id
+ *  (e.g. rows from a freshly-graded batch that hasn't round-tripped the DB). */
+export function getRowTemplateKey(r: OmrGradeResult, fallbackBatch?: BatchGradeState | null): string {
+  const ttype = r.template_type ?? (fallbackBatch?.templateMode === 'custom' ? 'custom' : 'vju');
+  if (ttype === 'custom') {
+    const tid = r.template_id ?? fallbackBatch?.customTemplateId ?? null;
+    return `custom:${tid ?? 'unknown'}`;
+  }
+  const tvar = r.template_variant_row ?? fallbackBatch?.templateVariant ?? 'sbd8';
+  return `vju:${tvar}`;
+}
+
+/** Human-readable label for getRowTemplateKey()'s bucket, e.g. "Mẫu phiếu VJU
+ *  - SBD 8 số" or "Custom - temp3". templateNames maps custom template id →
+ *  real saved name (from customFormsApi.get()), used when the batch itself
+ *  doesn't carry customTemplateName (true for any batch reloaded from DB). */
+export function getRowTemplateLabel(
+  r: OmrGradeResult,
+  fallbackBatch?: BatchGradeState | null,
+  templateNames?: Map<number, string>,
+): string {
+  const key = getRowTemplateKey(r, fallbackBatch);
+  if (key.startsWith('custom:')) {
+    const tid = r.template_id ?? fallbackBatch?.customTemplateId ?? null;
+    const name = fallbackBatch?.customTemplateName ?? (tid != null ? templateNames?.get(tid) : null) ?? null;
+    return name ? `Custom - ${name}` : `Custom #${tid ?? '?'}`;
+  }
+  const tvar = r.template_variant_row ?? fallbackBatch?.templateVariant ?? 'sbd8';
+  return TEMPLATE_VARIANT_LABEL[tvar as keyof typeof TEMPLATE_VARIANT_LABEL] ?? tvar.toUpperCase();
 }

@@ -278,6 +278,14 @@ def compile_template(
     used_field_labels: set[str] = set()
     used_block_names: set[str] = set()
     errors: list[str] = []
+    # Composite signed-decimal fields (2026-07-28): frontend sends 3 plain
+    # "omr" areas (sign / decimal-position / digits) tagged with a shared
+    # compositeGroup + a compositeRole each. Collected here, resolved into
+    # template["compositeAnswerFields"] after the main loop once every
+    # area's field_labels are known. See CompositeSignedDecimalSpec in
+    # template_loader.py for the consuming shape.
+    composite_role_labels: dict[str, dict[str, list[str]]] = {}
+    composite_display_labels: dict[str, str] = {}
 
     for area in areas:
         if area.get("type") != "omr":
@@ -468,6 +476,46 @@ def compile_template(
             block["emptyValue"] = str(area.get("emptyValue") or "")
 
         template["fieldBlocks"][key] = block
+
+        # Composite signed-decimal answer field (2026-07-28): this area is
+        # one of the 3 sub-parts (sign / decimal-position / digits) of a
+        # "Phần IV"-style fill-in-the-blank numeric question. Record which
+        # field_labels play which role — resolved into
+        # template["compositeAnswerFields"] after the main loop, once every
+        # area in the group has been compiled.
+        comp_group = str(area.get("compositeGroup") or "").strip()
+        comp_role  = str(area.get("compositeRole") or "").strip().lower()
+        if comp_group and comp_role in {"sign", "decimal", "digits"}:
+            composite_role_labels.setdefault(comp_group, {})[comp_role] = list(field_labels)
+            if comp_group not in composite_display_labels:
+                composite_display_labels[comp_group] = str(area.get("compositeLabel") or comp_group)
+
+        # Composite INT info-fields (Mã SV, CCCD, Mã đề, Ca thi, …) are read
+        # column-by-column internally (one BubbleReading list per digit
+        # column, e.g. "m_sv1".."m_sv8"), but the UI/scoring layer wants a
+        # single concatenated value for the whole block (e.g. "25118106").
+        # aggregate_custom_label() in field_reader.py does that concatenation,
+        # but only for keys listed in template["customLabels"] — a mapping
+        # that was never being written here, so every composite INT field
+        # silently produced no aggregate value ("—" in the UI) regardless of
+        # how correctly its individual digit columns were read.
+        if field_type in NON_ANSWER_FIELD_TYPES:
+            template.setdefault("customLabels", {})[key] = list(field_labels)
+
+    # Resolve composite signed-decimal groups now that every area is compiled.
+    for comp_group, roles in composite_role_labels.items():
+        digit_labels = roles.get("digits") or []
+        if not digit_labels:
+            errors.append(f"{comp_group}: composite signed-decimal thiếu vùng 'digits'")
+            continue
+        sign_labels = roles.get("sign") or []
+        dec_labels  = roles.get("decimal") or []
+        template.setdefault("compositeAnswerFields", {})[comp_group] = {
+            "signLabel":   sign_labels[0] if sign_labels else None,
+            "decLabel":    dec_labels[0]  if dec_labels  else None,
+            "digitLabels": digit_labels,
+            "label":       composite_display_labels.get(comp_group, comp_group),
+        }
 
     if errors:
         raise CompileError(errors)
@@ -684,6 +732,12 @@ def extract_answer_fields_from_template(
                 "composite": True,
             })
             continue
+        # Display name the user gave this whole block in the editor (e.g.
+        # "TN1"), distinct from the per-question "Câu N" label below. The
+        # frontend groups answer fields into sections by blockName and needs
+        # this to label the section header — falls back to blockName if the
+        # block was never given a custom name.
+        block_label = str((area or {}).get("label") or block_name)
         for field_key in labels:
             m = re.search(r"(\d+)$", str(field_key))
             label_text = f"Câu {int(m.group(1))}" if m else str(field_key)
@@ -691,7 +745,35 @@ def extract_answer_fields_from_template(
                 "key": field_key,
                 "label": label_text,
                 "blockName": str(block_name),
+                "blockLabel": block_label,
                 "options": options,
             })
+
+    # Composite signed-decimal answer fields (2026-07-28): each group's 3
+    # sub-areas were excluded above (includeInAnswerKey=false), so add ONE
+    # text-input answer field per group here instead — same
+    # {composite:true, inputType:"text"} shape as the plain composite-INT
+    # case above, so the frontend can reuse one rendering path for both.
+    for comp_key, comp_spec in (template.get("compositeAnswerFields") or {}).items():
+        if not isinstance(comp_spec, dict):
+            continue
+        source_fields = [
+            lbl for lbl in (
+                [comp_spec.get("signLabel")] if comp_spec.get("signLabel") else []
+            ) + (
+                [comp_spec.get("decLabel")] if comp_spec.get("decLabel") else []
+            ) + list(comp_spec.get("digitLabels") or [])
+            if lbl
+        ]
+        answer_fields.append({
+            "key": comp_key,
+            "label": str(comp_spec.get("label") or comp_key),
+            "blockName": comp_key,
+            "blockLabel": str(comp_spec.get("label") or comp_key),
+            "options": [],
+            "inputType": "decimal",
+            "sourceFields": source_fields,
+            "composite": True,
+        })
 
     return answer_fields

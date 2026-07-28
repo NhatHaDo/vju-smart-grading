@@ -26,7 +26,37 @@ from app.core.omr.bubble_analyzer import BubbleReading, BubbleStatus
 # answer.  If the gap is smaller the result is flagged as NEEDS_REVIEW so a
 # human can verify — this prevents near-threshold ambiguities from turning
 # into wrong answers.
-MCQ_GAP_MIN_CONFIDENT = 20
+#
+# 2026-07-28: observed real single-answer rows (tn4, tn5, tn21, tn22, tn26,
+# tn27 in "Template 2") with gaps of 16.6-19.9 — clean, singly-marked bubbles
+# that classify_strip() already confidently separated from the rest — being
+# wrongly downgraded to NEEDS_REVIEW by the old threshold of 20. Genuine
+# answered rows in the same scan had gaps of 20.1+, so 20 was a cliff-edge
+# cutting into legitimate answers. Lowered to 15 to match the analogous
+# MCQ_OUTLIER_MIN_JUMP constant in bubble_analyzer.py.
+#
+# 2026-07-28 (later same day): tn1 and tn10 (gaps 14.5 and 13.3) still fell
+# just under 15, once classify_strip's own tight-cluster fallback (see
+# MCQ_OUTLIER_TIGHT_* in bubble_analyzer.py) started correctly isolating them
+# as single MARKED bubbles — this redundant gap check then re-flagged them
+# NEEDS_REVIEW anyway. Added the same two-path rule here: the primary 15px
+# floor stays for the general case, plus a lower floor (10px) when the other
+# 3 bubbles in the row are unusually tight (near-identical), which is a
+# reliable sign of a genuine single mark even with a smaller gap.
+#
+# 2026-07-28 (later still): visually confirmed tn12, tn21-23, tn26-27,
+# tn29-30, tn24-25 are also genuine single marks with rest-spread 4.0-6.6
+# (bigger-bubble columns naturally vary more among blanks). Raised the tight
+# rest-spread cap to 8.0 to match bubble_analyzer.py's MCQ_OUTLIER_TIGHT_REST_SPREAD_MAX
+# so this redundant check doesn't re-reject what classify_strip now accepts.
+#
+# 2026-07-28 (yet later — template "temp3"): tn1/tn10/tn31/tn38 confirmed
+# genuine single marks with gaps 8.7-9.7, just under the 10 floor. Lowered
+# to 8 to match bubble_analyzer.py's MCQ_OUTLIER_TIGHT_MIN_JUMP — keep these
+# two constants in sync, they gate the same decision at two layers.
+MCQ_GAP_MIN_CONFIDENT = 15
+MCQ_GAP_TIGHT_MIN_CONFIDENT = 8
+MCQ_GAP_TIGHT_REST_SPREAD_MAX = 8.0
 
 
 # ── Result types ──────────────────────────────────────────────────────────
@@ -148,7 +178,11 @@ def _read_row_field(
     marked_mean = marked[0].mean_value
     other_means = [r.mean_value for r in readings if r is not marked[0]]
     gap = (min(other_means) - marked_mean) if other_means else MCQ_GAP_MIN_CONFIDENT
-    if gap < MCQ_GAP_MIN_CONFIDENT:
+    confident = gap >= MCQ_GAP_MIN_CONFIDENT
+    if not confident and other_means:
+        rest_spread = max(other_means) - min(other_means)
+        confident = gap >= MCQ_GAP_TIGHT_MIN_CONFIDENT and rest_spread <= MCQ_GAP_TIGHT_REST_SPREAD_MAX
+    if not confident:
         return FieldResult(
             field_label=field_label,
             field_type=field_type,
@@ -403,3 +437,107 @@ def aggregate_custom_label(
     value = "".join(parts)
     status = FieldStatus.NEEDS_REVIEW if has_issue else FieldStatus.ANSWERED
     return value, status
+
+
+# ── Composite signed-decimal aggregation ──────────────────────────────────
+
+def aggregate_signed_decimal(
+    sign_result:  FieldResult | None,
+    dec_result:   FieldResult | None,
+    digit_results: list[FieldResult | None],
+) -> tuple[str | None, FieldStatus, list[dict]]:
+    """
+    Combine a sign column + a decimal-position column + N digit columns into
+    one signed-decimal answer string (e.g. "-12.3"), for "Phần IV"-style
+    fill-in-the-blank numeric questions (2026-07-28).
+
+    sign_result:   FieldResult for the 1-bubble "-" column, or None if this
+                   question has no sign sub-field at all (never negative).
+    dec_result:    FieldResult for the decimal-position column, or None if
+                   this question is always a plain integer. Its selected
+                   value is a digit COUNT ("1", "2", …) — the decimal point
+                   is inserted after that many leading digits.
+    digit_results: FieldResult per digit column, left-to-right order. Each
+                   may be None (block/label missing — shouldn't normally
+                   happen, treated like a blank digit).
+
+    Returns (value, status, warnings):
+      value:   formatted string, or None if the whole question is blank
+               (every sub-field completely unanswered).
+      status:  BLANK (nothing filled at all) | ANSWERED (every sub-field
+               clean) | NEEDS_REVIEW (some sub-field ambiguous/partial) |
+               MULTI_MARK (a sub-field itself came back multi-marked).
+      warnings: list of {field, type, candidates} dicts, same shape as the
+                rest of the warnings pipeline, one per problematic sub-field.
+    """
+    warnings: list[dict] = []
+
+    def _is_blank(r: FieldResult | None) -> bool:
+        return r is None or r.status == FieldStatus.BLANK
+
+    all_blank = (
+        _is_blank(sign_result)
+        and _is_blank(dec_result)
+        and all(_is_blank(r) for r in digit_results)
+    )
+    if all_blank:
+        return None, FieldStatus.BLANK, warnings
+
+    has_issue = False
+
+    # ── Sign ───────────────────────────────────────────────────────────────
+    sign_str = ""
+    if sign_result is not None and sign_result.status != FieldStatus.BLANK:
+        if sign_result.status == FieldStatus.ANSWERED and sign_result.selected_value == "-":
+            sign_str = "-"
+        else:
+            has_issue = True
+            warnings.append({
+                "field": sign_result.field_label, "type": sign_result.status.value,
+                "candidates": sign_result.selected_values,
+            })
+
+    # ── Digits ───────────────────────────────────────────────────────────────
+    digit_chars: list[str] = []
+    for r in digit_results:
+        if r is None or r.selected_value is None:
+            digit_chars.append("_")
+            has_issue = True
+            if r is not None and r.status != FieldStatus.BLANK:
+                warnings.append({
+                    "field": r.field_label, "type": r.status.value,
+                    "candidates": r.selected_values,
+                })
+        else:
+            digit_chars.append(r.selected_value)
+            if r.status != FieldStatus.ANSWERED:
+                has_issue = True
+                warnings.append({
+                    "field": r.field_label, "type": r.status.value,
+                    "candidates": r.selected_values,
+                })
+    digits = "".join(digit_chars)
+
+    # ── Decimal position ────────────────────────────────────────────────────
+    dec_count: int | None = None
+    if dec_result is not None and dec_result.status != FieldStatus.BLANK:
+        if dec_result.status == FieldStatus.ANSWERED and dec_result.selected_value is not None:
+            try:
+                dec_count = int(dec_result.selected_value)
+            except ValueError:
+                has_issue = True
+        else:
+            has_issue = True
+        if dec_count is None or dec_result.status != FieldStatus.ANSWERED:
+            warnings.append({
+                "field": dec_result.field_label, "type": dec_result.status.value,
+                "candidates": dec_result.selected_values,
+            })
+
+    if dec_count is not None and 0 < dec_count < len(digits):
+        value = f"{sign_str}{digits[:dec_count]}.{digits[dec_count:]}"
+    else:
+        value = f"{sign_str}{digits}"
+
+    status = FieldStatus.NEEDS_REVIEW if has_issue else FieldStatus.ANSWERED
+    return value, status, warnings

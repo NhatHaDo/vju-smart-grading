@@ -416,9 +416,13 @@ export interface CustomFormDetail {
     key:        string;
     label:      string;
     blockName:  string;
+    /** User-given display name for the whole block (e.g. "TN1") — used as the section header. */
+    blockLabel?: string;
     options:    string[];
     composite?: boolean;
     sourceFields?: string[];
+    /** e.g. "decimal" for signed-decimal composite fields — drives text-input rendering. */
+    inputType?: string;
   }[];
   /** INT info fields (includeInAnswerKey === false) */
   infoFields: {

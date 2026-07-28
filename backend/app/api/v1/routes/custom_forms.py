@@ -110,6 +110,17 @@ def _extract_info_fields(areas: list[dict]) -> list[dict]:
             continue
         if area.get("includeInAnswerKey", True):
             continue  # answer field — skip
+        # 2026-07-29: a composite answer field (e.g. the signed-decimal "Số 1"
+        # field) is stored as 2-3 separate sub-areas (sign/decimal-position/
+        # digits), each with includeInAnswerKey=false — that flag only means
+        # "don't score this sub-area on its own", not "this is student info".
+        # The whole group is already surfaced as ONE proper answer field by
+        # extract_answer_fields_from_template() (via compositeAnswerFields).
+        # Without this check, each sub-area leaked into infoFields and showed
+        # up in the result-modal header as "Số 1 — dấu / — dấu phẩy / — chữ
+        # số", right next to Mã SV / Mã đề, confusing anyone reviewing results.
+        if area.get("compositeGroup") or area.get("excludeFromAnswerKey"):
+            continue
         result.append({
             "key":         area.get("blockName", ""),
             "displayName": area.get("label") or area.get("blockName", ""),

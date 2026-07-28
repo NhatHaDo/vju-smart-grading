@@ -10,7 +10,8 @@ import { TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, loadAnswerKey, loadCorrectio
 import ResultDetailModal from '../components/results/ResultDetailModal';
 import ExcelPreviewModal from '../components/results/ExcelPreviewModal';
 import { resultsApi, examsApi, customFormsApi, hasToken, ApiError, type BatchResultOut, type ResultBatchSaveRequest } from '../services/apiClient';
-import { buildSchemaFromDetail } from '../utils/templateSchema';
+import { buildSchemaFromDetail, getRowTemplateKey, getRowTemplateLabel } from '../utils/templateSchema';
+import type { TemplateFilterOption } from '../utils/templateSchema';
 import type { ExamOut } from '../types/exam';
 
 const LS_KEY = 'vju_last_batch_grade';
@@ -75,7 +76,9 @@ function dbRowToOmrResult(row: BatchResultOut): OmrGradeResult & { db_id: number
       alignment_warnings: [], image_source: null, preprocess_strategy_used: null,
       marker_centers_detected: null, target_marker_centers: null, homography_matrix: null,
       marker_quality_score: null, warp_used: null, warp_rejected_reason: null,
-      original_image_path: null, aligned_image_path: null, aligned_candidate_path: null,
+      original_image_path:       debugPaths['original_image_path']      ?? null,
+      aligned_image_path:        debugPaths['aligned_image_path']        ?? null,
+      aligned_candidate_path: null,
       markers_debug_path: null,
       overlay_all_path:          debugPaths['overlay_all_path']          ?? null,
       overlay_marked_only_path:  debugPaths['overlay_marked_only_path']  ?? null,
@@ -94,35 +97,10 @@ function getBatchTemplateLabel(b: BatchGradeState): string {
   return TEMPLATE_VARIANT_LABEL[b.templateVariant] ?? b.templateVariant;
 }
 
-// ── Template filter helpers ────────────────────────────────────────────────
-
-type TemplateFilterOption = {
-  key:           string;
-  label:         string;
-  templateMode:  'vju' | 'custom';
-  templateId?:   number | null;
-  templateSchema: TemplateSchema;
-};
-
-function getRowTemplateKey(r: OmrGradeResult, fallbackBatch?: BatchGradeState | null): string {
-  const ttype = r.template_type ?? (fallbackBatch?.templateMode === 'custom' ? 'custom' : 'vju');
-  if (ttype === 'custom') {
-    const tid = r.template_id ?? fallbackBatch?.customTemplateId ?? null;
-    return `custom:${tid ?? 'unknown'}`;
-  }
-  const tvar = r.template_variant_row ?? fallbackBatch?.templateVariant ?? 'sbd8';
-  return `vju:${tvar}`;
-}
-
-function getRowTemplateLabel(r: OmrGradeResult, fallbackBatch?: BatchGradeState | null): string {
-  const key = getRowTemplateKey(r, fallbackBatch);
-  if (key.startsWith('custom:')) {
-    const name = fallbackBatch?.customTemplateName ?? null;
-    return name ? `Custom - ${name}` : `Custom #${r.template_id ?? fallbackBatch?.customTemplateId ?? '?'}`;
-  }
-  const tvar = r.template_variant_row ?? fallbackBatch?.templateVariant ?? 'sbd8';
-  return TEMPLATE_VARIANT_LABEL[tvar as keyof typeof TEMPLATE_VARIANT_LABEL] ?? tvar.toUpperCase();
-}
+// ── Template filter helpers ─────────────────────────────────────────────────
+// getRowTemplateKey / getRowTemplateLabel / TemplateFilterOption now live in
+// utils/templateSchema.ts (2026-07-29) — shared with ExcelPreviewPage's own
+// exam/template selector, which needs the exact same per-row grouping logic.
 
 // ── Batch save request builder ─────────────────────────────────────────────
 
@@ -161,6 +139,14 @@ function buildBatchSaveRequest(batch: BatchGradeState, examId?: number | null): 
           overlay_all_path:         r.debug?.overlay_all_path         ?? null,
           overlay_marked_only_path: r.debug?.overlay_marked_only_path ?? null,
           overlay_warnings_path:    r.debug?.overlay_warnings_path    ?? null,
+          // Previously dropped here: the per-file grade response DOES include
+          // these two (see backend app/api/v1/routes/omr.py's debug-grade
+          // response), but the batch-save payload never carried them through,
+          // so "Ảnh đã căn chỉnh" / "Ảnh gốc" tabs in Sửa thủ công / kết quả
+          // chi tiết always showed "Không có ảnh debug" for anything saved
+          // via batch grading (2026-07-28).
+          original_image_path:     r.debug?.original_image_path      ?? null,
+          aligned_image_path:      r.debug?.aligned_image_path       ?? null,
         },
       })),
   };
@@ -213,6 +199,7 @@ function exportCsv(
   answerKey: AnswerKeyStore | null,
   results?: OmrGradeResult[],
   tplLabel?: string,
+  templateNames?: Map<number, string>,
 ) {
   const tplSlug = (tplLabel ?? (batch.templateMode === 'custom'
     ? (batch.customTemplateName ?? 'custom')
@@ -227,7 +214,7 @@ function exportCsv(
     return [
       r.input?.filename ?? '',
       r._error ? 'error' : 'ok',
-      getRowTemplateLabel(r, batch),
+      getRowTemplateLabel(r, batch, templateNames),
       r.student_info?.cccd ?? '', r.student_info?.sbd ?? '',
       r.student_info?.ma_de ?? '', r.student_info?.ca_thi ?? '',
       r.student_info?.ma_ctdt ?? '', r.student_info?.tu_chon ?? '',
@@ -301,7 +288,7 @@ function RealRow({ idx, r, merged, corrected, sc, onOpen, onDelete, infoFields, 
       <td style={{ padding: '11px 10px' }}>
         <div style={{ fontWeight: 600, color: '#1E1E1E', display: 'flex', alignItems: 'center', gap: 4 }}>
           {r.input?.filename ?? '—'}
-          {warn && !hasIMM && <AlertTriangle size={12} color="#FCB900" title="Có cảnh báo MCQ" />}
+          {warn && !hasIMM && <AlertTriangle size={12} color="#FCB900" title="Có câu tô nhiều đáp án" />}
           {hasIMM && <AlertTriangle size={12} color="#CA8A04" title={buildInfoWarningsCsv(r) || 'Có nhiều ô tô trong cột thông tin'} />}
           {r._error && <span style={{ fontSize: 10, color: '#EF4444', fontWeight: 400 }}>ERR</span>}
           {corrected && <span style={{ fontSize: 10, color: '#10B981', fontWeight: 700, background: '#D1FAE5', borderRadius: 4, padding: '1px 5px' }}>Đã sửa tay</span>}
@@ -409,6 +396,9 @@ export default function ResultsPage() {
 
   // Schema cache for custom templates loaded from DB (which don't carry templateSchema)
   const [fetchedSchemas, setFetchedSchemas] = useState<Map<number, TemplateSchema>>(new Map());
+  // Real template name (e.g. "temp3") for custom templates loaded from DB — same
+  // fetch as fetchedSchemas above, since syntheticBatch has no customTemplateName.
+  const [fetchedTemplateNames, setFetchedTemplateNames] = useState<Map<number, string>>(new Map());
   // Track which IDs have already been fetched (or attempted) — prevents duplicate requests
   const fetchedSchemaIdsRef = useRef<Set<number>>(new Set());
 
@@ -549,15 +539,20 @@ export default function ResultsPage() {
     Promise.all(
       missingIds.map(id =>
         customFormsApi.get(id)
-          .then(detail => ({ id, schema: buildSchemaFromDetail(detail) }))
+          .then(detail => ({ id, schema: buildSchemaFromDetail(detail), name: detail.name }))
           .catch(() => null)
       )
     ).then(results => {
-      const updates = results.filter(Boolean) as { id: number; schema: TemplateSchema }[];
+      const updates = results.filter(Boolean) as { id: number; schema: TemplateSchema; name: string }[];
       if (updates.length === 0) return;
       setFetchedSchemas(prev => {
         const next = new Map(prev);
         for (const { id, schema } of updates) next.set(id, schema);
+        return next;
+      });
+      setFetchedTemplateNames(prev => {
+        const next = new Map(prev);
+        for (const { id, name } of updates) next.set(id, name);
         return next;
       });
     });
@@ -670,7 +665,7 @@ export default function ResultsPage() {
           : VJU_PRESET_SCHEMA;
         seen.set(key, {
           key,
-          label:         getRowTemplateLabel(r, batch),
+          label:         getRowTemplateLabel(r, batch, fetchedTemplateNames),
           templateMode:  isCustom ? 'custom' : 'vju',
           templateId:    tid,
           templateSchema: schema,
@@ -767,7 +762,7 @@ export default function ResultsPage() {
                   alert('Vui lòng chọn một mẫu phiếu cụ thể trước khi xuất CSV.');
                   return;
                 }
-                exportCsv(batch, answerKey, visibleScoredRows.map(x => x.r), selectedTemplateOpt?.label);
+                exportCsv(batch, answerKey, visibleScoredRows.map(x => x.r), selectedTemplateOpt?.label, fetchedTemplateNames);
               }}>
               Xuất CSV
             </Button>
@@ -980,7 +975,7 @@ export default function ResultsPage() {
                       onDelete={() => handleDeleteRow(r.input?.filename ?? '', r.db_id)}
                       infoFields={activeInfoFields}
                       showTemplateCol={isAllMode}
-                      templateLabel={getRowTemplateLabel(r, batch)}
+                      templateLabel={getRowTemplateLabel(r, batch, fetchedTemplateNames)}
                     />
                   ))}
                 </tbody>

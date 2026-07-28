@@ -181,10 +181,17 @@ export interface TemplateInfoField {
   displayName: string;
 }
 
-/** One answer section (MCQ group) */
+/** One answer section (MCQ group, or a single composite text/decimal answer) */
 export interface TemplateAnswerSection {
   name:   string;    // "Toán (Bắt buộc)", "Câu hỏi MCQ"
   labels: string[];  // ["toan1","toan2",...] or ["q1","q2",...]
+  /** 'text' = free-form text/decimal answer (e.g. signed-decimal composite field).
+   *  Omitted/'mcq' = standard choice grid — see `options` for the actual choices. */
+  inputType?: 'mcq' | 'text';
+  /** Choice values for this section's dropdown, e.g. ["A","B","C","D"] or
+   *  ["Đ","S"] for a Đúng/Sai field. Omitted/empty falls back to A/B/C/D
+   *  (VJU preset sections never carry this — they're always 4-choice). */
+  options?: string[];
 }
 
 export interface TemplateSchema {

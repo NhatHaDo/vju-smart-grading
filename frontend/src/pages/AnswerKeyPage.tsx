@@ -25,11 +25,20 @@ const CHOICES = ['—', 'A', 'B', 'C', 'D'];
 const API_BASE = 'http://localhost:8000/api/v1/omr/debug-grade';
 const BATCH_LS_KEY = 'vju_last_batch_grade';
 
-function loadTemplateSchemaFromStorage(): TemplateSchema | null {
+/**
+ * Reads the sessionStorage schema cache written by TemplatePage/SheetReviewPage.
+ * The cache is scoped to a specific template id ({id, schema}) — only used as
+ * a fallback here if it matches `expectedId`, otherwise a stale schema from a
+ * different, previously-viewed template could silently be reused (e.g. a
+ * brand-new template appearing to only have the old one's question count).
+ */
+function loadTemplateSchemaFromStorage(expectedId: number | null): TemplateSchema | null {
   try {
     const raw = sessionStorage.getItem('vju_template_schema');
     if (!raw) return null;
-    return JSON.parse(raw) as TemplateSchema;
+    const parsed = JSON.parse(raw) as { id: number; schema: TemplateSchema };
+    if (!parsed || parsed.id !== expectedId) return null;
+    return parsed.schema ?? null;
   } catch { return null; }
 }
 
@@ -69,7 +78,7 @@ export default function AnswerKeyPage() {
   const templateSchema: TemplateSchema | null = (() => {
     if (templateMode === 'custom') {
       const fromState   = isGradingMode ? (navState?.templateSchema ?? null) : null;
-      const fromStorage = loadTemplateSchemaFromStorage();
+      const fromStorage = loadTemplateSchemaFromStorage(customTemplateId);
       const resolved    = fromState ?? fromStorage;
       console.log('[AnswerKeyPage] templateSchema', {
         templateMode, customTemplateId, customTemplateName,
@@ -82,6 +91,12 @@ export default function AnswerKeyPage() {
   })();
   const activeSections = templateSchema?.answerSections ?? [];
   const activeLabels   = activeSections.flatMap(s => s.labels);
+  // Labels whose choices are the standard A/B/C/D set — "Tất cả A/B/C/D"
+  // quick-fill only applies to these (a Đúng/Sai section's options are
+  // ["Đ","S"], so filling it with the letter "A" would be a bogus answer).
+  const abcdLabels = activeSections
+    .filter(s => s.inputType !== 'text' && (!s.options || (s.options.length === 4 && s.options.every((o, i) => o === ['A','B','C','D'][i]))))
+    .flatMap(s => s.labels);
 
   const existing = loadAnswerKey();
   const [answers,   setAnswers]   = useState<Record<string, string>>(() => existing?.answers ?? {});
@@ -152,7 +167,14 @@ export default function AnswerKeyPage() {
 
   const handleSampleDownload = () => {
     const sample: Record<string, string> = {};
-    activeLabels.forEach((lbl, i) => { sample[lbl] = ['A', 'B', 'C', 'D'][i % 4]; });
+    activeSections.forEach(s => {
+      if (s.inputType === 'text') {
+        s.labels.forEach(lbl => { sample[lbl] = '-12.34'; });
+        return;
+      }
+      const choices = s.options && s.options.length > 0 ? s.options : ['A', 'B', 'C', 'D'];
+      s.labels.forEach((lbl, i) => { sample[lbl] = choices[i % choices.length]; });
+    });
     const store: AnswerKeyStore = { answers: sample, scoring: DEFAULT_SCORING, updatedAt: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(store, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
@@ -370,7 +392,7 @@ export default function AnswerKeyPage() {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {(['A','B','C','D'] as const).map(ch => (
               <button key={ch}
-                onClick={() => setAnswers(Object.fromEntries(activeLabels.map(l => [l, ch])))}
+                onClick={() => setAnswers(prev => ({ ...prev, ...Object.fromEntries(abcdLabels.map(l => [l, ch])) }))}
                 disabled={grading}
                 style={{ padding: '6px 16px', borderRadius: 8, border: '1.5px solid #E5E7EB', background: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}
               >
@@ -408,11 +430,13 @@ export default function AnswerKeyPage() {
         {activeSections.length === 0 && templateMode === 'custom' ? (
           <Card>
             <div style={{ fontSize: 13, color: '#6B7280', textAlign: 'center', padding: '20px 0' }}>
-              Template này không có trường MCQ — không cần nhập đáp án.
+              Template này không có câu trắc nghiệm — không cần nhập đáp án.
             </div>
           </Card>
-        ) : activeSections.map(({ name: section, labels }) => {
+        ) : activeSections.map(({ name: section, labels, inputType, options }) => {
           const sectionFilled = labels.filter(l => answers[l]).length;
+          const isText = inputType === 'text';
+          const choices = ['—', ...(options && options.length > 0 ? options : CHOICES.slice(1))];
           return (
             <Card key={section}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
@@ -422,6 +446,29 @@ export default function AnswerKeyPage() {
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {labels.map((lbl, idx) => {
                   const val = answers[lbl] || '';
+                  if (isText) {
+                    return (
+                      <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                        <span style={{ fontSize: 10, color: '#9CA3AF', fontWeight: 500 }}>Câu {idx + 1}</span>
+                        <input
+                          type="text"
+                          value={val}
+                          onChange={e => setAnswer(lbl, e.target.value)}
+                          disabled={grading}
+                          placeholder="-12.34"
+                          style={{
+                            padding: '5px 8px', borderRadius: 8,
+                            border: `1.5px solid ${val ? '#C8102E' : '#E5E7EB'}`,
+                            fontSize: 13, fontWeight: 700,
+                            color:      val ? '#C8102E' : '#9CA3AF',
+                            background: val ? '#FEECEC' : '#fff',
+                            fontFamily: 'monospace', cursor: grading ? 'not-allowed' : 'text', outline: 'none',
+                            width: 84, textAlign: 'center',
+                          }}
+                        />
+                      </div>
+                    );
+                  }
                   return (
                     <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
                       <span style={{ fontSize: 10, color: '#9CA3AF', fontWeight: 500 }}>Câu {idx + 1}</span>
@@ -439,7 +486,7 @@ export default function AnswerKeyPage() {
                           width: 50, textAlign: 'center',
                         }}
                       >
-                        {CHOICES.map(c => <option key={c} value={c}>{c}</option>)}
+                        {choices.map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
                   );

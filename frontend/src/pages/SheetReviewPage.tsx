@@ -112,23 +112,25 @@ export default function SheetReviewPage() {
       setCustomTemplateSchema(null);
       return;
     }
-    // Check sessionStorage first (set by TemplatePage.handleLoad)
-    try {
-      const raw = sessionStorage.getItem('vju_template_schema');
-      if (raw) {
-        const cached = JSON.parse(raw) as TemplateSchema;
-        setCustomTemplateSchema(cached);
-        return;
-      }
-    } catch { /* ignore, fall through to fetch */ }
-
+    // 2026-07-28: this used to check sessionStorage first and reuse a cached
+    // schema whenever the id matched, to save a request. That caused a
+    // second, subtler staleness bug on top of the cross-template leak: once
+    // *any* schema for this exact template id got cached, later backend
+    // fixes to how the schema is built (e.g. adding blockLabel so answer
+    // sections show the user's own block names instead of "Câu 1") never
+    // took effect — the id still matched, so the stale cached shape kept
+    // getting reused indefinitely, surviving even a backend restart. This
+    // page is the authoritative place that runs right before grading starts,
+    // so it always re-fetches fresh from the server instead of trusting any
+    // cache; the sessionStorage write below exists only as a fallback for
+    // AnswerKeyPage in case navigation state is unavailable.
     setSchemaLoading(true);
     customFormsApi.get(selectedCustomId)
       .then(detail => {
         const schema = buildSchemaFromDetail(detail);
         setCustomTemplateSchema(schema);
-        // Cache for AnswerKeyPage fallback
-        try { sessionStorage.setItem('vju_template_schema', JSON.stringify(schema)); } catch { /* ignore */ }
+        // Cache for AnswerKeyPage fallback — scoped to this template's id.
+        try { sessionStorage.setItem('vju_template_schema', JSON.stringify({ id: selectedCustomId, schema })); } catch { /* ignore */ }
       })
       .catch(() => setCustomTemplateSchema(null))
       .finally(() => setSchemaLoading(false));
@@ -313,8 +315,8 @@ export default function SheetReviewPage() {
                       {schemaLoading && <span style={{ color: '#9CA3AF' }}>· Đang tải schema…</span>}
                       {!schemaLoading && customTemplateSchema && (
                         <span style={{ color: '#10B981' }}>
-                          · {customTemplateSchema.infoFields.length} info field,{' '}
-                          {customTemplateSchema.answerSections.reduce((n, s) => n + s.labels.length, 0)} câu MCQ
+                          · {customTemplateSchema.infoFields.length} trường thông tin,{' '}
+                          {customTemplateSchema.answerSections.reduce((n, s) => n + s.labels.length, 0)} câu trắc nghiệm
                         </span>
                       )}
                       {!schemaLoading && !customTemplateSchema && (

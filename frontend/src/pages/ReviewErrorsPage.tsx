@@ -156,7 +156,7 @@ function EditModal({ r, correction, schema, onSave, onReset, onClose }: ModalPro
           </Button>
           <Button variant="secondary" icon={<RotateCcw size={13} />} onClick={onReset}
             style={{ color: '#6B7280', fontSize: 12, padding: '6px 14px' }}>
-            Reset về OMR gốc
+            Reset về kết quả gốc
           </Button>
           <div style={{ flex: 1 }} />
           <Button variant="secondary" onClick={onClose} style={{ fontSize: 12, padding: '6px 14px' }}>Đóng</Button>
@@ -201,38 +201,76 @@ function EditModal({ r, correction, schema, onSave, onReset, onClose }: ModalPro
 
             {/* Đáp án */}
             <div>
-              <div style={{ fontWeight: 700, fontSize: 13, color: '#C8102E', marginBottom: 12 }}>Đáp án</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: '#C8102E' }}>Đáp án</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#7C3AED' }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: '#F3E8FF', border: '1.5px solid #7C3AED', display: 'inline-block' }} />
+                  Đã sửa khác kết quả gốc
+                </div>
+              </div>
               {schema.answerSections.length === 0 ? (
                 <div style={{ fontSize: 12, color: '#9CA3AF' }}>Template này không có phần đáp án cần sửa.</div>
-              ) : schema.answerSections.map(({ name: section, labels }) => (
+              ) : schema.answerSections.map(({ name: section, labels, inputType, options }) => {
+                const isText = inputType === 'text';
+                const choices = ['—', ...(options && options.length > 0 ? options : CHOICES.slice(1))];
+                return (
                 <div key={section} style={{ marginBottom: 14 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8 }}>{section}</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                     {labels.map((lbl, idx) => {
                       const val = answers[lbl] || '';
+                      // Đã sửa thủ công = khác với kết quả OMR gốc (base_answers),
+                      // không phải chỉ "có giá trị" — highlight tím nhạt riêng để
+                      // phân biệt với màu đỏ (chỉ báo "có giá trị") đã dùng sẵn.
+                      const original = String(base_answers[lbl] ?? '');
+                      const isChanged = val !== original;
+                      if (isText) {
+                        return (
+                          <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                            <span style={{ fontSize: 9, color: '#9CA3AF' }}>{idx + 1}</span>
+                            <input
+                              type="text"
+                              value={val}
+                              onChange={e => setAns(lbl, e.target.value)}
+                              placeholder="-12.34"
+                              title={isChanged ? `Đã sửa (gốc: ${original || '—'})` : undefined}
+                              style={{
+                                padding: '4px 6px', borderRadius: 6, width: 80,
+                                border: `1.5px solid ${isChanged ? '#7C3AED' : val ? '#C8102E' : '#E5E7EB'}`,
+                                fontSize: 12, fontWeight: 700,
+                                color: isChanged ? '#7C3AED' : val ? '#C8102E' : '#9CA3AF',
+                                background: isChanged ? '#F3E8FF' : val ? '#FEECEC' : '#fff',
+                                fontFamily: 'monospace', cursor: 'text', outline: 'none', textAlign: 'center',
+                              }}
+                            />
+                          </div>
+                        );
+                      }
                       return (
                         <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
                           <span style={{ fontSize: 9, color: '#9CA3AF' }}>{idx + 1}</span>
                           <select
                             value={val || '—'}
                             onChange={e => setAns(lbl, e.target.value)}
+                            title={isChanged ? `Đã sửa (gốc: ${original || '—'})` : undefined}
                             style={{
                               padding: '4px 2px', borderRadius: 6, width: 46,
-                              border: `1.5px solid ${val ? '#C8102E' : '#E5E7EB'}`,
+                              border: `1.5px solid ${isChanged ? '#7C3AED' : val ? '#C8102E' : '#E5E7EB'}`,
                               fontSize: 12, fontWeight: 700,
-                              color: val ? '#C8102E' : '#9CA3AF',
-                              background: val ? '#FEECEC' : '#fff',
+                              color: isChanged ? '#7C3AED' : val ? '#C8102E' : '#9CA3AF',
+                              background: isChanged ? '#F3E8FF' : val ? '#FEECEC' : '#fff',
                               fontFamily: 'inherit', cursor: 'pointer', outline: 'none', textAlign: 'center',
                             }}
                           >
-                            {CHOICES.map(c => <option key={c} value={c}>{c}</option>)}
+                            {choices.map(c => <option key={c} value={c}>{c}</option>)}
                           </select>
                         </div>
                       );
                     })}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Bottom actions */}
@@ -242,7 +280,7 @@ function EditModal({ r, correction, schema, onSave, onReset, onClose }: ModalPro
                 Lưu sửa
               </Button>
               <Button variant="secondary" icon={<RotateCcw size={14} />} onClick={onReset} style={{ color: '#6B7280' }}>
-                Reset về OMR gốc
+                Reset về kết quả gốc
               </Button>
               <div style={{ flex: 1 }} />
               <Button variant="secondary" onClick={onClose}>Đóng</Button>

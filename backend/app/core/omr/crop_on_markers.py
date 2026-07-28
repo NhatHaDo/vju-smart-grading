@@ -398,23 +398,61 @@ def _detect_markers(
         elif cx < mid_x and cy >= mid_y:   quads["BL"].append(cand)
         else:                               quads["BR"].append(cand)
 
-    # Pick closest-to-corner in each quadrant
+    # Pick the best marker-like candidate in each quadrant.
+    #
+    # NOTE: previously this picked purely by distance-to-corner, which fails
+    # when a non-marker blob (paper edge sliver, shadow, fold line — often
+    # elongated/non-square after morphological closing) happens to sit closer
+    # to the raw image corner than the real printed marker. Real VJU markers
+    # are printed squares (aspect ≈ 1.0, solidity ≈ 0.92-1.00); a real test
+    # photo (2026-07-28) showed a thin sliver at dist≈198px beating the real
+    # marker at dist≈264px purely on proximity, despite being clearly
+    # non-square (aspect=0.51 vs the real marker's 1.00) — this produced a
+    # visibly wrong warp (grid landed in the blank page margin).
+    #
+    # A first fix ranked candidates by "how marker-like" they are via a hard
+    # boolean bucket (squareness_dev > 0.25) before ever consulting distance.
+    # That bucket is too coarse: a sheet whose printed design has EXTRA small
+    # black-square markers away from the true corners (used as section
+    # dividers between "Phần I/II/III", e.g. photo "mẫu khác2.jpg",
+    # 2026-07-28) can have a decorative square that is JUST as square/solid
+    # as the true corner marker — both land in the same bucket, so the tie is
+    # broken by solidity alone (near-random noise) and distance is *never*
+    # actually consulted, even though the decorative square can be 5-10x
+    # farther from the true corner. That produced a wildly wrong warp
+    # (aligned image showed a rotated crop of the sheet's middle section).
+    #
+    # Fix: replace the hard bucket with a continuous weighted score —
+    # squareness (30%) + solidity (30%) + normalized distance-to-corner
+    # (40%). This keeps real shadows/slivers (large squareness/solidity gap)
+    # from winning on proximity alone (the original bug), while now giving
+    # distance real weight to break ties between two similarly well-formed
+    # squares — correctly preferring the true corner over a decorative
+    # internal marker of the same size/quality. Verified against all 7
+    # photos in the regression corpus at fix time: zero change for the 6
+    # that already aligned correctly, and the 7th now locks onto the true
+    # corners (quality score 0.82 → 0.98) instead of the internal markers.
     corner_targets = {
         "TL": (0,       0),
         "TR": (orig_w,  0),
         "BL": (0,       orig_h),
         "BR": (orig_w,  orig_h),
     }
+    diag = (orig_w ** 2 + orig_h ** 2) ** 0.5
     chosen: dict[str, dict | None] = {}
     for quad, corner in corner_targets.items():
         blobs = quads[quad]
         if not blobs:
             chosen[quad] = None
             continue
-        chosen[quad] = min(
-            blobs,
-            key=lambda b: (b["cx"] - corner[0]) ** 2 + (b["cy"] - corner[1]) ** 2,
-        )
+
+        def _score(b: dict, corner=corner) -> float:
+            squareness_dev = abs(b["aspect"] - 1.0)
+            dist = ((b["cx"] - corner[0]) ** 2 + (b["cy"] - corner[1]) ** 2) ** 0.5
+            norm_dist = dist / diag
+            return squareness_dev * 0.30 + (1 - b["solidity"]) * 0.30 + norm_dist * 0.40
+
+        chosen[quad] = min(blobs, key=_score)
 
     missing = [q for q, b in chosen.items() if b is None]
     if missing:

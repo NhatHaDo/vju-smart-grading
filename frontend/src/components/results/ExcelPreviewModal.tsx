@@ -272,7 +272,7 @@ export default function ExcelPreviewModal({
         {/* Info note */}
         <div style={{ background: '#F9FAFB', borderRadius: 10, padding: '10px 14px', fontSize: 12, color: '#6B7280' }}>
           📄 Tên file: <code style={{ fontSize: 11, color: '#374151', background: '#F3F4F6', padding: '1px 5px', borderRadius: 4 }}>
-            vju_smart_grading_report_YYYYMMDD_HHmm.xlsx
+            BangDiem_YYYYMMDD_HHmm.xlsx
           </code>
           <span style={{ marginLeft: 12 }}>· Nguồn: {dataSource}</span>
         </div>

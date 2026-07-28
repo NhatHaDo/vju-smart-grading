@@ -35,7 +35,9 @@ import cv2
 import numpy as np
 
 from app.core.omr.bubble_analyzer import (
+    CONFIDENT_SURPLUS,
     GLOBAL_DEFAULT_THR,
+    MCQ_OUTLIER_MIN_JUMP,
     apply_center_fill_guard,
     classify_strip,
     classify_strip_int,
@@ -77,6 +79,7 @@ from app.core.omr.field_reader import (
     FieldResult,
     FieldStatus,
     aggregate_custom_label,
+    aggregate_signed_decimal,
     read_field,
 )
 from app.core.omr.preprocessor import CropPageResult, crop_page, resize_fit_pad, resize_to_template
@@ -661,8 +664,21 @@ class OMREngine:
                     # lightly-filled digits that the gap algorithm misses.
                     readings = classify_strip_int(strip_means, bubbles, global_thr)
                 else:
-                    local_thr = get_local_threshold(strip_means, global_thr)
-                    readings  = classify_strip(strip_means, bubbles, local_thr)
+                    local_thr, is_tight_outlier = get_local_threshold(
+                        strip_means, global_thr,
+                        outlier_min_jump=MCQ_OUTLIER_MIN_JUMP,
+                        return_meta=True,
+                    )
+                    # A tight-cluster threshold can sit inside a gap as small
+                    # as 8px — smaller than the normal ±5px TOO_LIGHT band,
+                    # which would otherwise catch both the marked bubble and
+                    # its nearest blank neighbour as ambiguous. Use a hard
+                    # split (confident_surplus=0) instead; see
+                    # get_local_threshold()'s docstring for the full story.
+                    readings = classify_strip(
+                        strip_means, bubbles, local_thr,
+                        confident_surplus=(0 if is_tight_outlier else CONFIDENT_SURPLUS),
+                    )
 
                     # Center-fill guard (MCQ only): downgrade MARKED→TOO_LIGHT when
                     # the bubble's centre is still bright (printed ring, not real fill).
@@ -692,10 +708,37 @@ class OMREngine:
             val, status = aggregate_custom_label(custom_key, component_labels, field_results)
             custom_values[custom_key] = (val, status)
 
+        # ── Step 7b: Aggregate composite signed-decimal answers ────────────
+        # "Phần IV"-style fill-in-the-blank numeric questions (2026-07-28):
+        # 3 raw sub-fields (sign / decimal-position / digit columns) were
+        # already read like ordinary INT columns above — combine them here
+        # into ONE answer (e.g. "-12.3") and insert it into field_results
+        # under the composite key so it scores/serializes exactly like any
+        # other answer field. The 3 raw sub-labels are excluded from scoring
+        # below (composite_sub_labels) since they aren't independent
+        # questions on their own.
+        for comp_key, comp_spec in self.template.composite_answer_fields.items():
+            sign_result = field_results.get(comp_spec.sign_label) if comp_spec.sign_label else None
+            dec_result  = field_results.get(comp_spec.dec_label)  if comp_spec.dec_label  else None
+            digit_results = [field_results.get(lbl) for lbl in comp_spec.digit_labels]
+            value, status, comp_warnings = aggregate_signed_decimal(sign_result, dec_result, digit_results)
+            field_results[comp_key] = FieldResult(
+                field_label=comp_key,
+                field_type="QTYPE_SIGNED_DECIMAL",
+                selected_value=value,
+                selected_values=[value] if value is not None else [],
+                status=status,
+            )
+            for w in comp_warnings:
+                warnings.append(
+                    f"[SIGNED_DECIMAL] {comp_key} — {w['field']}: {w['type']} "
+                    f"({','.join(w.get('candidates') or [])})"
+                )
+
         # ── Step 8: Score ─────────────────────────────────────────────────
         grading_report = None
         if answer_key:
-            skip = set(self.template.custom_labels.keys())
+            skip = set(self.template.custom_labels.keys()) | self.template.composite_sub_labels
             grading_report = score(
                 field_results=field_results,
                 answer_key=answer_key,

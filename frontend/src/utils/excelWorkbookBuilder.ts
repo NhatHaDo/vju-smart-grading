@@ -175,25 +175,33 @@ function lyrDo(r: OmrGradeResult): string {
   const warns = r.warnings ?? [];
   const blank = r.score?.blank ?? 0;
   const p: string[] = [];
-  if (warns.some(w => w.type === 'multi_mark'))            p.push('Multi-mark MCQ');
-  if (warns.some(w => w.type === 'multi_mark_info_field')) p.push('Thông tin không chắc');
+  if (warns.some(w => w.type === 'multi_mark'))            p.push('Tô nhiều đáp án (câu trắc nghiệm)');
+  if (warns.some(w => w.type === 'multi_mark_info_field')) p.push('Tô nhiều ô (phần thông tin: SBD/Mã đề/...)');
   if (blank > 0)                                           p.push(`${blank} câu bỏ trống`);
-  if (warns.some(w => w.type === 'too_light'))             p.push('Nét tô mờ');
+  if (warns.some(w => w.type === 'too_light'))             p.push('Tô mờ, khó xác định');
   return p.join('; ') || 'Cần kiểm tra';
 }
 
-function chiTietCanhBao(r: OmrGradeResult): string {
+/** "custom_123/m2" → tên hiển thị của field + "cột 2" (thay vì hiện nguyên nhãn nội bộ). */
+function readableInfoFieldRef(fieldKey: string, column: string | undefined, infoFields: TemplateInfoField[]): string {
+  const display = infoFields.find(f => f.key === fieldKey)?.displayName ?? fieldKey;
+  if (!column) return display;
+  const posMatch = column.match(/(\d+)$/);
+  return posMatch ? `${display} (cột ${posMatch[1]})` : `${display} (${column})`;
+}
+
+function chiTietCanhBao(r: OmrGradeResult, infoFields: TemplateInfoField[] = []): string {
   if (r._error) return `Lỗi: ${r._error}`;
   const warns = r.warnings ?? [];
   const blank = r.score?.blank ?? 0;
   const lines: string[] = [];
-  if (blank > 0) lines.push(`- Số câu trống: ${blank}`);
+  if (blank > 0) lines.push(`- Số câu bỏ trống: ${blank}`);
   const mm  = warns.filter(w => w.type === 'multi_mark').map(w => w.field);
-  const mmi = warns.filter(w => w.type === 'multi_mark_info_field').map(w => `${w.field}${w.column ? '/' + w.column : ''}`);
+  const mmi = warns.filter(w => w.type === 'multi_mark_info_field').map(w => readableInfoFieldRef(w.field, w.column, infoFields));
   const tl  = warns.filter(w => w.type === 'too_light').map(w => w.field);
-  if (mm.length)  lines.push(`- Multi-mark MCQ: ${mm.join(', ')}`);
-  if (mmi.length) lines.push(`- Multi-mark thông tin: ${mmi.join(', ')}`);
-  if (tl.length)  lines.push(`- Nét mờ: ${tl.join(', ')}`);
+  if (mm.length)  lines.push(`- Tô nhiều đáp án ở câu: ${mm.join(', ')}`);
+  if (mmi.length) lines.push(`- Tô nhiều ô ở: ${mmi.join(', ')}`);
+  if (tl.length)  lines.push(`- Tô mờ ở câu: ${tl.join(', ')}`);
   return lines.join('\n') || '—';
 }
 
@@ -535,7 +543,7 @@ function buildCanKiemTra(
     const sc2 = 3 + shownInfo.length;
     row.getCell(sc2).value     = sc ? sc.total : '—';
     row.getCell(sc2 + 1).value = lyrDo(r);
-    row.getCell(sc2 + 2).value = chiTietCanhBao(r);
+    row.getCell(sc2 + 2).value = chiTietCanhBao(r, infoFields);
     row.getCell(sc2 + 3).value = 'Mở màn hình Kiểm tra lỗi để đối chiếu ảnh gốc và ảnh detect trước khi sử dụng kết quả chính thức.';
 
     styleDataRow(row, headers.length, i % 2 === 1);

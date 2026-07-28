@@ -82,12 +82,45 @@ class FieldBlockSpec:
 
 
 @dataclass
+class CompositeSignedDecimalSpec:
+    """
+    Groups 3 ordinary field-block labels (sign / decimal-position / digits)
+    that together form ONE fill-in-the-blank signed-decimal answer (e.g. a
+    "Phần IV" question like "-12.3"). Each of the 3 sub-labels is read with
+    the normal INT-column reader — nothing new there — this spec just tells
+    engine.py which labels to combine and how (see aggregate_signed_decimal()
+    in field_reader.py for the combination logic).
+
+    sign_label:   field_label of the 1-bubble "-" column, or None if the
+                  question never has a sign (always non-negative).
+    dec_label:    field_label of the decimal-position column, or None if the
+                  question is always a plain integer (no decimal point).
+                  Its bubbleValues are digit COUNTS ("1", "2", …) meaning
+                  "insert the decimal point after this many digits".
+    digit_labels: field_labels of the digit columns, in left-to-right order.
+    """
+    sign_label:   str | None
+    dec_label:    str | None
+    digit_labels: list[str]
+    label:        str = ""   # user-facing display label, e.g. "Câu 1"
+
+
+@dataclass
 class VJUTemplate:
     path: Path
     page_dimensions: list[int]        # [width, height]
     default_bubble_dimensions: list[int]
     field_blocks: list[FieldBlockSpec]
     custom_labels: dict[str, list[str]]
+    # Composite signed-decimal answer fields (2026-07-28): key = composite
+    # question label (e.g. "cauIV_1"), used by engine.py to combine 3 raw
+    # field_labels into one "-12.3"-style answer. Empty for templates that
+    # don't use this feature (the vast majority).
+    composite_answer_fields: dict[str, "CompositeSignedDecimalSpec"] = field(default_factory=dict)
+    # Union of every sign_label/dec_label/digit_labels across composite_answer_fields.
+    # Routes/extraction code uses this to hide the 3 raw sub-fields of a
+    # composite question and show only the one combined answer instead.
+    composite_sub_labels: set[str] = field(default_factory=set)
     # Mapping: field_label → list of BubbleSpec (in bubble_value order)
     bubbles_by_label: dict[str, list[BubbleSpec]] = field(default_factory=dict)
     # All expanded label names across all blocks
@@ -152,6 +185,30 @@ def load_template(template_path: str | Path) -> VJUTemplate:
     for key, strings in custom_labels_raw.items():
         custom_labels[key] = _expand_labels(strings)
 
+    # Composite signed-decimal answer fields (optional, additive — see
+    # CompositeSignedDecimalSpec docstring)
+    composite_answer_fields: dict[str, CompositeSignedDecimalSpec] = {}
+    for comp_key, comp_raw in (raw.get("compositeAnswerFields") or {}).items():
+        digit_labels = list(comp_raw.get("digitLabels") or [])
+        if not digit_labels:
+            raise ValueError(
+                f"compositeAnswerFields['{comp_key}'] thiếu digitLabels"
+            )
+        composite_answer_fields[comp_key] = CompositeSignedDecimalSpec(
+            sign_label=comp_raw.get("signLabel") or None,
+            dec_label=comp_raw.get("decLabel") or None,
+            digit_labels=digit_labels,
+            label=str(comp_raw.get("label") or comp_key),
+        )
+
+    composite_sub_labels: set[str] = set()
+    for spec in composite_answer_fields.values():
+        if spec.sign_label:
+            composite_sub_labels.add(spec.sign_label)
+        if spec.dec_label:
+            composite_sub_labels.add(spec.dec_label)
+        composite_sub_labels.update(spec.digit_labels)
+
     # Parse field blocks
     field_blocks: list[FieldBlockSpec] = []
     all_labels: list[str] = []
@@ -178,6 +235,8 @@ def load_template(template_path: str | Path) -> VJUTemplate:
         all_labels=all_labels,
         marker_centers_in_template=marker_centers_in_template,
         marker_centers_by_source=marker_centers_by_source,
+        composite_answer_fields=composite_answer_fields,
+        composite_sub_labels=composite_sub_labels,
     )
     return template
 
@@ -223,13 +282,28 @@ def _parse_field_block(
     page_dimensions: list[int],
     global_roi_expand_px: int = 0,
 ) -> FieldBlockSpec:
-    field_type = raw["fieldType"]
-    if field_type not in FIELD_TYPES:
-        raise ValueError(f"Unknown fieldType '{field_type}' in block '{block_name}'")
+    # "fieldType" is optional: compile_template() emits blocks WITHOUT it for
+    # custom bubble sets (arbitrary bubbleValues + explicit direction) — used
+    # e.g. by the sign/decimal-position sub-fields of a composite
+    # signed-decimal answer (2026-07-28), which don't fit any preset
+    # QTYPE_* (bubbleValues=["-"] or a handful of digit-count options).
+    # Previously this line indexed raw["fieldType"] unconditionally and
+    # crashed with KeyError the moment such a block was actually loaded.
+    field_type = str(raw.get("fieldType") or "").strip()
+    if field_type:
+        if field_type not in FIELD_TYPES:
+            raise ValueError(f"Unknown fieldType '{field_type}' in block '{block_name}'")
+        type_defaults = FIELD_TYPES[field_type]
+        direction: str = raw.get("direction", type_defaults["direction"])
+        bubble_values: list[str] = raw.get("bubbleValues", type_defaults["bubbleValues"])
+    else:
+        field_type = "CUSTOM"
+        if "bubbleValues" not in raw:
+            raise ValueError(f"Block '{block_name}': custom fieldType cần bubbleValues")
+        bubble_values = list(raw["bubbleValues"])
+        direction = str(raw.get("direction") or "horizontal")
+        direction = "vertical" if direction == "vertical" else "horizontal"
 
-    type_defaults = FIELD_TYPES[field_type]
-    direction: str = raw.get("direction", type_defaults["direction"])
-    bubble_values: list[str] = raw.get("bubbleValues", type_defaults["bubbleValues"])
     origin: list[int] = raw["origin"]
     bubbles_gap: int = raw["bubblesGap"]
     labels_gap: int = raw["labelsGap"]

@@ -291,7 +291,14 @@ export default function TemplatePage() {
       const detail = (selectedId === id && selectedDetail) ? selectedDetail : await customFormsApi.get(id);
       const schema = buildSchemaFromDetail(detail);
       sessionStorage.setItem('vju_selected_template', JSON.stringify(id));
-      sessionStorage.setItem('vju_template_schema', JSON.stringify(schema));
+      // Cache is scoped to this template's id — readers (SheetReviewPage,
+      // AnswerKeyPage) must check `id` matches before trusting `schema`.
+      // 2026-07-28: previously stored the bare schema under a single global
+      // key with no id check, so switching to a *different* template in the
+      // same browser tab (without a full page reload) silently reused the
+      // OLD template's schema/question count (e.g. a brand-new template
+      // showing only the first template's 10 questions instead of its own).
+      sessionStorage.setItem('vju_template_schema', JSON.stringify({ id, schema }));
       sessionStorage.setItem('vju_template_name', JSON.stringify(forms.find(f => f.id === id)?.name ?? ''));
     } catch {
       sessionStorage.removeItem('vju_template_schema');

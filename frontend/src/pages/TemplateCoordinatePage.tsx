@@ -32,7 +32,7 @@ interface FieldDef {
   label:              string;
   shortLabel:         string;
   group:              'info' | 'mcq';
-  fieldType:          'QTYPE_INT' | 'QTYPE_MCQ4';
+  fieldType:          'QTYPE_INT' | 'QTYPE_MCQ4' | 'QTYPE_SIGNED_DECIMAL' | 'QTYPE_TRUE_FALSE';
   rows:               number;
   cols:               number;
   color:              string;
@@ -40,6 +40,20 @@ interface FieldDef {
   labelStart:         number;
   includeInAnswerKey: boolean;
   isPreset?:          boolean;
+  // ── QTYPE_SIGNED_DECIMAL only (2026-07-28) ──────────────────────────────
+  // A fill-in-the-blank numeric answer like "-12.3" ("Phần IV"-style):
+  // `cols` doubles as the digit count. Compiled into 3 underlying areas
+  // (sign / decimal-position / digits) at save time — see
+  // buildSignedDecimalAreas(). `rows` is auto-computed to include the 1-2
+  // extra header rows (sign, decimal) so the existing box/hgap/vgap
+  // click-wizard (built for a uniform INT grid) can be reused unchanged.
+  hasSign?:           boolean;
+  /** 1-based digit counts where the decimal point may sit, e.g. [1,2] means
+   *  "after the 1st digit" or "after the 2nd digit". Must be consecutive
+   *  integers — the single underlying bubble block advances by a fixed
+   *  column-pitch per value, which only lines up correctly for a
+   *  contiguous run. */
+  decimalPositions?:  number[];
 }
 
 interface FieldMeasurement {
@@ -94,9 +108,23 @@ const TOTAL_STEPS  = 4;
 
 // ── Step guide ────────────────────────────────────────────────────────────────
 
+// QTYPE_TRUE_FALSE reuses the exact same click-wizard geometry as QTYPE_MCQ4
+// (bubbles=RIGHT/choices, labels=DOWN/questions) — just 2 choices instead of
+// 4, and Đ/S instead of A/B/C/D. Used to keep the wizard instructions
+// pointing at the right bubble letters regardless of which type is active.
+function choiceLabels(fieldType: FieldDef['fieldType']): [string, string] {
+  return fieldType === 'QTYPE_TRUE_FALSE' ? ['Đ', 'S'] : ['A', 'D'];
+}
+
 function getStepGuide(def: FieldDef, step: PickStep, clickCount: number, subMode: SubMode): StepGuide {
-  const isInt    = def.fieldType === 'QTYPE_INT';
-  const typeStr  = isInt ? 'Dạng số' : 'Dạng A/B/C/D';
+  // QTYPE_SIGNED_DECIMAL is geometry-wise identical to QTYPE_INT (vertical
+  // stacking, bubblesGap=vgap/labelsGap=hgap) — it just has 1-2 extra header
+  // rows (sign, decimal-position) folded into `rows` before the digit rows.
+  const isInt    = def.fieldType === 'QTYPE_INT' || def.fieldType === 'QTYPE_SIGNED_DECIMAL';
+  const typeStr  = def.fieldType === 'QTYPE_SIGNED_DECIMAL' ? 'Số thập phân có dấu'
+                  : def.fieldType === 'QTYPE_TRUE_FALSE' ? 'Đúng/Sai'
+                  : isInt ? 'Dạng số' : 'Dạng A/B/C/D';
+  const [firstCh, lastCh] = choiceLabels(def.fieldType);
 
   switch (step) {
     case 'roi':
@@ -118,9 +146,9 @@ function getStepGuide(def: FieldDef, step: PickStep, clickCount: number, subMode
           '② Góc dưới-phải của ô',
           'Hệ thống tính kích thước bubble từ 2 điểm này.',
         ] : [
-          'Click vào 2 góc của ô A, câu 1:',
-          '① Góc trên-trái của ô A',
-          '② Góc dưới-phải của ô A',
+          `Click vào 2 góc của ô ${firstCh}, câu 1:`,
+          `① Góc trên-trái của ô ${firstCh}`,
+          `② Góc dưới-phải của ô ${firstCh}`,
           'Hệ thống tính kích thước bubble từ 2 điểm này.',
         ],
         clickGoal: clickCount === 0 ? 'Click ① Góc trên-trái' : 'Click ② Góc dưới-phải',
@@ -137,11 +165,11 @@ function getStepGuide(def: FieldDef, step: PickStep, clickCount: number, subMode
             : 'Hệ thống tính khoảng cách = (cột cuối - cột đầu) ÷ (số cột - 1).',
         ] : [
           'Click tâm bubble (giữa ô) ở câu 1:',
-          '① Tâm ô A (đầu tiên)',
-          '② Tâm ô D (cuối cùng)',
+          `① Tâm ô ${firstCh} (đầu tiên)`,
+          `② Tâm ô ${lastCh} (cuối cùng)`,
           subMode === 'multi'
             ? 'Hoặc click nhiều ô → hệ thống tự tính khoảng cách trung bình.'
-            : 'Hệ thống tính khoảng cách = (ô D - ô A) ÷ 3.',
+            : `Hệ thống tính khoảng cách = (ô ${lastCh} - ô ${firstCh}) ÷ ${def.cols - 1}.`,
         ],
         clickGoal: clickCount === 0 ? 'Click ① tâm bubble đầu' : clickCount === 1 ? 'Click ② tâm bubble cuối' : `Đã click ${clickCount} điểm`,
       };
@@ -156,7 +184,7 @@ function getStepGuide(def: FieldDef, step: PickStep, clickCount: number, subMode
             ? 'Hoặc click nhiều hàng → hệ thống tự tính trung bình.'
             : 'Hệ thống tính khoảng cách = (hàng 9 - hàng 0) ÷ 9.',
         ] : [
-          `Click tâm ô A:`,
+          `Click tâm ô ${firstCh}:`,
           '① Tâm câu 1 (trên cùng)',
           `② Tâm câu ${def.rows} (dưới cùng)`,
           subMode === 'multi'
@@ -216,12 +244,20 @@ function makeLabels(prefix: string, start: number, count: number): string {
 function slugify(s: string): string {
   return s.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '').slice(0, 20) || 'field';
 }
+// Dùng riêng khi tự sinh labelPrefix: bỏ luôn chữ số để không bao giờ dính
+// liền với số range do makeLabels() nối vào phía sau (xem _RANGE_REGEX
+// bên backend/template_loader.py — nó nuốt greedy toàn bộ dãy số đứng
+// ngay trước '..' làm start).
+function slugifyLabelPrefix(s: string): string {
+  return (slugify(s).replace(/\d+/g, '').replace(/_+/g, '_').replace(/^_|_$/g, '')) || 'field';
+}
 
 // ── JSON payload builder ──────────────────────────────────────────────────────
 // INT:  JSON bubblesGap = vgap, labelsGap = hgap  [SWAP]
 // MCQ4: JSON bubblesGap = hgap, labelsGap = vgap  [no swap]
 
-function fieldToPayload(def: FieldDef, fm: FieldMeasurement, pageDims: [number, number]) {
+function fieldToPayloadSingle(def: FieldDef, fm: FieldMeasurement, pageDims: [number, number]) {
+  const isTrueFalse    = def.fieldType === 'QTYPE_TRUE_FALSE';
   const isInt          = def.fieldType === 'QTYPE_INT';
   const box            = fm.box ?? ([0, 0, pageDims[0], pageDims[1]] as [number, number, number, number]);
   const labelCount     = isInt ? fm.cols : fm.rows;
@@ -232,8 +268,20 @@ function fieldToPayload(def: FieldDef, fm: FieldMeasurement, pageDims: [number, 
     type:               'omr' as const,
     key:                def.key,
     blockName:          def.key,
+    // Human-readable name (e.g. "Mã SV") — backend's _extract_info_fields()
+    // reads this as displayName; without it, info fields (non-answer fields
+    // like student ID) fall back to showing the raw internal block key
+    // ("custom_1785227582844") in the results UI instead of the real name.
+    label:              def.shortLabel || def.label,
     semanticType:       undefined as string | undefined,
-    fieldType:          def.fieldType,
+    // QTYPE_TRUE_FALSE isn't a backend-named fieldType (it doesn't exist in
+    // template_loader.py's FIELD_TYPES) — it reuses the same generic
+    // "CUSTOM" bubbleValues+direction mechanism already built for the
+    // signed-decimal sign/decimal sub-blocks, just as a single plain area
+    // with 2 choices instead of 4. See template_loader.py::_parse_field_block.
+    ...(isTrueFalse
+      ? { fieldType: '', bubbleValues: 'Đ,S', direction: 'horizontal' as const }
+      : { fieldType: def.fieldType }),
     box,
     origin:             fm.origin ?? ([box[0], box[1]] as [number, number]),
     physicalRows:       fm.rows,
@@ -248,6 +296,98 @@ function fieldToPayload(def: FieldDef, fm: FieldMeasurement, pageDims: [number, 
     includeInAnswerKey: def.includeInAnswerKey,
     excludeFromAnswerKey: false,
   };
+}
+
+// ── QTYPE_SIGNED_DECIMAL: expand ONE FieldDef into 3 underlying areas ─────────
+// (sign / decimal-position / digits), all sharing compositeGroup=def.key so
+// the backend compiler can recombine them into one "-12.3"-style answer
+// (see backend/app/core/templates/template_compiler.py + template_loader.py
+// CompositeSignedDecimalSpec). Reuses the SAME box/hgap/vgap the user picked
+// via the ordinary click-wizard (treating rows = header rows + 10 digit
+// rows, exactly like a taller QTYPE_INT grid) — no new picking UI needed.
+function buildSignedDecimalAreas(def: FieldDef, fm: FieldMeasurement, pageDims: [number, number]) {
+  const digitCount = Math.max(1, def.cols);
+  const hasSign     = !!def.hasSign;
+  const decimalPositions = [...(def.decimalPositions ?? [])].sort((a, b) => a - b);
+  const hasDecimal = decimalPositions.length > 0;
+
+  const box = fm.box ?? ([0, 0, pageDims[0], pageDims[1]] as [number, number, number, number]);
+  const [ox, oy] = fm.origin ?? [box[0], box[1]];
+  const [bw, bh] = fm.bubbleDimensions ?? [19, 19];
+  // For QTYPE_INT-shaped fields, bubblesGap is the vertical (row) pitch and
+  // labelsGap is the horizontal (column) pitch — see the SWAP comment above.
+  const vgap = fm.vgap ?? (bh + 4);
+  const hgap = fm.hgap ?? (bw + 4);
+
+  const compositeGroup = def.key;
+  const compositeLabel = def.shortLabel || def.label;
+  const areas: Record<string, unknown>[] = [];
+  let rowOffset = 0;
+
+  const baseArea = {
+    type: 'omr' as const,
+    box,
+    bubbleDimensions: [Math.round(bw), Math.round(bh)] as [number, number],
+    compositeGroup,
+    compositeLabel,
+    includeInAnswerKey: false,
+    excludeFromAnswerKey: true,
+    autoFit: false,
+  };
+
+  if (hasSign) {
+    const key = `${def.key}_sign`;
+    areas.push({
+      ...baseArea,
+      key, blockName: key, label: `${compositeLabel} — dấu`,
+      compositeRole: 'sign',
+      fieldType: '', bubbleValues: '-', direction: 'vertical',
+      fieldLabels: [key],
+      origin: [Math.round(ox), Math.round(oy + rowOffset * vgap)],
+      bubblesGap: Math.round(vgap), labelsGap: Math.round(hgap),
+    });
+    rowOffset += 1;
+  }
+
+  if (hasDecimal) {
+    const key = `${def.key}_dec`;
+    areas.push({
+      ...baseArea,
+      key, blockName: key, label: `${compositeLabel} — dấu phẩy`,
+      compositeRole: 'decimal',
+      fieldType: '', bubbleValues: decimalPositions.join(','), direction: 'horizontal',
+      fieldLabels: [key],
+      // Bubble for value N sits N columns right of the digit grid's own
+      // origin (decimal after N digits ⇒ under digit-column N+1) — offset
+      // this sub-area's origin so bubbleValues[0] lands there; bubblesGap
+      // = hgap advances correctly since decimalPositions must be consecutive.
+      origin: [Math.round(ox + decimalPositions[0] * hgap), Math.round(oy + rowOffset * vgap)],
+      bubblesGap: Math.round(hgap), labelsGap: Math.round(vgap),
+    });
+    rowOffset += 1;
+  }
+
+  const digitKey = `${def.key}_digits`;
+  const digitLabels = Array.from({ length: digitCount }, (_, i) => `${def.key}_d${i + 1}`);
+  areas.push({
+    ...baseArea,
+    key: digitKey, blockName: digitKey, label: `${compositeLabel} — chữ số`,
+    compositeRole: 'digits',
+    fieldType: 'QTYPE_INT',
+    fieldLabels: digitLabels,
+    origin: [Math.round(ox), Math.round(oy + rowOffset * vgap)],
+    bubblesGap: Math.round(vgap), labelsGap: Math.round(hgap),
+    physicalRows: 10, physicalCols: digitCount,
+  });
+
+  return areas;
+}
+
+function fieldToPayload(def: FieldDef, fm: FieldMeasurement, pageDims: [number, number]): Record<string, unknown>[] {
+  if (def.fieldType === 'QTYPE_SIGNED_DECIMAL') {
+    return buildSignedDecimalAreas(def, fm, pageDims);
+  }
+  return [fieldToPayloadSingle(def, fm, pageDims)];
 }
 
 // ── Canvas draw helpers ───────────────────────────────────────────────────────
@@ -313,17 +453,21 @@ function drawGrid(
 
 interface AddFieldForm {
   name:               string;
-  fieldType:          'QTYPE_INT' | 'QTYPE_MCQ4';
+  fieldType:          'QTYPE_INT' | 'QTYPE_MCQ4' | 'QTYPE_SIGNED_DECIMAL' | 'QTYPE_TRUE_FALSE';
   rows:               number;
   cols:               number;
   labelPrefix:        string;
   labelStart:         number;
   includeInAnswerKey: boolean;
+  // QTYPE_SIGNED_DECIMAL only:
+  hasSign:            boolean;
+  decimalPositions:   number[];
 }
 
 const EMPTY_FORM: AddFieldForm = {
   name: '', fieldType: 'QTYPE_INT', rows: 10, cols: 8,
   labelPrefix: '', labelStart: 1, includeInAnswerKey: false,
+  hasSign: true, decimalPositions: [],
 };
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -662,33 +806,65 @@ export default function TemplateCoordinatePage() {
     } else {
       // ── Custom mode ──
       setTemplateMode('custom');
-      const newFields: FieldDef[] = omrAreas.map((a, idx) => {
-        const key = String(a['blockName'] ?? `custom_${idx}`);
-        const ft  = String(a['fieldType'] ?? 'QTYPE_INT') as 'QTYPE_INT' | 'QTYPE_MCQ4';
+
+      // QTYPE_SIGNED_DECIMAL fields were saved as 3 separate areas tagged
+      // with a shared compositeGroup (see buildSignedDecimalAreas) — group
+      // those back into ONE FieldDef+FieldMeasurement here so the editor
+      // shows/treats them as a single field again, instead of 3 confusing
+      // raw sub-fields (2026-07-28).
+      const plainAreas: Record<string, unknown>[] = [];
+      const compositeGroups = new Map<string, Record<string, unknown>[]>();
+      omrAreas.forEach(a => {
+        const grp = typeof a['compositeGroup'] === 'string' ? a['compositeGroup'] as string : '';
+        if (grp) {
+          if (!compositeGroups.has(grp)) compositeGroups.set(grp, []);
+          compositeGroups.get(grp)!.push(a);
+        } else {
+          plainAreas.push(a);
+        }
+      });
+
+      const newFields: FieldDef[] = [];
+      const next: Record<string, FieldMeasurement> = {};
+      let colorIdx = 0;
+      const nextColor = () => CUSTOM_COLORS[colorIdx++ % CUSTOM_COLORS.length];
+
+      plainAreas.forEach(a => {
+        const key = String(a['blockName'] ?? `custom_${colorIdx}`);
+        // A CUSTOM area (no named fieldType) with exactly the 2-value
+        // bubbleValues ["Đ","S"] is our Đúng/Sai type — see
+        // fieldToPayloadSingle's isTrueFalse branch, which is the only
+        // plain (non-composite) area that omits "fieldType" this way.
+        const rawFieldType = String(a['fieldType'] ?? '').trim();
+        const rawBubbleValues = typeof a['bubbleValues'] === 'string'
+          ? (a['bubbleValues'] as string).split(',').map(s => s.trim()).filter(Boolean)
+          : Array.isArray(a['bubbleValues']) ? (a['bubbleValues'] as unknown[]).map(String) : [];
+        const isTrueFalseArea = !rawFieldType && rawBubbleValues.length === 2
+          && rawBubbleValues[0] === 'Đ' && rawBubbleValues[1] === 'S';
+        const ft = (isTrueFalseArea ? 'QTYPE_TRUE_FALSE' : (rawFieldType || 'QTYPE_INT')) as 'QTYPE_INT' | 'QTYPE_MCQ4' | 'QTYPE_TRUE_FALSE';
         const rows = Number(a['physicalRows']) || 10;
-        const cols = Number(a['physicalCols']) || 8;
+        const cols = isTrueFalseArea ? 2 : (Number(a['physicalCols']) || 8);
         const labelPrefix = String(a['labelPrefix'] ?? slugify(key));
         const labelStart  = Number(a['labelStart'])  || 1;
         const includeInAnswerKey = Boolean(a['includeInAnswerKey']);
-        const color = CUSTOM_COLORS[idx % CUSTOM_COLORS.length];
-        return {
+        const color = nextColor();
+        // Restore the human-readable name saved as "label" (see fieldToPayload).
+        // Older templates saved before this fix never persisted it, so they
+        // still fall back to the raw key — re-typing the name once in the
+        // edit form and saving will backfill it going forward.
+        const savedLabel = typeof a['label'] === 'string' && a['label'] ? String(a['label']) : null;
+        const displayName = savedLabel ?? key;
+        newFields.push({
           key,
-          label:              ft === 'QTYPE_INT' ? `${key} (${cols} cột)` : `${key} (${rows} câu)`,
-          shortLabel:         key,
+          label:              fieldLabelText(ft, displayName, rows, cols),
+          shortLabel:         displayName,
           group:              (ft === 'QTYPE_INT' ? 'info' : 'mcq') as 'info' | 'mcq',
           fieldType:          ft,
           rows, cols, color, labelPrefix, labelStart, includeInAnswerKey,
           isPreset:           false,
-        };
-      });
-      setCustomFields(newFields);
-      const next: Record<string, FieldMeasurement> = {};
-      omrAreas.forEach((a, idx) => {
-        const key   = String(a['blockName'] ?? `custom_${idx}`);
-        const ft    = String(a['fieldType'] ?? 'QTYPE_INT') as 'QTYPE_INT' | 'QTYPE_MCQ4';
+        });
         const isInt = ft === 'QTYPE_INT';
-        const bg    = Number(a['bubblesGap']) || 0;
-        const lg    = Number(a['labelsGap'])  || 0;
+        const bg = Number(a['bubblesGap']) || 0, lg = Number(a['labelsGap']) || 0;
         next[key] = {
           box:              Array.isArray(a['box'])              ? (a['box'] as [number,number,number,number]) : null,
           origin:           Array.isArray(a['origin'])           ? (a['origin'] as [number,number]) : null,
@@ -699,6 +875,64 @@ export default function TemplateCoordinatePage() {
           cols: Number(a['physicalCols']) || 8,
         };
       });
+
+      compositeGroups.forEach((groupAreas, groupKey) => {
+        const byRole = new Map<string, Record<string, unknown>>();
+        groupAreas.forEach(a => {
+          const role = typeof a['compositeRole'] === 'string' ? a['compositeRole'] as string : '';
+          if (role) byRole.set(role, a);
+        });
+        const digitsArea = byRole.get('digits');
+        if (!digitsArea) return; // malformed group — skip rather than crash
+        const signArea = byRole.get('sign');
+        const decArea   = byRole.get('decimal');
+        const hasSign = !!signArea;
+        const decimalPositions = decArea
+          ? String(decArea['bubbleValues'] ?? '').split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n))
+          : [];
+        const digitCols = Number(digitsArea['physicalCols']) || 4;
+        const rows = signedDecimalRows(hasSign, decimalPositions);
+        const compositeLabel = typeof groupAreas[0]?.['compositeLabel'] === 'string'
+          ? groupAreas[0]['compositeLabel'] as string : groupKey;
+        const color = nextColor();
+
+        newFields.push({
+          key: groupKey,
+          label:              fieldLabelText('QTYPE_SIGNED_DECIMAL', compositeLabel, rows, digitCols),
+          shortLabel:         compositeLabel,
+          group:              'mcq',
+          fieldType:          'QTYPE_SIGNED_DECIMAL',
+          rows, cols: digitCols, color,
+          labelPrefix:        groupKey, labelStart: 1,
+          includeInAnswerKey: true,
+          isPreset:           false,
+          hasSign, decimalPositions,
+        });
+
+        // Placement (origin/hgap/vgap) — recover the group's true origin.
+        // Y comes from whichever role sits topmost (sign, else decimal,
+        // else digits). X must come from sign or digits — the decimal
+        // sub-area's own origin.x is deliberately offset by
+        // decimalPositions[0]*hgap (see buildSignedDecimalAreas), so using
+        // it directly here would shift the whole group left/right on re-save.
+        const topArea = signArea ?? decArea ?? digitsArea;
+        const xRefArea = signArea ?? digitsArea;
+        const bg = Number(digitsArea['bubblesGap']) || 0; // digits area: bubblesGap = vgap (row pitch)
+        const lg = Number(digitsArea['labelsGap'])  || 0; // digits area: labelsGap  = hgap (col pitch)
+        const topOriginY = Array.isArray(topArea['origin']) ? (topArea['origin'] as [number, number])[1] : null;
+        const refOriginX = Array.isArray(xRefArea['origin']) ? (xRefArea['origin'] as [number, number])[0] : null;
+        const origin: [number, number] | null = (refOriginX != null && topOriginY != null) ? [refOriginX, topOriginY] : null;
+        next[groupKey] = {
+          box:              Array.isArray(digitsArea['box']) ? (digitsArea['box'] as [number,number,number,number]) : null,
+          origin,
+          bubbleDimensions: Array.isArray(digitsArea['bubbleDimensions']) ? (digitsArea['bubbleDimensions'] as [number,number]) : null,
+          hgap: lg,
+          vgap: bg,
+          rows, cols: digitCols,
+        };
+      });
+
+      setCustomFields(newFields);
       setFieldStates(next);
       setCurFieldKey(newFields[0]?.key ?? '');
     }
@@ -793,28 +1027,49 @@ export default function TemplateCoordinatePage() {
       labelPrefix:        def.labelPrefix,
       labelStart:         def.labelStart,
       includeInAnswerKey: def.includeInAnswerKey,
+      hasSign:            def.hasSign ?? true,
+      decimalPositions:   def.decimalPositions ?? [],
     });
     setShowAddModal(true);
   }
 
+  // rows for QTYPE_SIGNED_DECIMAL = header rows (sign + decimal) + 10 digit
+  // rows — folded into `rows` so the existing box/hgap/vgap click-wizard
+  // (built around a uniform grid) can be reused unchanged for placement.
+  function signedDecimalRows(hasSign: boolean, decimalPositions: number[]): number {
+    return (hasSign ? 1 : 0) + (decimalPositions.length > 0 ? 1 : 0) + 10;
+  }
+
+  function fieldLabelText(fieldType: AddFieldForm['fieldType'], name: string, rows: number, cols: number): string {
+    if (fieldType === 'QTYPE_SIGNED_DECIMAL') return `${name} (số t.phân, ${cols} chữ số)`;
+    if (fieldType === 'QTYPE_TRUE_FALSE') return `${name} (${rows} câu, Đúng/Sai)`;
+    return fieldType === 'QTYPE_INT' ? `${name} (${cols} cột)` : `${name} (${rows} câu)`;
+  }
+
   function saveField() {
-    const { name, fieldType, rows, cols, includeInAnswerKey } = addForm;
+    const { name, fieldType, includeInAnswerKey, hasSign, decimalPositions } = addForm;
     if (!name.trim()) { alert('Vui lòng nhập tên field'); return; }
-    const labelPrefix = addForm.labelPrefix.trim() || slugify(name);
+    const labelPrefix = addForm.labelPrefix.trim() || slugifyLabelPrefix(name);
+    const rows = fieldType === 'QTYPE_SIGNED_DECIMAL' ? signedDecimalRows(hasSign, decimalPositions) : addForm.rows;
+    // Đúng/Sai always has exactly 2 choices — not user-configurable.
+    const cols = fieldType === 'QTYPE_TRUE_FALSE' ? 2 : addForm.cols;
+    const isMcqLike = fieldType === 'QTYPE_MCQ4' || fieldType === 'QTYPE_SIGNED_DECIMAL' || fieldType === 'QTYPE_TRUE_FALSE';
 
     if (editingKey) {
       // Edit existing
       setCustomFields(prev => prev.map(f => f.key === editingKey ? {
         ...f,
-        label:              fieldType === 'QTYPE_INT' ? `${name} (${cols} cột)` : `${name} (${rows} câu)`,
+        label:              fieldLabelText(fieldType, name, rows, cols),
         shortLabel:         name,
         fieldType,
         rows,
         cols,
         labelPrefix,
         labelStart:         addForm.labelStart,
-        includeInAnswerKey,
-        group:              fieldType === 'QTYPE_INT' ? 'info' : 'mcq',
+        includeInAnswerKey: fieldType === 'QTYPE_SIGNED_DECIMAL' ? true : includeInAnswerKey,
+        group:              isMcqLike ? 'mcq' : 'info',
+        hasSign:            fieldType === 'QTYPE_SIGNED_DECIMAL' ? hasSign : undefined,
+        decimalPositions:   fieldType === 'QTYPE_SIGNED_DECIMAL' ? decimalPositions : undefined,
       } : f));
       // Update fieldStates dims
       setFieldStates(prev => {
@@ -828,17 +1083,19 @@ export default function TemplateCoordinatePage() {
       const color = CUSTOM_COLORS[customFields.length % CUSTOM_COLORS.length];
       const newDef: FieldDef = {
         key,
-        label:              fieldType === 'QTYPE_INT' ? `${name} (${cols} cột)` : `${name} (${rows} câu)`,
+        label:              fieldLabelText(fieldType, name, rows, cols),
         shortLabel:         name,
-        group:              fieldType === 'QTYPE_INT' ? 'info' : 'mcq',
+        group:              isMcqLike ? 'mcq' : 'info',
         fieldType,
         rows,
         cols,
         color,
         labelPrefix,
         labelStart:         addForm.labelStart,
-        includeInAnswerKey,
+        includeInAnswerKey: fieldType === 'QTYPE_SIGNED_DECIMAL' ? true : includeInAnswerKey,
         isPreset:           false,
+        hasSign:            fieldType === 'QTYPE_SIGNED_DECIMAL' ? hasSign : undefined,
+        decimalPositions:   fieldType === 'QTYPE_SIGNED_DECIMAL' ? decimalPositions : undefined,
       };
       setCustomFields(prev => [...prev, newDef]);
       setFieldStates(prev => ({ ...prev, [key]: initFm(newDef) }));
@@ -1092,7 +1349,7 @@ export default function TemplateCoordinatePage() {
   function buildAreas() {
     return activeFields
       .filter(def => { const fm = fieldStates[def.key]; return fm?.origin && fm.bubbleDimensions; })
-      .map(def => fieldToPayload(def, fieldStates[def.key], pageDims));
+      .flatMap(def => fieldToPayload(def, fieldStates[def.key], pageDims));
   }
 
   async function saveTemplate() {
@@ -1163,17 +1420,34 @@ export default function TemplateCoordinatePage() {
 
           const next: Record<string, FieldMeasurement> = { ...fieldStates };
           importedCustomFields.forEach(f => {
-            const a = data.find(x => String(x.blockName ?? x.key) === f.key);
+            // QTYPE_SIGNED_DECIMAL fields were exported as 3 sub-areas
+            // (f.key + "_sign"/"_dec"/"_digits") rather than one area named
+            // f.key — recover placement from the "_digits" sub-area, which
+            // always exists (sign/decimal are optional).
+            const isSignedDecimal = f.fieldType === 'QTYPE_SIGNED_DECIMAL';
+            const a = isSignedDecimal
+              ? data.find(x => String(x.blockName ?? x.key) === `${f.key}_digits`)
+              : data.find(x => String(x.blockName ?? x.key) === f.key);
             if (a) {
-              const isInt = f.fieldType === 'QTYPE_INT';
+              const isInt = f.fieldType === 'QTYPE_INT' || isSignedDecimal;
               const bg = Number(a.bubblesGap) || 0, lg = Number(a.labelsGap) || 0;
+              // For signed-decimal, the digits sub-area's own origin sits
+              // BELOW the sign/decimal header rows — shift back up so the
+              // recovered origin matches what the picker originally set.
+              const headerRows = isSignedDecimal
+                ? f.rows - 10
+                : 0;
+              const rawOrigin = Array.isArray(a.origin) ? (a.origin as [number, number]) : null;
+              const origin: [number, number] | null = rawOrigin && headerRows > 0
+                ? [rawOrigin[0], rawOrigin[1] - headerRows * bg]
+                : rawOrigin;
               next[f.key] = {
                 box:              Array.isArray(a.box)              ? (a.box as [number,number,number,number]) : null,
-                origin:           Array.isArray(a.origin)           ? (a.origin as [number,number]) : null,
+                origin,
                 bubbleDimensions: Array.isArray(a.bubbleDimensions) ? (a.bubbleDimensions as [number,number]) : null,
                 hgap: isInt ? lg : bg,
                 vgap: isInt ? bg : lg,
-                rows: Number(a.physicalRows) || f.rows,
+                rows: f.rows,
                 cols: Number(a.physicalCols) || f.cols,
               };
             } else {
@@ -1221,10 +1495,14 @@ export default function TemplateCoordinatePage() {
   const canGoBack     = curStep !== 'roi';
   const showCommitBtn = (curStep === 'hgap' || curStep === 'vgap') && clicks.length >= 2;
   const hasGrid       = !!(curFm?.origin && curFm.bubbleDimensions);
-  const isInt         = curDef?.fieldType === 'QTYPE_INT';
+  const isSignedDecimalCur = curDef?.fieldType === 'QTYPE_SIGNED_DECIMAL';
+  const isTrueFalseCur     = curDef?.fieldType === 'QTYPE_TRUE_FALSE';
+  const isInt         = curDef?.fieldType === 'QTYPE_INT' || isSignedDecimalCur;
   const guide         = curDef ? getStepGuide(curDef, curStep, clicks.length, subMode) : null;
-  const typeLabel     = isInt ? 'Dạng số' : 'Dạng A/B/C/D';
-  const sizeLabel     = isInt
+  const typeLabel     = isSignedDecimalCur ? 'Số thập phân có dấu' : isTrueFalseCur ? 'Đúng/Sai' : isInt ? 'Dạng số' : 'Dạng A/B/C/D';
+  const sizeLabel     = isSignedDecimalCur
+    ? `${curDef?.cols ?? '?'} chữ số${curDef?.hasSign ? ', có dấu' : ''}${(curDef?.decimalPositions?.length ?? 0) > 0 ? ', có dấu phẩy' : ''}`
+    : isInt
     ? `${curFm?.cols ?? '?'} cột × ${curFm?.rows ?? '?'} hàng`
     : `${curFm?.rows ?? '?'} câu × ${curFm?.cols ?? '?'} lựa chọn`;
   const stepNum = curStep ? STEP_NUM[curStep] : 1;
@@ -1648,7 +1926,11 @@ export default function TemplateCoordinatePage() {
                           <span style={{ fontSize: 14, lineHeight: 1 }}>{done ? '✅' : active ? '📍' : '○'}</span>
                           <div style={{ flex: 1 }}>
                             <div style={{ fontSize: 12, color: active ? def.color : '#374151', fontWeight: active ? 700 : 400 }}>{def.shortLabel}</div>
-                            <div style={{ fontSize: 10, color: '#9CA3AF' }}>{def.fieldType === 'QTYPE_INT' ? `Dạng số · ${def.cols} cột` : `A/B/C/D · ${def.rows} câu`}</div>
+                            <div style={{ fontSize: 10, color: '#9CA3AF' }}>
+                              {def.fieldType === 'QTYPE_SIGNED_DECIMAL' ? `Số t.phân · ${def.cols} chữ số${def.hasSign ? ', có dấu' : ''}`
+                                : def.fieldType === 'QTYPE_TRUE_FALSE' ? `Đúng/Sai · ${def.rows} câu`
+                                : def.fieldType === 'QTYPE_INT' ? `Dạng số · ${def.cols} cột` : `A/B/C/D · ${def.rows} câu`}
+                            </div>
                           </div>
                           <span style={{ fontSize: 10, fontWeight: 600, color: done ? '#059669' : active ? def.color : '#9CA3AF' }}>
                             {done ? 'Xong' : active ? 'Đang đo' : 'Chưa đo'}
@@ -1711,34 +1993,96 @@ export default function TemplateCoordinatePage() {
             <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Loại field</label>
               <div style={{ display: 'flex', gap: 8 }}>
-                {(['QTYPE_INT', 'QTYPE_MCQ4'] as const).map(ft => (
-                  <button key={ft} onClick={() => setAddForm(f => ({ ...f, fieldType: ft, includeInAnswerKey: ft === 'QTYPE_MCQ4' }))}
-                    style={{ flex: 1, padding: '8px 0', borderRadius: 8, fontSize: 12, fontWeight: 700, border: `2px solid ${addForm.fieldType === ft ? '#C8102E' : '#E5E7EB'}`, background: addForm.fieldType === ft ? '#FEF2F2' : '#F9FAFB', color: addForm.fieldType === ft ? '#C8102E' : '#6B7280', cursor: 'pointer', fontFamily: 'inherit' }}>
-                    {ft === 'QTYPE_INT' ? '🔢 Dạng số' : '🅰 Dạng A/B/C/D'}
+                {(['QTYPE_INT', 'QTYPE_MCQ4', 'QTYPE_TRUE_FALSE', 'QTYPE_SIGNED_DECIMAL'] as const).map(ft => (
+                  <button key={ft} onClick={() => setAddForm(f => ({
+                    ...f,
+                    fieldType: ft,
+                    includeInAnswerKey: ft === 'QTYPE_MCQ4' || ft === 'QTYPE_TRUE_FALSE',
+                    cols: ft === 'QTYPE_TRUE_FALSE' ? 2 : f.cols,
+                  }))}
+                    style={{ flex: 1, padding: '8px 4px', borderRadius: 8, fontSize: 11, fontWeight: 700, border: `2px solid ${addForm.fieldType === ft ? '#C8102E' : '#E5E7EB'}`, background: addForm.fieldType === ft ? '#FEF2F2' : '#F9FAFB', color: addForm.fieldType === ft ? '#C8102E' : '#6B7280', cursor: 'pointer', fontFamily: 'inherit' }}>
+                    {ft === 'QTYPE_INT' ? '🔢 Dạng số' : ft === 'QTYPE_MCQ4' ? '🅰 A/B/C/D' : ft === 'QTYPE_TRUE_FALSE' ? '✅ Đúng/Sai' : '➖ Số t.phân có dấu'}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Rows / Cols */}
-            <div style={{ display: 'flex', gap: 12, marginBottom: 14 }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>
-                  {addForm.fieldType === 'QTYPE_INT' ? 'Số hàng (0–9)' : 'Số câu'}
+            {addForm.fieldType === 'QTYPE_SIGNED_DECIMAL' ? (
+              <>
+                {/* Digit count */}
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Số chữ số</label>
+                  <input type="number" min={1} max={20} value={addForm.cols}
+                    onChange={e => {
+                      const cols = parseInt(e.target.value) || 1;
+                      setAddForm(f => ({ ...f, cols, decimalPositions: f.decimalPositions.filter(p => p < cols) }));
+                    }}
+                    style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1.5px solid #E5E7EB', fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }} />
+                </div>
+
+                {/* Sign */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={addForm.hasSign}
+                    onChange={e => setAddForm(f => ({ ...f, hasSign: e.target.checked }))} />
+                  <span style={{ fontSize: 12, color: '#374151' }}>Có dấu âm (−) — thêm 1 hàng dấu trừ phía trên</span>
                 </label>
+
+                {/* Decimal positions */}
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
+                    Dấu phẩy có thể ở sau chữ số thứ mấy? (bỏ trống nếu là số nguyên)
+                  </label>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {Array.from({ length: Math.max(0, addForm.cols - 1) }, (_, i) => i + 1).map(pos => {
+                      const active = addForm.decimalPositions.includes(pos);
+                      return (
+                        <button key={pos} type="button"
+                          onClick={() => setAddForm(f => ({
+                            ...f,
+                            decimalPositions: active ? f.decimalPositions.filter(p => p !== pos) : [...f.decimalPositions, pos].sort((a, b) => a - b),
+                          }))}
+                          style={{ padding: '5px 10px', borderRadius: 7, fontSize: 11, fontWeight: 700, border: `1.5px solid ${active ? '#C8102E' : '#E5E7EB'}`, background: active ? '#FEF2F2' : '#F9FAFB', color: active ? '#C8102E' : '#6B7280', cursor: 'pointer', fontFamily: 'inherit' }}>
+                          sau số {pos}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div style={{ fontSize: 10, color: '#9CA3AF', marginTop: 6 }}>
+                    Ví dụ: {addForm.cols} chữ số, chọn "sau số 1" và "sau số 2" → đáp án dạng
+                    "{'X'.repeat(1)}.{'X'.repeat(addForm.cols - 1)}" hoặc "{'X'.repeat(2)}.{'X'.repeat(Math.max(0, addForm.cols - 2))}" tuỳ học sinh tô.
+                    Các vị trí chọn phải liền kề nhau.
+                  </div>
+                </div>
+              </>
+            ) : addForm.fieldType === 'QTYPE_TRUE_FALSE' ? (
+              /* Đúng/Sai: only "Số câu" — 2 choices (Đ/S) is fixed, not user-configurable */
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Số câu</label>
                 <input type="number" min={1} max={100} value={addForm.rows}
-                  onChange={e => setAddForm(f => ({ ...f, rows: parseInt(e.target.value) || 1 }))}
+                  onChange={e => setAddForm(f => ({ ...f, rows: parseInt(e.target.value) || 1, cols: 2 }))}
                   style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1.5px solid #E5E7EB', fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }} />
               </div>
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>
-                  {addForm.fieldType === 'QTYPE_INT' ? 'Số cột' : 'Số đáp án'}
-                </label>
-                <input type="number" min={1} max={30} value={addForm.cols}
-                  onChange={e => setAddForm(f => ({ ...f, cols: parseInt(e.target.value) || 1 }))}
-                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1.5px solid #E5E7EB', fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }} />
+            ) : (
+              /* Rows / Cols */
+              <div style={{ display: 'flex', gap: 12, marginBottom: 14 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>
+                    {addForm.fieldType === 'QTYPE_INT' ? 'Số hàng (0–9)' : 'Số câu'}
+                  </label>
+                  <input type="number" min={1} max={100} value={addForm.rows}
+                    onChange={e => setAddForm(f => ({ ...f, rows: parseInt(e.target.value) || 1 }))}
+                    style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1.5px solid #E5E7EB', fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>
+                    {addForm.fieldType === 'QTYPE_INT' ? 'Số cột' : 'Số đáp án'}
+                  </label>
+                  <input type="number" min={1} max={30} value={addForm.cols}
+                    onChange={e => setAddForm(f => ({ ...f, cols: parseInt(e.target.value) || 1 }))}
+                    style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1.5px solid #E5E7EB', fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }} />
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Label prefix + start */}
             <div style={{ display: 'flex', gap: 12, marginBottom: 14 }}>
@@ -1757,12 +2101,15 @@ export default function TemplateCoordinatePage() {
               </div>
             </div>
 
-            {/* Include in answer key */}
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, cursor: 'pointer' }}>
-              <input type="checkbox" checked={addForm.includeInAnswerKey}
-                onChange={e => setAddForm(f => ({ ...f, includeInAnswerKey: e.target.checked }))} />
-              <span style={{ fontSize: 12, color: '#374151' }}>Tính điểm (include in answer key)</span>
-            </label>
+            {/* Include in answer key — signed-decimal is always scored via
+                its combined answer, this toggle doesn't apply to it */}
+            {addForm.fieldType !== 'QTYPE_SIGNED_DECIMAL' && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, cursor: 'pointer' }}>
+                <input type="checkbox" checked={addForm.includeInAnswerKey}
+                  onChange={e => setAddForm(f => ({ ...f, includeInAnswerKey: e.target.checked }))} />
+                <span style={{ fontSize: 12, color: '#374151' }}>Tính điểm (include in answer key)</span>
+              </label>
+            )}
 
             {/* Buttons */}
             <div style={{ display: 'flex', gap: 8 }}>

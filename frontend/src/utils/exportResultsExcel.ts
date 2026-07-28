@@ -47,6 +47,6 @@ export async function exportResultsExcel(opts: ExportOptions): Promise<void> {
   const buf = await wb.xlsx.writeBuffer();
   saveAs(
     new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
-    `vju_smart_grading${examSlug}_${ts}.xlsx`,
+    `BangDiem${examSlug}_${ts}.xlsx`,
   );
 }

@@ -15,20 +15,22 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Download, Printer, ArrowLeft, FileSpreadsheet, AlertTriangle, RefreshCw, Edit3 } from 'lucide-react';
+import { Download, Printer, ArrowLeft, FileSpreadsheet, AlertTriangle, RefreshCw, Edit3, ChevronDown } from 'lucide-react';
 import WorkbookPreview from '../components/excel/WorkbookPreview';
 import { buildResultsWorkbook, buildWorkbookDisplay } from '../utils/excelWorkbookBuilder';
 import type { WorkbookDisplay } from '../utils/excelWorkbookBuilder';
 import { saveAs } from 'file-saver';
 import { dbRowToOmrResult } from '../utils/resultMapping';
-import { resultsApi, customFormsApi } from '../services/apiClient';
+import { resultsApi, customFormsApi, examsApi } from '../services/apiClient';
 import {
-  loadAnswerKey, loadCorrections, TEMPLATE_VARIANT_LABEL,
+  loadAnswerKey, loadCorrections, VJU_PRESET_SCHEMA,
 } from '../types/grading';
 import type {
   BatchGradeState, OmrGradeResult, AnswerKeyStore, CorrectionsStore, TemplateSchema,
 } from '../types/grading';
-import { buildSchemaFromDetail } from '../utils/templateSchema';
+import type { ExamOut } from '../types/exam';
+import { buildSchemaFromDetail, getRowTemplateKey, getRowTemplateLabel } from '../utils/templateSchema';
+import type { TemplateFilterOption } from '../utils/templateSchema';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -40,6 +42,22 @@ const WASHI_BORDER = '#e5e7eb';
 const SEAL_RED   = '#C8102E';
 const SAGE       = '#1B5E20';
 const SAGE_DARK  = '#145214';
+
+// Compact select used inline in the header subtitle (exam / template pickers)
+const subtitleSelectStyle: React.CSSProperties = {
+  appearance:   'none',
+  border:       'none',
+  borderBottom: `1.5px dashed ${INK_MUTED}`,
+  background:   'transparent',
+  color:        INK,
+  fontWeight:   700,
+  fontSize:     12,
+  fontFamily:   'inherit',
+  padding:      '0 14px 1px 0',
+  cursor:       'pointer',
+  outline:      'none',
+  maxWidth:     220,
+};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -79,11 +97,26 @@ export default function ExcelPreviewPage() {
   // ── Data state ─────────────────────────────────────────────────────────────
   const [loadState,   setLoadState]   = useState<LoadState>('loading');
   const [dataSource,  setDataSource]  = useState<'db' | 'localStorage'>('db');
-  const [batch,       setBatch]       = useState<BatchGradeState | null>(null);
   const [answerKey,   setAnswerKey]   = useState<AnswerKeyStore | null>(null);
   const [corrections, setCorrections] = useState<CorrectionsStore>({});
   const [fetchedSchemas, setFetchedSchemas] = useState<Map<number, TemplateSchema>>(new Map());
+  const [fetchedTemplateNames, setFetchedTemplateNames] = useState<Map<number, string>>(new Map());
   const fetchedSchemaIdsRef = useRef<Set<number>>(new Set());
+
+  // ── Exam + template selector state (2026-07-29) ────────────────────────────
+  // Previously this page just mirrored whatever exam/template ResultsPage last
+  // had selected (via localStorage), with no way to change it here. Now the
+  // page owns its own exam/template selection — allExamResults holds every row
+  // for the selected exam (any template), and selectedTemplateKey narrows that
+  // down to one template's rows for the actual preview/export (a workbook can
+  // only render one consistent column layout at a time).
+  const [examsList,          setExamsList]          = useState<ExamOut[]>([]);
+  const [selectedExamId,     setSelectedExamId]     = useState<number | null>(null);
+  const [selectedExamName,   setSelectedExamName]   = useState<string | null>(null);
+  const [allExamResults,     setAllExamResults]     = useState<OmrGradeResult[]>([]);
+  const [gradedAt,           setGradedAt]           = useState<string>('');
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState<string>('');
+  const [lsFallbackBatch,    setLsFallbackBatch]    = useState<BatchGradeState | null>(null);
 
   // ── UI state ───────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<TabId>('bang_diem');
@@ -94,7 +127,35 @@ export default function ExcelPreviewPage() {
   const workbookRef = useRef<ReturnType<typeof buildResultsWorkbook> | null>(null);
   const [display, setDisplay] = useState<WorkbookDisplay | null>(null);
 
-  // ── Load data ──────────────────────────────────────────────────────────────
+  // ── Load list of exams (for the selector) ─────────────────────────────────
+
+  useEffect(() => {
+    examsApi.list().then(setExamsList).catch(() => { /* ignore — dropdown just stays empty */ });
+  }, []);
+
+  // ── Fetch all rows for one exam (any template) ─────────────────────────────
+
+  const loadExam = useCallback(async (examId: number | null, examName: string | null) => {
+    setLoadState('loading');
+    setSelectedExamId(examId);
+    setSelectedExamName(examName);
+    try {
+      const params: Parameters<typeof resultsApi.list>[0] = { limit: 500 };
+      if (examId !== null) params.exam_id = examId;
+      const resp = await resultsApi.list(params);
+      if (resp.items.length > 0) {
+        const converted = resp.items.map(dbRowToOmrResult);
+        setAllExamResults(converted);
+        setGradedAt(resp.items[0].graded_at);
+        setDataSource('db');
+        setLoadState('ok');
+        return true;
+      }
+    } catch { /* DB failed → caller decides fallback */ }
+    return false;
+  }, []);
+
+  // ── Initial load: resolve exam from localStorage, try DB, else localStorage batch ──
 
   const loadData = useCallback(async () => {
     setLoadState('loading');
@@ -102,51 +163,47 @@ export default function ExcelPreviewPage() {
     setCorrections(loadCorrections());
 
     const lsBatch = loadFromStorage();
+    setLsFallbackBatch(lsBatch);
     const examId   = lsBatch?.examId   ?? null;
     const examName = lsBatch?.examName ?? null;
 
-    try {
-      const params: Parameters<typeof resultsApi.list>[0] = { limit: 500 };
-      if (examId !== null) params.exam_id = examId;
-      const resp = await resultsApi.list(params);
-      if (resp.items.length > 0) {
-        const converted = resp.items.map(dbRowToOmrResult);
-        const first     = resp.items[0];
-        setBatch({
-          templateVariant: (first.template_variant as BatchGradeState['templateVariant']) ?? 'sbd8',
-          results:  converted,
-          gradedAt: first.graded_at,
-          examId:   first.exam_id ?? examId,
-          examName,
-        });
-        setDataSource('db');
-        setLoadState('ok');
-        return;
-      }
-    } catch { /* DB failed → try localStorage */ }
+    const gotDbData = await loadExam(examId, examName);
+    if (gotDbData) return;
 
     if (lsBatch && lsBatch.results.length > 0) {
-      setBatch(lsBatch);
+      setSelectedExamId(examId);
+      setSelectedExamName(examName);
+      setAllExamResults(lsBatch.results);
+      setGradedAt(lsBatch.gradedAt);
       setDataSource('localStorage');
+      setSelectedTemplateKey(getRowTemplateKey(lsBatch.results[0] ?? ({} as OmrGradeResult), lsBatch));
       setLoadState('ok');
       return;
     }
 
-    setBatch(null);
+    setAllExamResults([]);
     setLoadState('empty');
-  }, []);
+  }, [loadExam]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Fetch schemas for custom template rows that have no schema in batch
+  // Switching exam via the dropdown — reset template selection, refetch
+  const handleExamChange = useCallback(async (examId: number | null, examName: string | null) => {
+    setSelectedTemplateKey(''); // let the auto-pick effect below choose a valid one
+    const ok = await loadExam(examId, examName);
+    if (!ok) {
+      setAllExamResults([]);
+      setLoadState('empty');
+    }
+  }, [loadExam]);
+
+  // Fetch schemas + real names for custom template rows seen in allExamResults
   useEffect(() => {
-    if (!batch) return;
-    const safeR = Array.isArray(batch.results) ? batch.results : [];
     const missingIds: number[] = [];
-    for (const r of safeR) {
+    for (const r of allExamResults) {
       if (r.template_type === 'custom' && r.template_id != null) {
-        const alreadyInBatch = batch.templateSchema != null && batch.customTemplateId === r.template_id;
-        if (!alreadyInBatch && !fetchedSchemaIdsRef.current.has(r.template_id)) {
+        const alreadyKnown = lsFallbackBatch?.templateSchema != null && lsFallbackBatch.customTemplateId === r.template_id;
+        if (!alreadyKnown && !fetchedSchemaIdsRef.current.has(r.template_id)) {
           fetchedSchemaIdsRef.current.add(r.template_id);
           missingIds.push(r.template_id);
         }
@@ -156,39 +213,88 @@ export default function ExcelPreviewPage() {
     Promise.all(
       missingIds.map(id =>
         customFormsApi.get(id)
-          .then(detail => ({ id, schema: buildSchemaFromDetail(detail) }))
+          .then(detail => ({ id, schema: buildSchemaFromDetail(detail), name: detail.name }))
           .catch(() => null)
       )
     ).then(results => {
-      const updates = results.filter(Boolean) as { id: number; schema: TemplateSchema }[];
+      const updates = results.filter(Boolean) as { id: number; schema: TemplateSchema; name: string }[];
       if (updates.length === 0) return;
       setFetchedSchemas(prev => {
         const next = new Map(prev);
         for (const { id, schema } of updates) next.set(id, schema);
         return next;
       });
+      setFetchedTemplateNames(prev => {
+        const next = new Map(prev);
+        for (const { id, name } of updates) next.set(id, name);
+        return next;
+      });
     });
-  }, [batch]);
+  }, [allExamResults, lsFallbackBatch]);
 
-  // ── Resolve effective schema ───────────────────────────────────────────────
+  // ── Template options for the selected exam ─────────────────────────────────
 
-  const safeResults = useMemo(() => batch?.results ?? [], [batch]);
-
-  const templateSchema = useMemo((): TemplateSchema | null => {
-    if (!batch) return null;
-    if (batch.templateSchema) return batch.templateSchema;
-    const safeR = Array.isArray(batch.results) ? batch.results : [];
-    const customIds = new Set(
-      safeR
-        .filter(r => r.template_type === 'custom' && r.template_id != null)
-        .map(r => r.template_id!)
-    );
-    if (customIds.size === 1) {
-      const [id] = customIds;
-      if (fetchedSchemas.has(id)) return fetchedSchemas.get(id)!;
+  const templateOptions: TemplateFilterOption[] = useMemo(() => {
+    const seen = new Map<string, TemplateFilterOption>();
+    for (const r of allExamResults) {
+      const key = getRowTemplateKey(r, lsFallbackBatch);
+      if (!seen.has(key)) {
+        const isCustom = key.startsWith('custom:');
+        const tid = isCustom ? (r.template_id ?? lsFallbackBatch?.customTemplateId ?? null) : null;
+        const schema: TemplateSchema = isCustom
+          ? (lsFallbackBatch?.templateSchema && lsFallbackBatch.customTemplateId === tid
+              ? lsFallbackBatch.templateSchema
+              : (tid != null && fetchedSchemas.has(tid) ? fetchedSchemas.get(tid)! : { infoFields: [], answerSections: [] }))
+          : VJU_PRESET_SCHEMA;
+        seen.set(key, {
+          key,
+          label:          getRowTemplateLabel(r, lsFallbackBatch, fetchedTemplateNames),
+          templateMode:   isCustom ? 'custom' : 'vju',
+          templateId:     tid,
+          templateSchema: schema,
+        });
+      }
     }
-    return null;
-  }, [batch, fetchedSchemas]);
+    return Array.from(seen.values());
+  }, [allExamResults, lsFallbackBatch, fetchedSchemas, fetchedTemplateNames]);
+
+  // Auto-pick a valid template once options are known (or when the current
+  // selection no longer exists, e.g. right after switching exam)
+  useEffect(() => {
+    if (templateOptions.length === 0) return;
+    if (templateOptions.some(o => o.key === selectedTemplateKey)) return;
+    setSelectedTemplateKey(templateOptions[0].key);
+  }, [templateOptions, selectedTemplateKey]);
+
+  const selectedTemplateOpt = templateOptions.find(o => o.key === selectedTemplateKey) ?? null;
+
+  // ── Resolve effective batch + schema for the selected template only ───────
+
+  const safeResults = useMemo(
+    () => allExamResults.filter(r => getRowTemplateKey(r, lsFallbackBatch) === selectedTemplateKey),
+    [allExamResults, lsFallbackBatch, selectedTemplateKey]
+  );
+
+  const templateSchema = selectedTemplateOpt?.templateSchema ?? null;
+
+  const batch: BatchGradeState | null = useMemo(() => {
+    if (!selectedTemplateOpt || safeResults.length === 0) return null;
+    return {
+      templateVariant: selectedTemplateOpt.templateMode === 'custom'
+        ? (lsFallbackBatch?.templateVariant ?? 'sbd8')
+        : (selectedTemplateOpt.key.split(':')[1] as BatchGradeState['templateVariant']),
+      templateMode:       selectedTemplateOpt.templateMode,
+      customTemplateId:   selectedTemplateOpt.templateId ?? undefined,
+      customTemplateName: selectedTemplateOpt.templateMode === 'custom'
+        ? selectedTemplateOpt.label.replace(/^Custom - /, '').replace(/^Custom #/, '')
+        : undefined,
+      templateSchema:     selectedTemplateOpt.templateMode === 'custom' ? selectedTemplateOpt.templateSchema : undefined,
+      results:  safeResults,
+      gradedAt: gradedAt,
+      examId:   selectedExamId,
+      examName: selectedExamName,
+    };
+  }, [selectedTemplateOpt, safeResults, gradedAt, selectedExamId, selectedExamName, lsFallbackBatch]);
 
   // ── Rebuild workbook when data changes ────────────────────────────────────
 
@@ -235,7 +341,7 @@ export default function ExcelPreviewPage() {
   const examSlug  = examName
     ? '_' + examName.replace(/[^a-zA-Z0-9À-ỹ]/g, '_').replace(/_+/g, '_').slice(0, 30)
     : '';
-  const filename = `vju_smart_grading${examSlug}_${ts}.xlsx`;
+  const filename = `BangDiem${examSlug}_${ts}.xlsx`;
 
   async function handleDownload() {
     const wb = workbookRef.current;
@@ -261,7 +367,6 @@ export default function ExcelPreviewPage() {
   const srcLabel      = dataSource === 'db' ? 'Database' : 'Trình duyệt (localStorage)';
   const activeTabDef  = TABS.find(t => t.id === activeTab)!;
   const activeSheet   = display?.sheets[activeTabDef.sheetIdx] ?? null;
-  const templateLabel = batch ? TEMPLATE_VARIANT_LABEL[batch.templateVariant] : '';
 
   // ── Shared spin CSS ────────────────────────────────────────────────────────
 
@@ -282,9 +387,9 @@ export default function ExcelPreviewPage() {
     </div>
   );
 
-  // ── Empty ──────────────────────────────────────────────────────────────────
+  // ── Empty (no results at all for the selected exam) ────────────────────────
 
-  if (loadState === 'empty' || !batch) return (
+  if (loadState === 'empty' || (loadState === 'ok' && allExamResults.length === 0)) return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%', background: WASHI_BG }}>
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center', maxWidth: 380 }}>
@@ -293,8 +398,25 @@ export default function ExcelPreviewPage() {
             Chưa có kết quả để xem trước
           </div>
           <div style={{ fontSize: 14, color: INK_MUTED, marginBottom: 24 }}>
-            Hãy vào Upload &amp; Chấm để chấm phiếu trước.
+            {selectedExamName ? `Kỳ thi "${selectedExamName}" chưa có phiếu nào được chấm.` : 'Hãy vào Upload & Chấm để chấm phiếu trước.'}
           </div>
+          {examsList.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16 }}>
+              <span style={{ fontSize: 12, color: INK_MUTED }}>Chọn kỳ thi khác:</span>
+              <select
+                value={selectedExamId ?? ''}
+                onChange={e => {
+                  const eid = e.target.value ? Number(e.target.value) : null;
+                  const exam = examsList.find(x => x.id === eid) ?? null;
+                  handleExamChange(exam?.id ?? null, exam?.name ?? null);
+                }}
+                style={{ padding: '6px 10px', borderRadius: 8, border: `1.5px solid ${WASHI_BORDER}`, fontSize: 13, fontFamily: 'inherit', background: '#fff', cursor: 'pointer' }}
+              >
+                <option value="">-- Tất cả kỳ thi --</option>
+                {examsList.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+              </select>
+            </div>
+          )}
           <button
             onClick={() => navigate('/app/upload')}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 20px', background: SAGE, color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}
@@ -302,6 +424,18 @@ export default function ExcelPreviewPage() {
             <ArrowLeft size={14} /> Quay lại Upload
           </button>
         </div>
+      </div>
+    </div>
+  );
+
+  // ── Transitional: exam has results but template not resolved yet ──────────
+
+  if (!batch) return (
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%', background: WASHI_BG }}>
+      <SpinCss />
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: INK_MUTED, fontSize: 13 }}>
+        <RefreshCw size={18} style={spinStyle} />
+        Đang chọn mẫu phiếu…
       </div>
     </div>
   );
@@ -342,12 +476,58 @@ export default function ExcelPreviewPage() {
             <div style={{ fontSize: 20, fontWeight: 800, color: INK, lineHeight: 1.2 }}>
               Bảng xuất kết quả Excel
             </div>
-            {/* Subtitle */}
-            <div style={{ fontSize: 12, color: INK_MUTED, marginTop: 2 }}>
-              Bảng điểm thi trắc nghiệm
-              {examName && <> · Kỳ thi <strong style={{ color: INK }}>{examName}</strong></>}
-              {' · '}Mẫu phiếu <strong style={{ color: INK }}>{templateLabel}</strong>
-              {' · '}{safeResults.length} phiếu · {srcLabel}
+            {/* Subtitle — exam + template are real selectors now (2026-07-29), not static text */}
+            <div style={{ fontSize: 12, color: INK_MUTED, marginTop: 2, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '2px 4px' }}>
+              <span>Bảng điểm thi trắc nghiệm</span>
+
+              {examsList.length > 0 && (
+                <>
+                  <span>· Kỳ thi</span>
+                  <div style={{ position: 'relative', display: 'inline-flex' }}>
+                    <select
+                      value={selectedExamId ?? ''}
+                      onChange={e => {
+                        const eid = e.target.value ? Number(e.target.value) : null;
+                        const exam = examsList.find(x => x.id === eid) ?? null;
+                        handleExamChange(exam?.id ?? null, exam?.name ?? null);
+                      }}
+                      style={subtitleSelectStyle}
+                    >
+                      <option value="">-- Tất cả --</option>
+                      {examsList.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                    </select>
+                    <ChevronDown size={11} style={{ position: 'absolute', right: 3, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: INK_MUTED }} />
+                  </div>
+                </>
+              )}
+
+              {templateOptions.length > 0 && (
+                <>
+                  <span>· Mẫu phiếu</span>
+                  <div style={{ position: 'relative', display: 'inline-flex' }}>
+                    <select
+                      value={selectedTemplateKey}
+                      onChange={e => setSelectedTemplateKey(e.target.value)}
+                      style={{
+                        ...subtitleSelectStyle,
+                        borderColor: templateOptions.length > 1 ? '#C8102E' : subtitleSelectStyle.borderColor,
+                      }}
+                    >
+                      {templateOptions.map(opt => (
+                        <option key={opt.key} value={opt.key}>
+                          {opt.label} ({allExamResults.filter(r => getRowTemplateKey(r, lsFallbackBatch) === opt.key).length})
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown size={11} style={{ position: 'absolute', right: 3, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: INK_MUTED }} />
+                  </div>
+                  {templateOptions.length > 1 && (
+                    <span style={{ fontSize: 10, color: '#C8102E', fontWeight: 700 }}>({templateOptions.length} mẫu — chọn 1 để xuất)</span>
+                  )}
+                </>
+              )}
+
+              <span>· {safeResults.length} phiếu · {srcLabel}</span>
             </div>
           </div>
         </div>
