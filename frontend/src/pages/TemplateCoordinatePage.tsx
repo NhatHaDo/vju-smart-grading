@@ -1993,17 +1993,30 @@ export default function TemplateCoordinatePage() {
             <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Loại field</label>
               <div style={{ display: 'flex', gap: 8 }}>
-                {(['QTYPE_INT', 'QTYPE_MCQ4', 'QTYPE_TRUE_FALSE', 'QTYPE_SIGNED_DECIMAL'] as const).map(ft => (
-                  <button key={ft} onClick={() => setAddForm(f => ({
-                    ...f,
-                    fieldType: ft,
-                    includeInAnswerKey: ft === 'QTYPE_MCQ4' || ft === 'QTYPE_TRUE_FALSE',
-                    cols: ft === 'QTYPE_TRUE_FALSE' ? 2 : f.cols,
-                  }))}
-                    style={{ flex: 1, padding: '8px 4px', borderRadius: 8, fontSize: 11, fontWeight: 700, border: `2px solid ${addForm.fieldType === ft ? '#C8102E' : '#E5E7EB'}`, background: addForm.fieldType === ft ? '#FEF2F2' : '#F9FAFB', color: addForm.fieldType === ft ? '#C8102E' : '#6B7280', cursor: 'pointer', fontFamily: 'inherit' }}>
-                    {ft === 'QTYPE_INT' ? '🔢 Dạng số' : ft === 'QTYPE_MCQ4' ? '🅰 A/B/C/D' : ft === 'QTYPE_TRUE_FALSE' ? '✅ Đúng/Sai' : '➖ Số t.phân có dấu'}
-                  </button>
-                ))}
+                {(['QTYPE_INT', 'QTYPE_MCQ4', 'QTYPE_TRUE_FALSE', 'QTYPE_SIGNED_DECIMAL'] as const).map(ft => {
+                  const icon   = ft === 'QTYPE_INT' ? '🔢' : ft === 'QTYPE_MCQ4' ? '🅰' : ft === 'QTYPE_TRUE_FALSE' ? '✅' : '±';
+                  const label  = ft === 'QTYPE_INT' ? 'Dạng số' : ft === 'QTYPE_MCQ4' ? 'A/B/C/D' : ft === 'QTYPE_TRUE_FALSE' ? 'Đúng/Sai' : 'Số TP có dấu';
+                  const active = addForm.fieldType === ft;
+                  return (
+                    <button key={ft} onClick={() => setAddForm(f => ({
+                      ...f,
+                      fieldType: ft,
+                      includeInAnswerKey: ft === 'QTYPE_MCQ4' || ft === 'QTYPE_TRUE_FALSE',
+                      cols: ft === 'QTYPE_TRUE_FALSE' ? 2 : f.cols,
+                    }))}
+                      style={{
+                        flex: 1, minHeight: 56, padding: '8px 4px', borderRadius: 8,
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4,
+                        border: `2px solid ${active ? '#C8102E' : '#E5E7EB'}`,
+                        background: active ? '#FEF2F2' : '#F9FAFB',
+                        color: active ? '#C8102E' : '#6B7280',
+                        cursor: 'pointer', fontFamily: 'inherit',
+                      }}>
+                      <span style={{ fontSize: 16, lineHeight: 1 }}>{icon}</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, lineHeight: 1.25, textAlign: 'center' }}>{label}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
