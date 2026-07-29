@@ -57,8 +57,11 @@ interface DebugGradeResult {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const API_BASE = 'http://localhost:8000/api/v1/omr/debug-grade';
-const BACKEND_BASE = 'http://localhost:8000';
+// Same VITE_API_BASE convention as services/apiClient.ts — was hardcoded to
+// localhost, which broke this page in production (see AnswerKeyPage.tsx for
+// the full explanation of why this pattern matters).
+const BACKEND_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
+const API_BASE = `${BACKEND_BASE}/api/v1/omr/debug-grade`;
 
 const SBD_VARIANTS = [
   { label: 'SBD 4 số', value: 'sbd4' },

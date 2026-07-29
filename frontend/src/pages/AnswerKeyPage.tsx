@@ -22,7 +22,17 @@ import {
 } from '../types/grading';
 
 const CHOICES = ['—', 'A', 'B', 'C', 'D'];
-const API_BASE = 'http://localhost:8000/api/v1/omr/debug-grade';
+// 2026-07-29: this used to be hardcoded to 'http://localhost:8000/...' —
+// worked fine in local dev (backend on a separate port from the Vite dev
+// server) but silently broke grading in production, where the frontend is
+// served from the same origin as the API via an Apache reverse proxy
+// (ProxyPass /api/ -> 127.0.0.1:8000). The browser would try to reach the
+// user's own machine on port 8000 and fail with "TypeError: Failed to
+// fetch" before the request ever left the browser (nothing shows up in the
+// backend's uvicorn log). Mirrors the same VITE_API_BASE convention already
+// used by services/apiClient.ts, so this now honors each environment's own
+// .env file instead of always pointing at localhost.
+const API_BASE = `${import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'}/api/v1/omr/debug-grade`;
 const BATCH_LS_KEY = 'vju_last_batch_grade';
 
 /**

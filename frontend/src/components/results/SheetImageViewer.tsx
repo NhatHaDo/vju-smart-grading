@@ -23,7 +23,10 @@ import {
 import type { OmrDebugInfo } from '../../types/grading';
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const BACKEND   = 'http://localhost:8000';
+// Same VITE_API_BASE convention as services/apiClient.ts — was hardcoded to
+// localhost, which broke sheet image loading in production (see
+// AnswerKeyPage.tsx for the full explanation of why this pattern matters).
+const BACKEND   = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
 const ZOOM_STEP = 0.25;
 const ZOOM_MIN  = 0.25;
 const ZOOM_MAX  = 4;
