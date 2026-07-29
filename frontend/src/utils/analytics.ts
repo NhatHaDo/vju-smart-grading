@@ -6,8 +6,8 @@
  * Swap mock data for real data by replacing the fallback branches.
  */
 
-import type { BatchGradeState, OmrGradeResult, AnswerKeyStore } from '../types/grading';
-import { computeScore, SECTION_MAP } from '../types/grading';
+import type { BatchGradeState, OmrGradeResult, AnswerKeyStore, TemplateSchema } from '../types/grading';
+import { computeScore, SECTION_MAP, resolveAnswerKeyForMaDe, getMaDeValue, VJU_PRESET_SCHEMA } from '../types/grading';
 
 // ── localStorage loaders ──────────────────────────────────────────────────────
 
@@ -35,11 +35,14 @@ export function loadBatchFromStorage(): BatchGradeState | null {
 export function deriveScore(
   result: OmrGradeResult,
   answerKey: AnswerKeyStore | null,
+  schema: TemplateSchema = VJU_PRESET_SCHEMA,
 ): number | null {
   if (!answerKey) return null;
-  const keyed = Object.keys(answerKey.answers);
+  const { key } = resolveAnswerKeyForMaDe(answerKey, getMaDeValue(result.student_info, schema));
+  if (!key) return null;
+  const keyed = Object.keys(key.answers);
   if (keyed.length === 0) return null;
-  const sc = computeScore(result.answers ?? {}, answerKey);
+  const sc = computeScore(result.answers ?? {}, key);
   // Use raw correct count / total questions → 0-10
   const pct = sc.correct / keyed.length;
   return Math.round(pct * 10 * 100) / 100;
@@ -49,9 +52,10 @@ export function deriveScore(
 export function allScores(
   results: OmrGradeResult[],
   answerKey: AnswerKeyStore | null,
+  schema: TemplateSchema = VJU_PRESET_SCHEMA,
 ): number[] {
   return results
-    .map(r => deriveScore(r, answerKey))
+    .map(r => deriveScore(r, answerKey, schema))
     .filter((s): s is number => s !== null);
 }
 
@@ -67,9 +71,10 @@ export interface KpiData {
 export function computeKpi(
   results: OmrGradeResult[],
   answerKey: AnswerKeyStore | null,
+  schema: TemplateSchema = VJU_PRESET_SCHEMA,
 ): KpiData {
   const total = results.filter(r => !r._error).length;
-  const scores = allScores(results, answerKey);
+  const scores = allScores(results, answerKey, schema);
 
   const avgScore =
     scores.length > 0 ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100 : null;
@@ -77,7 +82,7 @@ export function computeKpi(
   const passCount = scores.filter(s => s >= 5).length;
   const passRate = scores.length > 0 ? Math.round((passCount / scores.length) * 1000) / 10 : null;
 
-  const hardQ = computeHardQuestions(results, answerKey);
+  const hardQ = computeHardQuestions(results, answerKey, schema);
   const hardQuestionsCount = hardQ !== null ? hardQ.filter(q => q.wrongRate > 55).length : null;
 
   return { avgScore, totalStudents: total, passRate, hardQuestionsCount };
@@ -177,6 +182,7 @@ export interface SubjectStat {
 export function computeSubjectStats(
   results: OmrGradeResult[],
   answerKey: AnswerKeyStore | null,
+  schema: TemplateSchema = VJU_PRESET_SCHEMA,
 ): SubjectStat[] {
   // Attempt real computation
   if (answerKey && results.length > 0) {
@@ -189,13 +195,16 @@ export function computeSubjectStats(
         .filter(r => !r._error)
         .map(r => {
           const ans = r.answers ?? {};
+          const { key } = resolveAnswerKeyForMaDe(answerKey, getMaDeValue(r.student_info, schema));
+          if (!key) return null;   // no answer key entered for this row's mã đề — exclude, not zero
           const correct = questionIds.filter(qId => {
             const student = ans[qId];
-            const expected = answerKey.answers[qId];
+            const expected = key.answers[qId];
             return student && expected && student === expected;
           }).length;
           return (correct / totalQ) * 10;
-        });
+        })
+        .filter((s): s is number => s !== null);
       if (sectionScores.length === 0) continue;
       const avg = sectionScores.reduce((a, b) => a + b, 0) / sectionScores.length;
       const pass = sectionScores.filter(s => s >= 5).length / sectionScores.length * 100;
@@ -234,6 +243,7 @@ export interface HardQuestion {
 export function computeHardQuestions(
   results: OmrGradeResult[],
   answerKey: AnswerKeyStore | null,
+  schema: TemplateSchema = VJU_PRESET_SCHEMA,
 ): HardQuestion[] | null {
   if (!answerKey || results.length === 0) return null;
 
@@ -248,18 +258,25 @@ export function computeHardQuestions(
     }
   }
 
-  const questionIds = Object.keys(answerKey.answers);
+  // Question labels (toan1, ptbv1, ...) are fixed by the VJU section layout
+  // regardless of mã đề, so any set's keys works to enumerate them — prefer
+  // the flat single-key set, fall back to the first đề if split by mã đề.
+  const questionIds = Object.keys(answerKey.answers).length > 0
+    ? Object.keys(answerKey.answers)
+    : Object.keys(Object.values(answerKey.byMaDe ?? {})[0]?.answers ?? {});
   const stats: HardQuestion[] = questionIds.map(qId => {
-    const correctAns = answerKey.answers[qId];
     let correct = 0, wrong = 0, blank = 0;
     for (const r of validResults) {
+      const { key } = resolveAnswerKeyForMaDe(answerKey, getMaDeValue(r.student_info, schema));
+      const correctAns = key?.answers[qId];
       const student = (r.answers ?? {})[qId] ?? null;
+      if (!correctAns)           continue;   // this row's đề has no answer entered — skip, don't count as blank
       if (!student)              blank++;
       else if (student === correctAns) correct++;
       else                       wrong++;
     }
-    const total = validResults.length;
-    const wrongRate = Math.round(((wrong + blank) / total) * 1000) / 10;
+    const total = correct + wrong + blank;
+    const wrongRate = total > 0 ? Math.round(((wrong + blank) / total) * 1000) / 10 : 0;
     const rightRate = 100 - wrongRate;
 
     // Human-readable display name

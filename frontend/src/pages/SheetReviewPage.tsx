@@ -23,12 +23,19 @@ const SBD_TYPES: { label: string; variant: TemplateVariant }[] = [
  * template flow underneath. These are installed via
  * backend/scripts/import_shared_template.py and flagged is_default=True so
  * any logged-in account can read them (see _get_readable_or_404 in
- * custom_forms.py) — the id below MUST match what that script printed on
- * the target environment's database (production id=2, may differ per env).
- * To add/rename/remove one, just edit this list.
+ * custom_forms.py).
+ *
+ * The DB id is NOT portable across environments — every database assigns ids
+ * independently, so "id=2" might be this template on production but a
+ * completely unrelated one locally (this bit a real test session: the pinned
+ * button silently loaded a 5-question template someone had made locally that
+ * happened to also be id=2). Configurable via VITE_PINNED_TEMPLATE_40_ID so
+ * each environment's .env file points at whatever id that script printed
+ * there; falls back to production's id (2) if the env var isn't set.
  */
+const PINNED_TEMPLATE_40_ID = Number(import.meta.env.VITE_PINNED_TEMPLATE_40_ID ?? 2);
 const PINNED_TEMPLATES: { label: string; id: number }[] = [
-  { label: 'Mẫu 40 câu TN + Đúng/Sai', id: 2 },
+  { label: 'Mẫu 40 câu TN + Đúng/Sai', id: PINNED_TEMPLATE_40_ID },
 ];
 
 const SOURCES: { label: string; value: ImageSource }[] = [

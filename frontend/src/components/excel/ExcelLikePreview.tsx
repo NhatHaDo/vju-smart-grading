@@ -7,7 +7,7 @@
  */
 
 import type { OmrGradeResult, AnswerKeyStore, CorrectionsStore, BatchGradeState } from '../../types/grading';
-import { TEMPLATE_VARIANT_LABEL, computeScore, applyCorrection } from '../../types/grading';
+import { TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, computeScore, applyCorrection, resolveAnswerKeyForMaDe, isMultiMaDe, correctionKey, getMaDeValue } from '../../types/grading';
 
 // ── VJU palette ───────────────────────────────────────────────────────────────
 
@@ -112,12 +112,14 @@ export interface ExcelLikePreviewProps {
 export default function ExcelLikePreview({
   batch, results, answerKey, corrections, dataSource,
 }: ExcelLikePreviewProps) {
-  const hasKey = !!answerKey && Object.keys(answerKey.answers ?? {}).length > 0;
+  const hasKey = !!answerKey && (Object.keys(answerKey.answers ?? {}).length > 0 || isMultiMaDe(answerKey));
+  const schema  = batch.templateSchema ?? VJU_PRESET_SCHEMA;
 
   const scored = results.map(r => {
-    const c = corrections[r.input?.filename ?? ''];
+    const c = corrections[correctionKey(batch.gradedAt, r.input?.filename ?? '')];
     const m = applyCorrection(r, c);
-    const sc = hasKey ? computeScore(m.answers ?? {}, answerKey!) : null;
+    const { key: akForRow } = hasKey ? resolveAnswerKeyForMaDe(answerKey, getMaDeValue(m.student_info, schema)) : { key: null };
+    const sc = akForRow ? computeScore(m.answers ?? {}, akForRow) : null;
     return { r, merged: m, corr: c, sc };
   });
 
@@ -282,7 +284,7 @@ export default function ExcelLikePreview({
                 </td>
                 {/* E: Mã đề */}
                 <td style={{ ...CELL_BASE, textAlign: 'center', fontFamily: 'monospace' }}>
-                  {dash(info.ma_de)}
+                  {dash(getMaDeValue(info, schema))}
                 </td>
                 {/* F: Ca thi */}
                 <td style={{ ...CELL_BASE, textAlign: 'center' }}>

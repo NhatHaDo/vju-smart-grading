@@ -54,9 +54,20 @@ from app.core.omr.bubble_analyzer import BubbleReading, BubbleStatus
 # genuine single marks with gaps 8.7-9.7, just under the 10 floor. Lowered
 # to 8 to match bubble_analyzer.py's MCQ_OUTLIER_TIGHT_MIN_JUMP — keep these
 # two constants in sync, they gate the same decision at two layers.
+#
+# 2026-07-29: got out of sync — bubble_analyzer.py's MCQ_OUTLIER_TIGHT_MIN_JUMP
+# / MCQ_OUTLIER_TIGHT_REST_SPREAD_MAX were nudged to 7.3 / 8.3 (real user
+# photo, trc_nghim_abcd21/38 — see that file's 2026-07-29 comment for the
+# evidence), but this redundant copy was missed. Result: classify_strip()
+# correctly isolated a single confident MARKED bubble for both fields, but
+# THIS gap check re-evaluated the same means against the still-old 8 / 8.0
+# floor and downgraded both back to NEEDS_REVIEW anyway — confirmed via a
+# fresh regrade showing status "needs_review" for abcd21 even after the
+# bubble_analyzer.py fix was deployed and verified in isolation. Mirroring
+# the same values here so the two layers agree again.
 MCQ_GAP_MIN_CONFIDENT = 15
-MCQ_GAP_TIGHT_MIN_CONFIDENT = 8
-MCQ_GAP_TIGHT_REST_SPREAD_MAX = 8.0
+MCQ_GAP_TIGHT_MIN_CONFIDENT = 7.3
+MCQ_GAP_TIGHT_REST_SPREAD_MAX = 8.3
 
 
 # ── Result types ──────────────────────────────────────────────────────────
@@ -481,6 +492,30 @@ def aggregate_signed_decimal(
         and all(_is_blank(r) for r in digit_results)
     )
     if all_blank:
+        return None, FieldStatus.BLANK, warnings
+
+    # 2026-07-29: the "-" sign bubble is a lone 1-bubble column (n=1) — it
+    # has no sibling bubble in its own strip to compare against, so unlike
+    # every other field type here it can't fall back to a local/tight-outlier
+    # comparison when the page-wide gap search fails; it depends entirely on
+    # global_thr. On a low-contrast photo that threshold can land above a
+    # genuinely blank sign bubble even while every digit/dec column of the
+    # SAME question (10 candidates each, so a reliable local baseline) reads
+    # correctly blank. Confirmed on a real user photo: sign mean 132.0 was
+    # literally the lightest (most blank-looking) bubble in its own group —
+    # d1-d4 ranged 121.8-132.1, dec 130.6-131.7 — yet was the only one
+    # flagged MARKED. A "-" with not a single digit filled in isn't a
+    # sensible answer either way, so treat "sign marked, everything else in
+    # the group blank" as a false read on the sign bubble rather than a
+    # genuine partial answer.
+    sign_only = (
+        sign_result is not None
+        and sign_result.status == FieldStatus.ANSWERED
+        and sign_result.selected_value == "-"
+        and _is_blank(dec_result)
+        and all(_is_blank(r) for r in digit_results)
+    )
+    if sign_only:
         return None, FieldStatus.BLANK, warnings
 
     has_issue = False

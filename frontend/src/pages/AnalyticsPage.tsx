@@ -23,7 +23,7 @@ import {
 } from 'recharts';
 import { BarChart3, TrendingUp, Users, Percent, AlertCircle, ChevronDown } from 'lucide-react';
 
-import { loadAnswerKey } from '../types/grading';
+import { loadAnswerKey, getMaDeValue, VJU_PRESET_SCHEMA } from '../types/grading';
 import {
   loadBatchFromStorage,
   allScores,
@@ -174,27 +174,30 @@ export default function AnalyticsPage() {
   const answerKey = useMemo(() => loadAnswerKey(), []);
 
   const hasRealData = batch !== null && batch.results.length > 0;
+  // Custom templates key their "Mã đề" info field by block name, not the
+  // fixed "ma_de" key VJU preset uses — schema tells getMaDeValue() which.
+  const schema = batch?.templateSchema ?? VJU_PRESET_SCHEMA;
 
   // Scores: real or mock
   const scores = useMemo(() => {
     if (!hasRealData) return MOCK_SCORES;
-    const real = allScores(batch!.results, answerKey);
+    const real = allScores(batch!.results, answerKey, schema);
     return real.length > 0 ? real : MOCK_SCORES;
-  }, [batch, answerKey, hasRealData]);
+  }, [batch, answerKey, hasRealData, schema]);
 
-  const usingMockScores = !hasRealData || allScores(batch?.results ?? [], answerKey).length === 0;
+  const usingMockScores = !hasRealData || allScores(batch?.results ?? [], answerKey, schema).length === 0;
 
   // KPI
   const kpi: KpiData = useMemo(() => {
     if (!hasRealData) return MOCK_KPI;
-    const computed = computeKpi(batch!.results, answerKey);
+    const computed = computeKpi(batch!.results, answerKey, schema);
     return {
       avgScore:            computed.avgScore            ?? MOCK_KPI.avgScore,
       totalStudents:       computed.totalStudents > 0   ? computed.totalStudents : MOCK_KPI.totalStudents,
       passRate:            computed.passRate             ?? MOCK_KPI.passRate,
       hardQuestionsCount:  computed.hardQuestionsCount  ?? MOCK_KPI.hardQuestionsCount,
     };
-  }, [batch, answerKey, hasRealData]);
+  }, [batch, answerKey, hasRealData, schema]);
 
   // Distribution
   const distribution = useMemo(() => computeDistribution(scores), [scores]);
@@ -210,25 +213,25 @@ export default function AnalyticsPage() {
 
   // Subject stats
   const subjectStats = useMemo(
-    () => computeSubjectStats(batch?.results ?? [], answerKey),
-    [batch, answerKey],
+    () => computeSubjectStats(batch?.results ?? [], answerKey, schema),
+    [batch, answerKey, schema],
   );
 
   // Hard questions
   const hardQuestions: HardQuestion[] = useMemo(() => {
     if (!hasRealData) return MOCK_HARD_QUESTIONS;
-    const real = computeHardQuestions(batch!.results, answerKey);
+    const real = computeHardQuestions(batch!.results, answerKey, schema);
     return real && real.length > 0 ? real.slice(0, 5) : MOCK_HARD_QUESTIONS;
-  }, [batch, answerKey, hasRealData]);
+  }, [batch, answerKey, hasRealData, schema]);
 
   // Exam filter options from batch
   const examOptions = useMemo(() => {
     if (!hasRealData) return [];
     const variants = Array.from(new Set(
-      batch!.results.map(r => r.student_info?.ma_de).filter(Boolean) as string[]
+      batch!.results.map(r => getMaDeValue(r.student_info, schema)).filter(Boolean) as string[]
     ));
     return variants;
-  }, [batch, hasRealData]);
+  }, [batch, hasRealData, schema]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (

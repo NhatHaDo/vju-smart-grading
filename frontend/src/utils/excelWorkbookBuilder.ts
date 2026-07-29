@@ -21,7 +21,7 @@ import type {
   TemplateSchema,
   TemplateInfoField,
 } from '../types/grading';
-import { computeScore, applyCorrection, TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA } from '../types/grading';
+import { computeScore, applyCorrection, TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, resolveAnswerKeyForMaDe, correctionKey, getMaDeValue } from '../types/grading';
 
 // ── Display model types ───────────────────────────────────────────────────────
 
@@ -237,6 +237,7 @@ function buildTongQuan(
   answerKey: AnswerKeyStore | null,
   corrections: CorrectionsStore,
   dataSource: string,
+  schema: TemplateSchema,
 ) {
   const ws = wb.addWorksheet('Tổng quan');
   ws.columns = [
@@ -258,9 +259,10 @@ function buildTongQuan(
   ws.getRow(3).height = 10;
 
   const scored = results.map(r => {
-    const c = corrections[r.input?.filename ?? ''];
+    const c = corrections[correctionKey(batch.gradedAt, r.input?.filename ?? '')];
     const m = applyCorrection(r, c);
-    return answerKey ? computeScore(m.answers ?? {}, answerKey) : null;
+    const { key } = resolveAnswerKeyForMaDe(answerKey, getMaDeValue(m.student_info, schema));
+    return key ? computeScore(m.answers ?? {}, key) : null;
   }).filter((s): s is NonNullable<typeof s> => s !== null);
 
   const total   = results.length;
@@ -342,6 +344,7 @@ function buildBangDiem(
   dataSource: string,
   highlightReview: boolean,
   infoFields: TemplateInfoField[],
+  schema: TemplateSchema,
 ) {
   const ws = wb.addWorksheet('Bảng điểm');
 
@@ -416,9 +419,10 @@ function buildBangDiem(
   // Data rows
   results.forEach((r, i) => {
     const fname  = r.input?.filename ?? '';
-    const corr   = corrections[fname];
+    const corr   = corrections[correctionKey(batch.gradedAt, fname)];
     const merged = applyCorrection(r, corr);
-    const sc     = answerKey ? computeScore(merged.answers ?? {}, answerKey) : null;
+    const { key: akForRow } = resolveAnswerKeyForMaDe(answerKey, getMaDeValue(merged.student_info, schema));
+    const sc     = akForRow ? computeScore(merged.answers ?? {}, akForRow) : null;
     const info   = merged.student_info ?? r.student_info ?? {};
     const isCorrected = !!corr;
     const review = needsReview(r);
@@ -456,9 +460,10 @@ function buildBangDiem(
 
   // Summary footer
   const scored = results.map(r => {
-    const c = corrections[r.input?.filename ?? ''];
+    const c = corrections[correctionKey(batch.gradedAt, r.input?.filename ?? '')];
     const m = applyCorrection(r, c);
-    return answerKey ? computeScore(m.answers ?? {}, answerKey) : null;
+    const { key } = resolveAnswerKeyForMaDe(answerKey, getMaDeValue(m.student_info, schema));
+    return key ? computeScore(m.answers ?? {}, key) : null;
   }).filter((s): s is NonNullable<typeof s> => s !== null);
 
   const total  = results.length;
@@ -499,10 +504,12 @@ function buildBangDiem(
 
 function buildCanKiemTra(
   wb: ExcelJS.Workbook,
+  batchId: string,
   results: OmrGradeResult[],
   answerKey: AnswerKeyStore | null,
   corrections: CorrectionsStore,
   infoFields: TemplateInfoField[],
+  schema: TemplateSchema,
 ) {
   const ws = wb.addWorksheet('Cần kiểm tra');
   ws.views = [{ state: 'frozen', ySplit: 1 }];
@@ -531,9 +538,10 @@ function buildCanKiemTra(
 
   reviewRows.forEach((r, i) => {
     const fname  = r.input?.filename ?? '';
-    const corr   = corrections[fname];
+    const corr   = corrections[correctionKey(batchId, fname)];
     const merged = applyCorrection(r, corr);
-    const sc     = answerKey ? computeScore(merged.answers ?? {}, answerKey) : null;
+    const { key: akForRow } = resolveAnswerKeyForMaDe(answerKey, getMaDeValue(merged.student_info, schema));
+    const sc     = akForRow ? computeScore(merged.answers ?? {}, akForRow) : null;
     const info   = merged.student_info ?? r.student_info ?? {};
 
     const row = ws.getRow(2 + i);
@@ -559,6 +567,7 @@ function buildCanKiemTra(
 
 function buildChiTietDapAn(
   wb: ExcelJS.Workbook,
+  batchId: string,
   results: OmrGradeResult[],
   corrections: CorrectionsStore,
   answerCols: string[],
@@ -594,7 +603,7 @@ function buildChiTietDapAn(
 
   results.forEach((r, i) => {
     const fname   = r.input?.filename ?? '';
-    const corr    = corrections[fname];
+    const corr    = corrections[correctionKey(batchId, fname)];
     const merged  = applyCorrection(r, corr);
     const info    = merged.student_info ?? r.student_info ?? {};
     const answers = merged.answers ?? {};
@@ -636,10 +645,10 @@ export function buildResultsWorkbook(opts: BuildWorkbookOptions): ExcelJS.Workbo
   wb.creator = 'VJU Smart Grading';
   wb.created = wb.modified = new Date();
 
-  buildTongQuan(wb, batch, results, answerKey, corrections, dataSource);
-  buildBangDiem(wb, batch, results, answerKey, corrections, dataSource, highlightReview, infoFields);
-  if (includeReview)  buildCanKiemTra(wb, results, answerKey, corrections, infoFields);
-  if (includeAnswers) buildChiTietDapAn(wb, results, corrections, answerCols, infoFields);
+  buildTongQuan(wb, batch, results, answerKey, corrections, dataSource, schema);
+  buildBangDiem(wb, batch, results, answerKey, corrections, dataSource, highlightReview, infoFields, schema);
+  if (includeReview)  buildCanKiemTra(wb, batch.gradedAt, results, answerKey, corrections, infoFields, schema);
+  if (includeAnswers) buildChiTietDapAn(wb, batch.gradedAt, results, corrections, answerCols, infoFields);
 
   return wb;
 }

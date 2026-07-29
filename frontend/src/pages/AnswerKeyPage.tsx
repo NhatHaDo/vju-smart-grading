@@ -4,10 +4,11 @@ import { normalizeUploadFile } from '../utils/fileConversion';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import PageHeader from '../components/layout/PageHeader';
-import { Download, Upload, Trash2, FileJson, Save, CheckCircle2, Loader2, ArrowLeft, Zap, AlertTriangle } from 'lucide-react';
+import { Download, Upload, Trash2, FileJson, Save, CheckCircle2, Loader2, ArrowLeft, Zap, AlertTriangle, Layers, Plus, X, Copy } from 'lucide-react';
 import {
   VJU_PRESET_SCHEMA,
   type AnswerKeyStore,
+  type AnswerKeySet,
   type ScoringWeights,
   type TemplateVariant,
   type ImageSource,
@@ -19,6 +20,8 @@ import {
   loadAnswerKey,
   saveAnswerKey,
   clearAnswerKey,
+  schemaHasMaDe,
+  isMultiMaDe,
 } from '../types/grading';
 
 const CHOICES = ['—', 'A', 'B', 'C', 'D'];
@@ -109,10 +112,25 @@ export default function AnswerKeyPage() {
     .flatMap(s => s.labels);
 
   const existing = loadAnswerKey();
+  const canSplitByMaDe = schemaHasMaDe(templateSchema);
+
   const [answers,   setAnswers]   = useState<Record<string, string>>(() => existing?.answers ?? {});
   const [scoring,   setScoring]   = useState<ScoringWeights>(() => existing?.scoring ?? { ...DEFAULT_SCORING });
   const [savedAt,   setSavedAt]   = useState<string | null>(existing?.updatedAt ?? null);
   const [saveFlash, setSaveFlash] = useState(false);
+
+  // ── Chia đáp án theo mã đề ────────────────────────────────────────────────
+  // Off by default (single answer key, exactly the old behavior). Once turned
+  // on, each "đề" (exam code) gets its own answers; the flat `answers` state
+  // above is left untouched as a safety net until the user turns it back off.
+  const [multiMaDe,     setMultiMaDe]     = useState<boolean>(() => isMultiMaDe(existing));
+  const [maDeCodes,     setMaDeCodes]     = useState<string[]>(() => existing?.byMaDe ? Object.keys(existing.byMaDe) : []);
+  const [activeMaDe,    setActiveMaDe]    = useState<string>(() => (existing?.byMaDe ? Object.keys(existing.byMaDe)[0] : '') ?? '');
+  const [answersByMaDe, setAnswersByMaDe] = useState<Record<string, Record<string, string>>>(() => {
+    const init: Record<string, Record<string, string>> = {};
+    if (existing?.byMaDe) for (const [code, set] of Object.entries(existing.byMaDe)) init[code] = { ...set.answers };
+    return init;
+  });
 
   // grading progress
   const [grading,   setGrading]   = useState(false);
@@ -121,16 +139,91 @@ export default function AnswerKeyPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const setAnswer = (label: string, val: string) =>
-    setAnswers(prev => ({ ...prev, [label]: val === '—' ? '' : val }));
+  // Answers currently being edited on screen — the active đề's set in multi-đề
+  // mode, or the flat single-key set otherwise. Every read/write in the form
+  // below goes through these two so the section-rendering JSX doesn't need to
+  // know which mode it's in.
+  const currentAnswers = multiMaDe ? (answersByMaDe[activeMaDe] ?? {}) : answers;
+
+  const setAnswer = (label: string, val: string) => {
+    const v = val === '—' ? '' : val;
+    if (multiMaDe) {
+      setAnswersByMaDe(prev => ({ ...prev, [activeMaDe]: { ...(prev[activeMaDe] ?? {}), [label]: v } }));
+    } else {
+      setAnswers(prev => ({ ...prev, [label]: v }));
+    }
+  };
 
   const setScoringField = (field: keyof ScoringWeights, val: string) => {
     const n = parseFloat(val);
     if (!isNaN(n)) setScoring(prev => ({ ...prev, [field]: n }));
   };
 
+  /**
+   * Builds the full store to persist — flat single key, or byMaDe map.
+   * NOTE: when saving in multi-đề mode, the flat `answers` field is kept as-is
+   * (not wiped to {}) even though scoring ignores it while byMaDe has entries —
+   * it's a safety-net backup of whatever single answer key existed before the
+   * user turned on mã-đề splitting, so nothing is silently lost if they turn
+   * it back off, and so old JSON exports of it aren't clobbered.
+   */
+  const buildStore = (): AnswerKeyStore => {
+    const now = new Date().toISOString();
+    if (multiMaDe && maDeCodes.length > 0) {
+      const byMaDe: Record<string, AnswerKeySet> = {};
+      for (const code of maDeCodes) {
+        byMaDe[code] = { answers: answersByMaDe[code] ?? {}, scoring, updatedAt: now };
+      }
+      return { answers, scoring, updatedAt: now, byMaDe };
+    }
+    return { answers, scoring, updatedAt: now };
+  };
+
+  // ── Mã đề tab management ─────────────────────────────────────────────────
+  const startSplitByMaDe = () => {
+    const code = (window.prompt('Nhập mã đề hiện tại (VD: 101) — đáp án đã nhập ở trên sẽ chuyển vào đề này:') ?? '').trim();
+    if (!code) return;
+    setAnswersByMaDe({ [code]: { ...answers } });
+    setMaDeCodes([code]);
+    setActiveMaDe(code);
+    setMultiMaDe(true);
+  };
+
+  const addMaDeTab = () => {
+    const code = (window.prompt('Nhập mã đề mới (VD: 102):') ?? '').trim();
+    if (!code) return;
+    if (maDeCodes.includes(code)) { setActiveMaDe(code); return; }
+    setMaDeCodes(prev => [...prev, code]);
+    setAnswersByMaDe(prev => ({ ...prev, [code]: {} }));
+    setActiveMaDe(code);
+  };
+
+  const removeMaDeTab = (code: string) => {
+    if (!confirm(`Xóa đáp án đề ${code}?`)) return;
+    const remaining = maDeCodes.filter(c => c !== code);
+    setMaDeCodes(remaining);
+    setAnswersByMaDe(prev => { const next = { ...prev }; delete next[code]; return next; });
+    if (activeMaDe === code) setActiveMaDe(remaining[0] ?? '');
+    if (remaining.length === 0) setMultiMaDe(false);
+  };
+
+  const stopSplitByMaDe = () => {
+    if (!confirm('Tắt chia theo mã đề? Đáp án của đề đang chọn sẽ giữ lại làm bộ đáp án chung, các đề khác sẽ bị xóa.')) return;
+    setAnswers(answersByMaDe[activeMaDe] ?? {});
+    setMultiMaDe(false);
+    setMaDeCodes([]);
+    setAnswersByMaDe({});
+    setActiveMaDe('');
+  };
+
+  const copyFromMaDe = (fromCode: string) => {
+    if (!fromCode || fromCode === activeMaDe) return;
+    if (!confirm(`Ghi đè đáp án đề ${activeMaDe} bằng đáp án đề ${fromCode}?`)) return;
+    setAnswersByMaDe(prev => ({ ...prev, [activeMaDe]: { ...(prev[fromCode] ?? {}) } }));
+  };
+
   const handleSave = () => {
-    const store: AnswerKeyStore = { answers, scoring, updatedAt: new Date().toISOString() };
+    const store = buildStore();
     saveAnswerKey(store);
     setSavedAt(store.updatedAt);
     setSaveFlash(true);
@@ -143,10 +236,14 @@ export default function AnswerKeyPage() {
     setAnswers({});
     setScoring({ ...DEFAULT_SCORING });
     setSavedAt(null);
+    setMultiMaDe(false);
+    setMaDeCodes([]);
+    setAnswersByMaDe({});
+    setActiveMaDe('');
   };
 
   const handleExport = () => {
-    const store: AnswerKeyStore = { answers, scoring, updatedAt: new Date().toISOString() };
+    const store = buildStore();
     const blob = new Blob([JSON.stringify(store, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
@@ -161,11 +258,28 @@ export default function AnswerKeyPage() {
     reader.onload = ev => {
       try {
         const parsed = JSON.parse(ev.target?.result as string);
-        if (parsed.answers && typeof parsed.answers === 'object') {
-          setAnswers(parsed.answers);
+        if (parsed.byMaDe && typeof parsed.byMaDe === 'object' && Object.keys(parsed.byMaDe).length > 0) {
+          const codes = Object.keys(parsed.byMaDe);
+          const rebuilt: Record<string, Record<string, string>> = {};
+          for (const c of codes) rebuilt[c] = parsed.byMaDe[c]?.answers ?? {};
+          setAnswersByMaDe(rebuilt);
+          setMaDeCodes(codes);
+          setActiveMaDe(codes[0]);
+          setMultiMaDe(true);
+          if (parsed.scoring) setScoring(parsed.scoring);
+        } else if (parsed.answers && typeof parsed.answers === 'object') {
+          if (multiMaDe) {
+            setAnswersByMaDe(prev => ({ ...prev, [activeMaDe]: parsed.answers }));
+          } else {
+            setAnswers(parsed.answers);
+          }
           if (parsed.scoring) setScoring(parsed.scoring);
         } else if (typeof parsed === 'object') {
-          setAnswers(parsed as Record<string, string>);
+          if (multiMaDe) {
+            setAnswersByMaDe(prev => ({ ...prev, [activeMaDe]: parsed as Record<string, string> }));
+          } else {
+            setAnswers(parsed as Record<string, string>);
+          }
         } else {
           alert('JSON không đúng format');
         }
@@ -185,7 +299,7 @@ export default function AnswerKeyPage() {
       const choices = s.options && s.options.length > 0 ? s.options : ['A', 'B', 'C', 'D'];
       s.labels.forEach((lbl, i) => { sample[lbl] = choices[i % choices.length]; });
     });
-    const store: AnswerKeyStore = { answers: sample, scoring: DEFAULT_SCORING, updatedAt: new Date().toISOString() };
+    const store: AnswerKeyStore = { answers: sample, scoring: DEFAULT_SCORING, updatedAt: new Date().toISOString() }; // sample export is always the flat single-key shape, regardless of current mode
     const blob = new Blob([JSON.stringify(store, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
@@ -208,7 +322,7 @@ export default function AnswerKeyPage() {
     if (gradingFiles.length === 0) return;
 
     // Save answer key first
-    const store: AnswerKeyStore = { answers, scoring, updatedAt: new Date().toISOString() };
+    const store = buildStore();
     saveAnswerKey(store);
     setSavedAt(store.updatedAt);
 
@@ -276,7 +390,7 @@ export default function AnswerKeyPage() {
     navigate('/app/results', { state: batch });
   };
 
-  const filled = activeLabels.filter(l => answers[l]).length;
+  const filled = activeLabels.filter(l => currentAnswers[l]).length;
   const total  = activeLabels.length;
 
   const primaryButton = isGradingMode ? (
@@ -396,13 +510,111 @@ export default function AnswerKeyPage() {
           </div>
         )}
 
+        {/* Chia đáp án theo mã đề */}
+        {canSplitByMaDe && (
+          <Card>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: multiMaDe ? 12 : 0 }}>
+              <Layers size={16} color="#C8102E" style={{ flexShrink: 0 }} />
+              <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#374151', flex: 1 }}>Chia đáp án theo mã đề</h3>
+              {!multiMaDe ? (
+                <Button size="sm" variant="secondary" icon={<Plus size={14} />} onClick={startSplitByMaDe} disabled={grading}>
+                  Bật chia theo mã đề
+                </Button>
+              ) : (
+                <Button size="sm" variant="secondary" onClick={stopSplitByMaDe} disabled={grading} style={{ color: '#EF4444', borderColor: '#FECACA' }}>
+                  Tắt chia theo mã đề
+                </Button>
+              )}
+            </div>
+            {!multiMaDe ? (
+              <p style={{ margin: '8px 0 0', fontSize: 12, color: '#9CA3AF' }}>
+                Dùng khi phiếu có nhiều mã đề khác nhau (VD: đề 101, 102, 103) và mỗi đề có đáp án đúng khác nhau.
+                Khi chấm, hệ thống sẽ tự đọc mã đề trên từng phiếu để so với đúng bộ đáp án.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  {maDeCodes.map(code => {
+                    const isActive = code === activeMaDe;
+                    const codeFilled = activeLabels.filter(l => (answersByMaDe[code]?.[l])).length;
+                    return (
+                      <div key={code} style={{ display: 'flex', alignItems: 'center' }}>
+                        <button
+                          onClick={() => setActiveMaDe(code)}
+                          disabled={grading}
+                          style={{
+                            padding: '7px 14px', borderRadius: '8px 0 0 8px',
+                            border: `1.5px solid ${isActive ? '#C8102E' : '#E5E7EB'}`,
+                            background: isActive ? '#C8102E' : '#fff',
+                            color: isActive ? '#fff' : '#374151',
+                            fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
+                          }}
+                        >
+                          Đề {code} <span style={{ fontWeight: 500, opacity: 0.8 }}>({codeFilled}/{activeLabels.length})</span>
+                        </button>
+                        {maDeCodes.length > 1 && (
+                          <button
+                            onClick={() => removeMaDeTab(code)}
+                            disabled={grading}
+                            title={`Xóa đề ${code}`}
+                            style={{
+                              padding: '7px 8px', borderRadius: '0 8px 8px 0',
+                              border: `1.5px solid ${isActive ? '#C8102E' : '#E5E7EB'}`, borderLeft: 'none',
+                              background: isActive ? '#C8102E' : '#fff',
+                              color: isActive ? '#fff' : '#9CA3AF',
+                              cursor: 'pointer', display: 'flex', alignItems: 'center',
+                            }}
+                          >
+                            <X size={12} />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <button
+                    onClick={addMaDeTab}
+                    disabled={grading}
+                    style={{ padding: '7px 14px', borderRadius: 8, border: '1.5px dashed #E5E7EB', background: '#fff', color: '#6B7280', fontWeight: 600, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6 }}
+                  >
+                    <Plus size={13} /> Thêm đề
+                  </button>
+                </div>
+                {maDeCodes.length > 1 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Copy size={13} color="#9CA3AF" />
+                    <span style={{ fontSize: 12, color: '#6B7280' }}>Sao chép đáp án từ đề khác vào đề {activeMaDe}:</span>
+                    <select
+                      value=""
+                      onChange={e => { if (e.target.value) copyFromMaDe(e.target.value); e.target.value = ''; }}
+                      disabled={grading}
+                      style={{ padding: '4px 8px', borderRadius: 6, border: '1.5px solid #E5E7EB', fontSize: 12, fontFamily: 'inherit' }}
+                    >
+                      <option value="">— chọn đề —</option>
+                      {maDeCodes.filter(c => c !== activeMaDe).map(c => <option key={c} value={c}>Đề {c}</option>)}
+                    </select>
+                  </div>
+                )}
+                <p style={{ margin: 0, fontSize: 12, color: '#9CA3AF' }}>
+                  Đang nhập đáp án cho <strong style={{ color: '#C8102E' }}>Đề {activeMaDe}</strong> — các nút "Điền nhanh" và bảng câu hỏi bên dưới áp dụng cho đề này.
+                </p>
+              </div>
+            )}
+          </Card>
+        )}
+
         {/* Quick-fill */}
         <Card>
-          <h3 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 700, color: '#374151' }}>Điền nhanh</h3>
+          <h3 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 700, color: '#374151' }}>
+            Điền nhanh{multiMaDe && <span style={{ color: '#C8102E' }}> — Đề {activeMaDe}</span>}
+          </h3>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {(['A','B','C','D'] as const).map(ch => (
               <button key={ch}
-                onClick={() => setAnswers(prev => ({ ...prev, ...Object.fromEntries(abcdLabels.map(l => [l, ch])) }))}
+                onClick={() => {
+                  const fill = Object.fromEntries(abcdLabels.map(l => [l, ch]));
+                  if (multiMaDe) setAnswersByMaDe(prev => ({ ...prev, [activeMaDe]: { ...(prev[activeMaDe] ?? {}), ...fill } }));
+                  else setAnswers(prev => ({ ...prev, ...fill }));
+                }}
                 disabled={grading}
                 style={{ padding: '6px 16px', borderRadius: 8, border: '1.5px solid #E5E7EB', background: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}
               >
@@ -410,7 +622,7 @@ export default function AnswerKeyPage() {
               </button>
             ))}
             <button
-              onClick={() => setAnswers({})}
+              onClick={() => { if (multiMaDe) setAnswersByMaDe(prev => ({ ...prev, [activeMaDe]: {} })); else setAnswers({}); }}
               disabled={grading}
               style={{ padding: '6px 16px', borderRadius: 8, border: '1.5px solid #FECACA', background: '#FEF2F2', fontWeight: 600, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', color: '#C8102E' }}
             >
@@ -444,7 +656,7 @@ export default function AnswerKeyPage() {
             </div>
           </Card>
         ) : activeSections.map(({ name: section, labels, inputType, options }) => {
-          const sectionFilled = labels.filter(l => answers[l]).length;
+          const sectionFilled = labels.filter(l => currentAnswers[l]).length;
           const isText = inputType === 'text';
           const choices = ['—', ...(options && options.length > 0 ? options : CHOICES.slice(1))];
           return (
@@ -455,7 +667,7 @@ export default function AnswerKeyPage() {
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {labels.map((lbl, idx) => {
-                  const val = answers[lbl] || '';
+                  const val = currentAnswers[lbl] || '';
                   if (isText) {
                     return (
                       <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>

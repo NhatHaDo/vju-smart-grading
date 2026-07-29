@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { Download, X, FileSpreadsheet, CheckSquare, Square } from 'lucide-react';
 import Button from '../common/Button';
 import type { BatchGradeState, OmrGradeResult, AnswerKeyStore, CorrectionsStore } from '../../types/grading';
-import { TEMPLATE_VARIANT_LABEL, computeScore, applyCorrection } from '../../types/grading';
+import { TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, computeScore, applyCorrection, resolveAnswerKeyForMaDe, isMultiMaDe, correctionKey, getMaDeValue } from '../../types/grading';
 import { exportResultsExcel } from '../../utils/exportResultsExcel';
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -65,13 +65,15 @@ function SheetRow({ name, included, description }: SheetRowProps) {
 
 // ── Preview table ──────────────────────────────────────────────────────────
 
-function PreviewTable({ results, answerKey, corrections }: {
+function PreviewTable({ results, answerKey, corrections, batch }: {
   results:     OmrGradeResult[];
   answerKey:   AnswerKeyStore | null;
   corrections: CorrectionsStore;
+  batch:       BatchGradeState;
 }) {
   const previewRows = results.slice(0, 3);
-  const hasKey = !!answerKey && Object.keys(answerKey.answers ?? {}).length > 0;
+  const hasKey = !!answerKey && (Object.keys(answerKey.answers ?? {}).length > 0 || isMultiMaDe(answerKey));
+  const schema  = batch.templateSchema ?? VJU_PRESET_SCHEMA;
 
   if (previewRows.length === 0) return null;
 
@@ -91,9 +93,11 @@ function PreviewTable({ results, answerKey, corrections }: {
         <tbody>
           {previewRows.map((r, i) => {
             const fname   = r.input?.filename ?? '';
-            const corr    = corrections[fname];
+            const corr    = corrections[correctionKey(batch.gradedAt, fname)];
             const merged  = applyCorrection(r, corr);
-            const sc      = hasKey ? computeScore(merged.answers ?? {}, answerKey!) : null;
+            const rowMaDe = getMaDeValue(merged.student_info, schema);
+            const { key: akForRow, missingKeyForMaDe } = hasKey ? resolveAnswerKeyForMaDe(answerKey, rowMaDe) : { key: null, missingKeyForMaDe: false };
+            const sc      = akForRow ? computeScore(merged.answers ?? {}, akForRow) : null;
             const info    = merged.student_info ?? r.student_info ?? {};
             const review  = needsReview(r);
             return (
@@ -102,14 +106,20 @@ function PreviewTable({ results, answerKey, corrections }: {
                 <td style={{ padding: '7px 10px', color: '#374151', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dash(fname)}</td>
                 <td style={{ padding: '7px 10px', fontFamily: 'monospace' }}>{dash(info.sbd)}</td>
                 <td style={{ padding: '7px 10px', fontFamily: 'monospace', color: '#C8102E', fontWeight: 600 }}>{dash(info.cccd)}</td>
-                <td style={{ padding: '7px 10px', fontFamily: 'monospace' }}>{dash(info.ma_de)}</td>
+                <td style={{ padding: '7px 10px', fontFamily: 'monospace' }}>{dash(rowMaDe)}</td>
                 <td style={{ padding: '7px 10px' }}>{dash(info.ca_thi)}</td>
-                {sc !== null && <>
-                  <td style={{ padding: '7px 10px', color: '#065F46', fontWeight: 600 }}>{sc.correct}</td>
-                  <td style={{ padding: '7px 10px', color: '#991B1B', fontWeight: 600 }}>{sc.wrong}</td>
-                  <td style={{ padding: '7px 10px', color: '#6B7280' }}>{sc.blank}</td>
-                  <td style={{ padding: '7px 10px', fontWeight: 800, color: '#1E1E1E' }}>{sc.total}</td>
-                </>}
+                {hasKey && (sc !== null ? (
+                  <>
+                    <td style={{ padding: '7px 10px', color: '#065F46', fontWeight: 600 }}>{sc.correct}</td>
+                    <td style={{ padding: '7px 10px', color: '#991B1B', fontWeight: 600 }}>{sc.wrong}</td>
+                    <td style={{ padding: '7px 10px', color: '#6B7280' }}>{sc.blank}</td>
+                    <td style={{ padding: '7px 10px', fontWeight: 800, color: '#1E1E1E' }}>{sc.total}</td>
+                  </>
+                ) : (
+                  <td colSpan={4} style={{ padding: '7px 10px', color: '#CA8A04', fontSize: 10 }}>
+                    {missingKeyForMaDe ? `Chưa có đáp án đề ${dash(rowMaDe)}` : '—'}
+                  </td>
+                ))}
                 <td style={{ padding: '7px 10px' }}>
                   <span style={{
                     fontSize: 10, borderRadius: 9999, padding: '2px 7px', fontWeight: 600,
@@ -266,7 +276,7 @@ export default function ExcelPreviewModal({
           <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             Xem trước — {Math.min(3, results.length)} dòng đầu
           </div>
-          <PreviewTable results={results} answerKey={answerKey} corrections={corrections} />
+          <PreviewTable results={results} answerKey={answerKey} corrections={corrections} batch={batch} />
         </div>
 
         {/* Info note */}

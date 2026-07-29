@@ -747,6 +747,33 @@ class OMREngine:
                     f"({','.join(w.get('candidates') or [])})"
                 )
 
+            # 2026-07-29: if aggregate_signed_decimal's sign-only guard fired
+            # (a lone "-" mark with every digit/dec sub-field blank gets
+            # downgraded to a blank composite answer — see that function's
+            # comment), the RAW sign_result entry in field_results is left
+            # untouched, so the "Ảnh detect" debug overlay — which draws
+            # straight from field_results per raw sub-label, independently
+            # of this composite step — kept showing a green "detected" box
+            # on a bubble we'd just determined isn't a real mark. Confirmed
+            # confusing on a real user photo: score was already correct, but
+            # the overlay visibly disagreed with it. Purely cosmetic (score
+            # already uses `status`/`value` above); overwrite the raw
+            # sub-field too so the overlay matches the graded answer.
+            if (
+                status == FieldStatus.BLANK
+                and sign_result is not None
+                and sign_result.status == FieldStatus.ANSWERED
+                and sign_result.selected_value == "-"
+            ):
+                field_results[comp_spec.sign_label] = FieldResult(
+                    field_label=comp_spec.sign_label,
+                    field_type=sign_result.field_type,
+                    selected_value=None,
+                    selected_values=[],
+                    status=FieldStatus.BLANK,
+                    fill_ratios=sign_result.fill_ratios,
+                )
+
         # ── Step 8: Score ─────────────────────────────────────────────────
         grading_report = None
         if answer_key:

@@ -241,10 +241,25 @@ export interface ScoringWeights {
   blank:   number;
 }
 
-export interface AnswerKeyStore {
+/** One đề's worth of answers + its own scoring weights (used inside `byMaDe`). */
+export interface AnswerKeySet {
   answers:   Record<string, string>;  // e.g. { toan1: "A", ... }
   scoring:   ScoringWeights;
   updatedAt: string;                  // ISO string
+}
+
+export interface AnswerKeyStore {
+  /** Default / single-đề answer key — exams with no "Mã đề" field always use this,
+   *  and it's what a single-đề exam's data has always looked like (back-compat). */
+  answers:   Record<string, string>;  // e.g. { toan1: "A", ... }
+  scoring:   ScoringWeights;
+  updatedAt: string;                  // ISO string
+  /** Per-mã-đề answer sets, keyed by the mã đề value as read by OMR (e.g. "101").
+   *  Absent/empty = single-đề mode (unchanged legacy behavior — every row scores
+   *  against the top-level `answers` above regardless of its own mã đề). Once at
+   *  least one entry exists here, `resolveAnswerKeyForMaDe` switches to strict
+   *  per-đề matching instead of falling back to the top-level set. */
+  byMaDe?: Record<string, AnswerKeySet>;
 }
 
 export const DEFAULT_SCORING: ScoringWeights = { correct: 1, wrong: 0, blank: 0 };
@@ -269,10 +284,70 @@ export function clearAnswerKey(): void {
   try { localStorage.removeItem(AK_LS_KEY); } catch { /* ignore */ }
 }
 
+/** True once the answer key has at least one đề-specific set defined —
+ *  i.e. the exam is using the "chia theo mã đề" (split by exam code) feature. */
+export function isMultiMaDe(store: AnswerKeyStore | null): boolean {
+  return !!store?.byMaDe && Object.keys(store.byMaDe).length > 0;
+}
+
+/** True when the given template schema has a "Mã đề" info field — used to decide
+ *  whether AnswerKeyPage should even offer the multi-đề tabs UI. VJU preset always
+ *  has it; custom templates only if the user declared a MaDe-labelled field. */
+export function schemaHasMaDe(schema: TemplateSchema | null | undefined): boolean {
+  if (!schema) return false;
+  return schema.infoFields.some(f => f.key === 'ma_de' || /mã\s*đề/i.test(f.displayName));
+}
+
+/**
+ * Find the mã đề value inside a student_info object.
+ *
+ * VJU preset templates always key it "ma_de". Custom templates DON'T — the
+ * backend's per-template extraction (`_extract_student_info_custom` in
+ * omr.py) keys every info field by its block name, e.g. "custom_1782375370047",
+ * whatever the template author happened to name it when drawing the field.
+ * Reading `student_info.ma_de` directly on a custom-template result is always
+ * undefined, which silently made mã-đề matching fail for every row on any
+ * custom template ("Đề ?", "chưa có đáp án" on sheets that plainly show a mã
+ * đề). The schema's infoFields tells us which key actually holds it.
+ */
+export function getMaDeValue(
+  studentInfo: OmrStudentInfo | null | undefined,
+  schema: TemplateSchema | null | undefined,
+): string | null {
+  if (!studentInfo) return null;
+  const field = schema?.infoFields.find(f => f.key === 'ma_de' || /mã\s*đề/i.test(f.displayName));
+  const key = field?.key ?? 'ma_de';
+  return studentInfo[key] ?? null;
+}
+
+/**
+ * Resolve which answer set applies to a given sheet's mã đề.
+ *
+ * - Single-đề mode (`byMaDe` empty/absent): always returns the top-level set —
+ *   exactly the old behavior, so existing exams are unaffected.
+ * - Multi-đề mode: looks up `maDe` in `byMaDe`. No match (mã đề unreadable, or a
+ *   đề the user hasn't entered answers for yet) → returns `null` with
+ *   `missingKeyForMaDe: true` instead of silently guessing, so the caller can
+ *   flag the sheet as "cần kiểm tra" rather than showing a wrong score.
+ */
+export function resolveAnswerKeyForMaDe(
+  store: AnswerKeyStore | null,
+  maDe: string | null | undefined,
+): { key: AnswerKeySet | null; missingKeyForMaDe: boolean } {
+  if (!store) return { key: null, missingKeyForMaDe: false };
+  if (!isMultiMaDe(store)) {
+    return { key: { answers: store.answers, scoring: store.scoring, updatedAt: store.updatedAt }, missingKeyForMaDe: false };
+  }
+  const trimmed = (maDe ?? '').trim();
+  const set = trimmed ? store.byMaDe![trimmed] : undefined;
+  if (!set) return { key: null, missingKeyForMaDe: true };
+  return { key: set, missingKeyForMaDe: false };
+}
+
 /** Compute per-sheet score given answers and key. */
 export function computeScore(
   sheetAnswers: Record<string, string | null>,
-  key: AnswerKeyStore,
+  key: AnswerKeySet | AnswerKeyStore,
 ): { correct: number; wrong: number; blank: number; total: number } {
   const keyed = Object.keys(key.answers);
   let correct = 0, wrong = 0, blank = 0;
@@ -310,9 +385,26 @@ export interface ManualCorrection {
   updatedAt: string;
 }
 
-export type CorrectionsStore = Record<string, ManualCorrection>; // key = filename
+/** key = correctionKey(batchId, filename) — see below. Was plain filename before;
+ *  kept as a loose string type so old localStorage data still parses fine. */
+export type CorrectionsStore = Record<string, ManualCorrection>;
 
 export const CORRECTIONS_LS_KEY = 'vju_manual_corrections';
+
+/**
+ * Build the storage key for a manual correction.
+ *
+ * Previously corrections were keyed by filename alone, which meant re-uploading
+ * a brand-new grading batch that happened to reuse a filename (very common when
+ * testing with the same sample scans, or re-scanning a sheet) would silently
+ * resurrect an old "đã sửa tay" edit from a completely unrelated batch — the new
+ * batch looked pre-corrected with stale data the user never touched this time.
+ * `batchId` (typically `batch.gradedAt`, a fresh ISO timestamp per grading run)
+ * scopes each correction to the specific batch it was made in.
+ */
+export function correctionKey(batchId: string | null | undefined, filename: string): string {
+  return `${batchId || 'nobatch'}::${filename}`;
+}
 
 export function loadCorrections(): CorrectionsStore {
   try {

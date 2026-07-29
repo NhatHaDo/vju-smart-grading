@@ -164,9 +164,27 @@ INT_OUTLIER_TIGHT_REST_SPREAD_MAX = 8.0
 # gap >= 8.7, and every confirmed non-mark/ambiguous case (a truly flat row,
 # or a real second partial mark) has gap <= 7.1 — so 8 sits in the gap
 # between the two populations observed so far. Lowered the floor to 8.
+#
+# 2026-07-29 (real user photo, "Mẫu 40" custom template, trc_nghim_abcd21 /
+# trc_nghim_abcd38): both fields visually confirmed on the actual scan as a
+# single clean mark each (one bubble a well-separated darkest, the other
+# three tightly clustered and clearly blank), yet both fell through to
+# global_thr → spurious "tô cả 4 đáp án" multi_mark:
+#   - abcd21: means [B=100.5, D=115.1, C=117.7, A=123.3]. top2_gap=14.6
+#     (misses MCQ_OUTLIER_MIN_JUMP=15 by 0.4), rest_spread=8.2 (misses the
+#     old REST_SPREAD_MAX=8.0 by 0.2).
+#   - abcd38: means [A=102.0, C=109.4, D=111.2, B=113.1]. top2_gap=7.4
+#     (misses the old TIGHT_MIN_JUMP=8 by 0.6) — but still comfortably above
+#     the documented non-mark ceiling of 7.1, so it's inside genuine-mark
+#     territory, just past the old floor.
+# Both are near-misses of an existing acceptance path, not new territory:
+# nudged TIGHT_MIN_JUMP down to 7.3 (0.2 clear of the 7.1 non-mark ceiling,
+# covers 7.4) and REST_SPREAD_MAX up to 8.3 (covers 8.2, still far below the
+# only confirmed genuine multi-mark rest_spread on record, 31.8 — see
+# FLAT_STRIP_MAX_SPREAD note below).
 MCQ_OUTLIER_MIN_JUMP = 15
-MCQ_OUTLIER_TIGHT_MIN_JUMP = 8
-MCQ_OUTLIER_TIGHT_REST_SPREAD_MAX = 8.0
+MCQ_OUTLIER_TIGHT_MIN_JUMP = 7.3
+MCQ_OUTLIER_TIGHT_REST_SPREAD_MAX = 8.3
 
 # 2026-07-28: a genuinely BLANK strip (no bubble filled at all) can still
 # fall through every check above — best_gap < MIN_JUMP, and top2_gap too

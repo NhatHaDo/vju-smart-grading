@@ -18,6 +18,9 @@ import {
   loadCorrections,
   saveCorrections,
   computeScore,
+  resolveAnswerKeyForMaDe,
+  correctionKey,
+  getMaDeValue,
 } from '../types/grading';
 import { resultsApi } from '../services/apiClient';
 import { dbRowToOmrResult, parseJson, getInfoFieldValue } from '../utils/resultMapping';
@@ -45,8 +48,12 @@ function needsReview(r: OmrGradeResult, ak: AnswerKeyStore | null, schema?: Temp
   if (infoKeys.some(k => info[k] && String(info[k]).includes('_'))) return true;
   if (r._error) return true;
   if (ak) {
-    const sc = computeScore(r.answers ?? {}, ak);
-    if (sc.blank > 0) return true;
+    const { key, missingKeyForMaDe } = resolveAnswerKeyForMaDe(ak, getMaDeValue(r.student_info, schema));
+    if (missingKeyForMaDe) return true;   // mã đề has no answers entered — always needs a look
+    if (key) {
+      const sc = computeScore(r.answers ?? {}, key);
+      if (sc.blank > 0) return true;
+    }
   }
   return false;
 }
@@ -327,18 +334,23 @@ export default function ReviewErrorsPage() {
 
         // ── Seed corrections from both localStorage AND DB manual_corrections_json ──
         // DB corrections are the source-of-truth when localStorage was cleared.
+        // Both are merged into the SAME batch-scoped key (first.graded_at + filename)
+        // so a stale localStorage edit from a different, unrelated batch that happens
+        // to share a filename can never masquerade as this batch's correction.
         const localCorrs = loadCorrections();
-        const mergedCorrs: CorrectionsStore = { ...localCorrs };
+        const mergedCorrs: CorrectionsStore = {};
         for (const row of resp.items) {
           const fname = row.file_name ?? '';
-          if (!mergedCorrs[fname] && row.manual_corrections_json) {
+          const key   = correctionKey(first.graded_at, fname);
+          if (localCorrs[key]) { mergedCorrs[key] = localCorrs[key]; continue; }
+          if (row.manual_corrections_json) {
             const dbCorr = parseJson<{
               corrected_student_info?: Record<string, string>;
               corrected_answers?:      Record<string, string>;
               updated_at?:             string;
             }>(row.manual_corrections_json, {});
             if (dbCorr.corrected_student_info || dbCorr.corrected_answers) {
-              mergedCorrs[fname] = {
+              mergedCorrs[key] = {
                 corrected_student_info: dbCorr.corrected_student_info ?? {},
                 corrected_answers:      dbCorr.corrected_answers      ?? {},
                 updatedAt:              dbCorr.updated_at             ?? new Date().toISOString(),
@@ -418,7 +430,7 @@ export default function ReviewErrorsPage() {
 
   const handleSave = (filename: string, c: ManualCorrection) => {
     // 1. localStorage correction (existing flow — always runs)
-    const next = { ...corrections, [filename]: c };
+    const next = { ...corrections, [correctionKey(batch.gradedAt, filename)]: c };
     setCorrections(next);
     saveCorrections(next);
 
@@ -462,8 +474,8 @@ export default function ReviewErrorsPage() {
           {[
             { label: 'Tổng phiếu',    value: safeResults.length,               accent: '#6366F1' },
             { label: 'Cần xem lại',   value: reviewRows.length,                accent: '#F59E0B' },
-            { label: 'Đã sửa tay',    value: Object.keys(corrections).length,  accent: '#10B981' },
-            { label: 'Chưa xử lý',    value: reviewRows.filter(r => !corrections[r.input?.filename ?? '']).length, accent: '#C8102E' },
+            { label: 'Đã sửa tay',    value: safeResults.filter(r => !!corrections[correctionKey(batch.gradedAt, r.input?.filename ?? '')]).length, accent: '#10B981' },
+            { label: 'Chưa xử lý',    value: reviewRows.filter(r => !corrections[correctionKey(batch.gradedAt, r.input?.filename ?? '')]).length, accent: '#C8102E' },
           ].map(s => (
             <Card key={s.label} style={{ borderTop: `3px solid ${s.accent}` }}>
               <div style={{ fontSize: 10, color: '#6B7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>{s.label}</div>
@@ -509,8 +521,9 @@ export default function ReviewErrorsPage() {
                   </tr>
                 ) : displayRows.map((r, i) => {
                   const filename = r.input?.filename ?? `row-${i}`;
-                  const corr = corrections[filename];
-                  const sc = answerKey ? computeScore((corr?.corrected_answers ?? r.answers) ?? {}, answerKey) : null;
+                  const corr = corrections[correctionKey(batch.gradedAt, filename)];
+                  const { key: akForRow } = resolveAnswerKeyForMaDe(answerKey, getMaDeValue(r.student_info, schema));
+                  const sc = akForRow ? computeScore((corr?.corrected_answers ?? r.answers) ?? {}, akForRow) : null;
                   const info = corr ? { ...r.student_info, ...corr.corrected_student_info } : r.student_info;
                   const warnCount = (r.warnings ?? []).length;
                   const infoKeys = schema.infoFields.map(f => f.key);
@@ -581,7 +594,7 @@ export default function ReviewErrorsPage() {
       {selected && (
         <EditModal
           r={selected}
-          correction={corrections[selected.input?.filename ?? '']}
+          correction={corrections[correctionKey(batch.gradedAt, selected.input?.filename ?? '')]}
           schema={schema}
           onSave={c => handleSave(selected.input?.filename ?? '', c)}
           onReset={() => handleReset(selected.input?.filename ?? '')}

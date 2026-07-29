@@ -6,7 +6,7 @@ import Badge from '../components/common/Badge';
 import PageHeader from '../components/layout/PageHeader';
 import { Download, Eye, AlertTriangle, CheckCircle2, Trash2, ArrowLeft, Key, Database, WifiOff, TableProperties, ChevronDown } from 'lucide-react';
 import type { BatchGradeState, OmrGradeResult, AnswerKeyStore, CorrectionsStore, InfoFieldColumns, TemplateSchema } from '../types/grading';
-import { TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, loadAnswerKey, loadCorrections, saveCorrections, clearCorrections, computeScore, applyCorrection } from '../types/grading';
+import { TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, loadAnswerKey, loadCorrections, saveCorrections, clearCorrections, computeScore, applyCorrection, resolveAnswerKeyForMaDe, isMultiMaDe, correctionKey, getMaDeValue } from '../types/grading';
 import ResultDetailModal from '../components/results/ResultDetailModal';
 import ExcelPreviewModal from '../components/results/ExcelPreviewModal';
 import { resultsApi, examsApi, customFormsApi, hasToken, ApiError, type BatchResultOut, type ResultBatchSaveRequest } from '../services/apiClient';
@@ -200,6 +200,7 @@ function exportCsv(
   results?: OmrGradeResult[],
   tplLabel?: string,
   templateNames?: Map<number, string>,
+  getRowSchema?: (r: OmrGradeResult) => TemplateSchema,
 ) {
   const tplSlug = (tplLabel ?? (batch.templateMode === 'custom'
     ? (batch.customTemplateName ?? 'custom')
@@ -210,7 +211,9 @@ function exportCsv(
     'correct_count','wrong_count','blank_count','score_total','graded_at',
   ];
   const rows = (results ?? batch.results ?? []).map(r => {
-    const sc = answerKey ? computeScore(r.answers ?? {}, answerKey) : null;
+    const rowSchema = getRowSchema ? getRowSchema(r) : VJU_PRESET_SCHEMA;
+    const { key } = resolveAnswerKeyForMaDe(answerKey, getMaDeValue(r.student_info, rowSchema));
+    const sc = key ? computeScore(r.answers ?? {}, key) : null;
     return [
       r.input?.filename ?? '',
       r._error ? 'error' : 'ok',
@@ -245,19 +248,23 @@ function fmtDate(iso: string) {
 
 // ── RealRow ────────────────────────────────────────────────────────────────
 
-function RealRow({ idx, r, merged, corrected, sc, onOpen, onDelete, infoFields, showTemplateCol, templateLabel }: {
+function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, onOpen, onDelete, infoFields, showTemplateCol, templateLabel }: {
   idx:             number;
   r:               OmrGradeResult;
   merged:          { student_info: OmrGradeResult['student_info']; answers: Record<string, string | null> };
   corrected:       boolean;
   sc:              { correct: number; wrong: number; blank: number; total: number } | null;
+  /** true when the exam is split by mã đề and this sheet's mã đề has no matching answer key entered */
+  missingKeyForMaDe?: boolean;
+  /** resolved via getMaDeValue() — the schema-correct field, not necessarily student_info.ma_de */
+  maDeValue?: string | null;
   onOpen:          () => void;
   onDelete:        () => void;
   infoFields:      import('../types/grading').TemplateInfoField[];
   showTemplateCol?: boolean;
   templateLabel?:  string;
 }) {
-  const warn   = hasWarnings(r);
+  const warn   = hasWarnings(r) || !!missingKeyForMaDe;
   const hasIMM = hasInfoMultiMark(r);
   const info   = merged.student_info;
   const ifc    = r.info_field_columns;
@@ -311,12 +318,21 @@ function RealRow({ idx, r, merged, corrected, sc, onOpen, onDelete, infoFields, 
             />
           ))
       }
-      {sc !== null && <>
-        <td style={{ padding: '11px 10px', color: '#065F46', fontWeight: 600 }}>{sc.correct}</td>
-        <td style={{ padding: '11px 10px', color: '#991B1B', fontWeight: 600 }}>{sc.wrong}</td>
-        <td style={{ padding: '11px 10px', color: '#6B7280' }}>{sc.blank}</td>
-        <td style={{ padding: '11px 10px', fontWeight: 800, color: '#1E1E1E', fontSize: 13 }}>{sc.total}</td>
-      </>}
+      {sc !== null ? (
+        <>
+          <td style={{ padding: '11px 10px', color: '#065F46', fontWeight: 600 }}>{sc.correct}</td>
+          <td style={{ padding: '11px 10px', color: '#991B1B', fontWeight: 600 }}>{sc.wrong}</td>
+          <td style={{ padding: '11px 10px', color: '#6B7280' }}>{sc.blank}</td>
+          <td style={{ padding: '11px 10px', fontWeight: 800, color: '#1E1E1E', fontSize: 13 }}>{sc.total}</td>
+        </>
+      ) : missingKeyForMaDe ? (
+        <td colSpan={4} style={{ padding: '11px 10px' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, color: '#CA8A04' }}
+            title="Chưa nhập đáp án cho mã đề này ở trang Answer Key">
+            <AlertTriangle size={12} /> Chưa có đáp án — Đề {maDeValue ?? '?'}
+          </span>
+        </td>
+      ) : null}
       <td style={{ padding: '11px 10px' }} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', gap: 6 }}>
           <button onClick={onOpen}
@@ -616,7 +632,7 @@ export default function ResultsPage() {
     });
     setCorrections(prev => {
       const next = { ...prev };
-      delete next[filename];
+      delete next[correctionKey(batch?.gradedAt, filename)];
       saveCorrections(next);
       return next;
     });
@@ -645,7 +661,7 @@ export default function ResultsPage() {
 
   const safeResults = batch?.results && Array.isArray(batch.results) ? batch.results : [];
   const hasBatch    = safeResults.length > 0;
-  const hasKey      = !!answerKey && Object.keys(answerKey.answers ?? {}).length > 0;
+  const hasKey      = !!answerKey && (Object.keys(answerKey.answers ?? {}).length > 0 || isMultiMaDe(answerKey));
 
   // Build template options from all rows in the current exam
   const templateOptions: TemplateFilterOption[] = (() => {
@@ -694,9 +710,13 @@ export default function ResultsPage() {
   // All rows scored
   const allScoredRows = safeResults.map(r => {
     const filename = r.input?.filename ?? '';
-    const corr     = corrections[filename];
+    const corr     = corrections[correctionKey(batch?.gradedAt, filename)];
     const merged   = applyCorrection(r, corr);
-    return { r, merged, corr, sc: hasKey ? computeScore(merged.answers ?? {}, answerKey!) : null };
+    const maDeValue = getMaDeValue(merged.student_info, resolveRowSchema(r));
+    const { key, missingKeyForMaDe } = hasKey
+      ? resolveAnswerKeyForMaDe(answerKey, maDeValue)
+      : { key: null, missingKeyForMaDe: false };
+    return { r, merged, corr, sc: key ? computeScore(merged.answers ?? {}, key) : null, missingKeyForMaDe, maDeValue };
   });
 
   // Rows visible after template filter
@@ -761,7 +781,7 @@ export default function ResultsPage() {
                   alert('Vui lòng chọn một mẫu phiếu cụ thể trước khi xuất CSV.');
                   return;
                 }
-                exportCsv(batch, answerKey, visibleScoredRows.map(x => x.r), selectedTemplateOpt?.label, fetchedTemplateNames);
+                exportCsv(batch, answerKey, visibleScoredRows.map(x => x.r), selectedTemplateOpt?.label, fetchedTemplateNames, resolveRowSchema);
               }}>
               Xuất CSV
             </Button>
@@ -959,10 +979,12 @@ export default function ResultsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleScoredRows.map(({ r, merged, corr, sc }, i) => (
+                  {visibleScoredRows.map(({ r, merged, corr, sc, missingKeyForMaDe, maDeValue }, i) => (
                     <RealRow
                       key={r.db_id ?? r.input?.filename ?? i}
                       idx={i + 1} r={r} merged={merged} corrected={!!corr} sc={sc}
+                      missingKeyForMaDe={missingKeyForMaDe}
+                      maDeValue={maDeValue}
                       onOpen={() => setModalRow(r)}
                       onDelete={() => handleDeleteRow(r.input?.filename ?? '', r.db_id)}
                       infoFields={activeInfoFields}
@@ -1000,7 +1022,7 @@ export default function ResultsPage() {
       {modalRow && (
         <ResultDetailModal
           r={modalRow}
-          correction={corrections[modalRow.input?.filename ?? '']}
+          correction={corrections[correctionKey(batch?.gradedAt, modalRow.input?.filename ?? '')]}
           answerKey={answerKey}
           onClose={() => setModalRow(null)}
           templateSchema={resolveRowSchema(modalRow)}

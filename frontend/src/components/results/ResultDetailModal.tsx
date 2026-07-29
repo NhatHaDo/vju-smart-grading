@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import type { OmrGradeResult, AnswerKeyStore, ManualCorrection, InfoFieldColumn, TemplateSchema, TemplateAnswerSection, OmrWarning } from '../../types/grading';
-import { VJU_PRESET_SCHEMA, computeScore } from '../../types/grading';
+import { VJU_PRESET_SCHEMA, computeScore, resolveAnswerKeyForMaDe, getMaDeValue } from '../../types/grading';
 import { buildSchemaFromAnswerKeys } from '../../utils/templateSchema';
 import { getInfoFieldValue } from '../../utils/resultMapping';
 import SheetImageViewer from './SheetImageViewer';
@@ -99,7 +99,14 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
   const warnList   = r.warnings ?? [];
   const hasWarning = warnList.length > 0;
   const debug      = r.debug ?? {};
-  const sc         = answerKey ? computeScore(answers, answerKey) : null;
+  const maDeValue = getMaDeValue(student_info, schema);
+  const { key: rowAnswerKey, missingKeyForMaDe } = resolveAnswerKeyForMaDe(answerKey, maDeValue);
+  const sc         = rowAnswerKey ? computeScore(answers, rowAnswerKey) : null;
+  // A key can exist for this mã đề but only have some questions filled in —
+  // those un-filled questions show as grey/"no-key" per-question below, which
+  // looks like a glitch unless we spell out why (see AnswerKeyPage "Đề X" tab).
+  const keyFilledCount = rowAnswerKey ? allAnswerLabels.filter(l => rowAnswerKey.answers[l]).length : 0;
+  const isPartialKey   = !!rowAnswerKey && allAnswerLabels.length > 0 && keyFilledCount < allAnswerLabels.length;
 
   // Turns a raw backend warning ({field:"tn27", type:"multi_mark", candidates:["C","D"]})
   // into a plain-Vietnamese sentence a lecturer can act on without knowing the
@@ -136,8 +143,8 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
     const warnQ = warnList.find(w => w.field === lbl);
     if (warnQ) return 'warn';
     const ans = answers[lbl];
-    if (!answerKey) return 'no-key';
-    const key = answerKey.answers[lbl];
+    if (!rowAnswerKey) return 'no-key';
+    const key = rowAnswerKey.answers[lbl];
     if (!key) return 'no-key';
     if (!ans) return 'blank';
     return ans === key ? 'correct' : 'wrong';
@@ -190,16 +197,25 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                 )}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 18px' }}>
-                {schema.infoFields.map(field => (
-                  <div key={field.key} style={{ fontSize: 12 }}>
-                    <span style={{ color: 'rgba(255,255,255,0.6)' }}>{field.displayName}: </span>
-                    <InfoFieldValue
-                      label={field.displayName}
-                      raw={getInfoFieldValue(student_info, r.info_field_columns, field) || student_info?.[field.key] || null}
-                      columns={r.info_field_columns?.[field.key]}
-                    />
-                  </div>
-                ))}
+                {schema.infoFields.map(field => {
+                  // Once a field has been manually corrected, the per-column digit
+                  // breakdown below (yellow-highlighted ambiguous digits etc.) still
+                  // reflects the ORIGINAL OMR read — corrections only patch the flat
+                  // string, not that column-by-column data. Showing the raw breakdown
+                  // here would silently ignore the correction and display stale data,
+                  // so once corrected we just show the plain corrected string instead.
+                  const isFieldCorrected = correction?.corrected_student_info?.[field.key] !== undefined;
+                  return (
+                    <div key={field.key} style={{ fontSize: 12 }}>
+                      <span style={{ color: 'rgba(255,255,255,0.6)' }}>{field.displayName}: </span>
+                      <InfoFieldValue
+                        label={field.displayName}
+                        raw={getInfoFieldValue(student_info, r.info_field_columns, field) || student_info?.[field.key] || null}
+                        columns={isFieldCorrected ? undefined : r.info_field_columns?.[field.key]}
+                      />
+                    </div>
+                  );
+                })}
               </div>
             </div>
             <button
@@ -229,11 +245,21 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                   <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.val}</div>
                 </div>
               )) : (
-                <div style={{ gridColumn: '1/-1', fontSize: 12, color: '#9CA3AF', textAlign: 'center', padding: '10px 0' }}>
-                  Chưa có Answer Key
+                <div style={{ gridColumn: '1/-1', fontSize: 12, color: missingKeyForMaDe ? '#CA8A04' : '#9CA3AF', textAlign: 'center', padding: '10px 0' }}>
+                  {missingKeyForMaDe
+                    ? `Chưa nhập đáp án cho Mã đề ${maDeValue ?? '?'} ở trang Answer Key`
+                    : 'Chưa có Answer Key'}
                 </div>
               )}
             </div>
+
+            {isPartialKey && (
+              <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 10, padding: '8px 12px', fontSize: 11.5, color: '#92400E', lineHeight: 1.5 }}>
+                Đề <strong>{maDeValue ?? '?'}</strong> mới nhập <strong>{keyFilledCount}/{allAnswerLabels.length}</strong> câu ở Answer Key —
+                các câu chưa nhập hiện màu <strong>xám</strong> bên dưới (chưa chấm được).
+                Vào Answer Key → tab Đề {maDeValue} để nhập nốt.
+              </div>
+            )}
 
             {sc && (
               <div style={{ background: '#F9FAFB', borderRadius: 10, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
