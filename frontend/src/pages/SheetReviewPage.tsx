@@ -5,7 +5,7 @@ import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import PageHeader from '../components/layout/PageHeader';
 import type { TemplateVariant, ImageSource, TemplateSchema } from '../types/grading';
-import { TEMPLATE_VARIANT_LABEL } from '../types/grading';
+import { TEMPLATE_VARIANT_LABEL, saveLastUsedTemplate, PINNED_TEMPLATES } from '../types/grading';
 import { examsApi, customFormsApi } from '../services/apiClient';
 import type { CustomFormMeta } from '../services/apiClient';
 import type { ExamOut } from '../types/exam';
@@ -16,27 +16,8 @@ const SBD_TYPES: { label: string; variant: TemplateVariant }[] = [
   { label: 'SBD 8 số', variant: 'sbd8' },
 ];
 
-/**
- * "Pinned" custom templates — shown as a fixed one-click button right next to
- * the SBD 4/8 radios (no need to open the "Custom template" tab), while still
- * grading through the exact same template_id-based path as the Custom
- * template flow underneath. These are installed via
- * backend/scripts/import_shared_template.py and flagged is_default=True so
- * any logged-in account can read them (see _get_readable_or_404 in
- * custom_forms.py).
- *
- * The DB id is NOT portable across environments — every database assigns ids
- * independently, so "id=2" might be this template on production but a
- * completely unrelated one locally (this bit a real test session: the pinned
- * button silently loaded a 5-question template someone had made locally that
- * happened to also be id=2). Configurable via VITE_PINNED_TEMPLATE_40_ID so
- * each environment's .env file points at whatever id that script printed
- * there; falls back to production's id (2) if the env var isn't set.
- */
-const PINNED_TEMPLATE_40_ID = Number(import.meta.env.VITE_PINNED_TEMPLATE_40_ID ?? 2);
-const PINNED_TEMPLATES: { label: string; id: number }[] = [
-  { label: 'Mẫu 40 câu TN + Đúng/Sai', id: PINNED_TEMPLATE_40_ID },
-];
+// PINNED_TEMPLATES now lives in types/grading.ts (shared with AnswerKeyPage's
+// own template picker so both pages offer the exact same quick options).
 
 const SOURCES: { label: string; value: ImageSource }[] = [
   { label: 'Tự động phát hiện',                value: 'auto' },
@@ -142,6 +123,10 @@ export default function SheetReviewPage() {
   useEffect(() => {
     if (effectiveTemplateMode !== 'custom' || effectiveCustomId === null) {
       setCustomTemplateSchema(null);
+      // Remember "VJU preset" as the last-used template too, so AnswerKeyPage
+      // (opened directly, not via this upload flow) doesn't keep re-showing a
+      // stale custom template's schema after the user switches back to VJU.
+      if (effectiveTemplateMode !== 'custom') saveLastUsedTemplate({ mode: 'vju', id: null, name: null });
       return;
     }
     // 2026-07-28: this used to check sessionStorage first and reuse a cached
@@ -163,6 +148,10 @@ export default function SheetReviewPage() {
         setCustomTemplateSchema(schema);
         // Cache for AnswerKeyPage fallback — scoped to this template's id.
         try { sessionStorage.setItem('vju_template_schema', JSON.stringify({ id: effectiveCustomId, schema })); } catch { /* ignore */ }
+        // Durable (localStorage) record of "last template used" — lets
+        // AnswerKeyPage restore the right schema when opened directly from
+        // the sidebar instead of always defaulting to VJU preset.
+        saveLastUsedTemplate({ mode: 'custom', id: effectiveCustomId, name: detail.name ?? null });
       })
       .catch(() => setCustomTemplateSchema(null))
       .finally(() => setSchemaLoading(false));

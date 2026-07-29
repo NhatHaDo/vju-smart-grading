@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { normalizeUploadFile } from '../utils/fileConversion';
 import Card from '../components/common/Card';
@@ -22,7 +22,17 @@ import {
   clearAnswerKey,
   schemaHasMaDe,
   isMultiMaDe,
+  loadLastUsedTemplate,
+  type TemplateStoreKey,
+  templateStoreKeyFor,
+  loadAnswerKeyDraft,
+  saveAnswerKeyDraft,
+  clearAnswerKeyDraft,
+  PINNED_TEMPLATES,
 } from '../types/grading';
+import { customFormsApi } from '../services/apiClient';
+import type { CustomFormMeta } from '../services/apiClient';
+import { buildSchemaFromDetail } from '../utils/templateSchema';
 
 const CHOICES = ['—', 'A', 'B', 'C', 'D'];
 // 2026-07-29: this used to be hardcoded to 'http://localhost:8000/...' —
@@ -83,11 +93,69 @@ export default function AnswerKeyPage() {
   const customTemplateId:   number | null = isGradingMode ? (navState.customTemplateId   ?? null) : null;
   const customTemplateName: string | null = isGradingMode ? (navState.customTemplateName ?? null) : null;
 
+  // 2026-07-29: when Answer Key is opened directly (sidebar link, not via
+  // Upload → chấm phiếu), there's no navState at all, so the resolution
+  // below used to just hardcode VJU_PRESET_SCHEMA — showing the wrong
+  // question list for anyone actually using a custom template, forcing a
+  // detour through the upload flow just to edit answers. Now it offers an
+  // explicit dropdown (VJU preset + every custom template) so the user can
+  // pick any one, defaulting to whichever they used most recently. Each
+  // template's in-progress answers are kept in a separate draft slot (see
+  // loadAnswerKeyDraft/saveAnswerKeyDraft) so switching between them in this
+  // dropdown never loses or overwrites another template's work — only
+  // "Lưu Answer Key" makes a template's answers the one actually used for
+  // grading (unchanged from before).
+  const [directTemplateKey, setDirectTemplateKey] = useState<TemplateStoreKey>(() => {
+    if (isGradingMode) return 'vju';
+    const last = loadLastUsedTemplate();
+    return last ? templateStoreKeyFor(last.mode, last.id) : 'vju';
+  });
+  const [directSchema, setDirectSchema] = useState<TemplateSchema | null>(null);
+  const [directSchemaLoading, setDirectSchemaLoading] = useState(false);
+  // Which picker tab is showing — mirrors the Upload page's "Mẫu phiếu VJU" /
+  // "Custom template" tabs so both pages feel the same. Purely a UI concern;
+  // `directTemplateKey` (above) is what actually drives the loaded schema.
+  const [directTab, setDirectTab] = useState<'vju' | 'custom'>(() => {
+    if (isGradingMode) return 'vju';
+    const last = loadLastUsedTemplate();
+    if (!last || last.mode !== 'custom' || last.id == null) return 'vju';
+    // A pinned template (e.g. "Mẫu 40") is shown under the VJU tab, just like Upload.
+    return PINNED_TEMPLATES.some(pt => pt.id === last.id) ? 'vju' : 'custom';
+  });
+  const [customFormOptions, setCustomFormOptions] = useState<CustomFormMeta[]>([]);
+  const [customFormOptionsLoading, setCustomFormOptionsLoading] = useState(false);
+
+  // Load the full custom-forms list — only needed outside the grading flow,
+  // for the "Custom template" tab's dropdown.
+  useEffect(() => {
+    if (isGradingMode) return;
+    setCustomFormOptionsLoading(true);
+    customFormsApi.list()
+      .then(({ forms }) => setCustomFormOptions(forms))
+      .catch(() => setCustomFormOptions([]))
+      .finally(() => setCustomFormOptionsLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Fetch the schema for whichever template is currently selected in direct mode.
+  useEffect(() => {
+    if (isGradingMode) return;
+    if (directTemplateKey === 'vju') { setDirectSchema(null); return; }
+    const id = Number(directTemplateKey.slice('custom:'.length));
+    if (!Number.isFinite(id)) { setDirectSchema(null); return; }
+    setDirectSchemaLoading(true);
+    customFormsApi.get(id)
+      .then(detail => setDirectSchema(buildSchemaFromDetail(detail)))
+      .catch(() => setDirectSchema(null))
+      .finally(() => setDirectSchemaLoading(false));
+  }, [directTemplateKey, isGradingMode]);
+
   // Resolve template schema:
   // 1. navState.templateSchema (passed from SheetReviewPage) — primary
   // 2. sessionStorage (set by TemplatePage.handleLoad) — fallback
   // 3. null for custom (never fall back to VJU!) — show error
-  // 4. VJU_PRESET_SCHEMA for vju mode
+  // 4. directSchema — opened directly, dropdown-selected template is custom
+  // 5. VJU_PRESET_SCHEMA otherwise
   const templateSchema: TemplateSchema | null = (() => {
     if (templateMode === 'custom') {
       const fromState   = isGradingMode ? (navState?.templateSchema ?? null) : null;
@@ -100,6 +168,7 @@ export default function AnswerKeyPage() {
       });
       return resolved;
     }
+    if (!isGradingMode && directTemplateKey !== 'vju') return directSchema;
     return VJU_PRESET_SCHEMA;
   })();
   const activeSections = templateSchema?.answerSections ?? [];
@@ -111,7 +180,17 @@ export default function AnswerKeyPage() {
     .filter(s => s.inputType !== 'text' && (!s.options || (s.options.length === 4 && s.options.every((o, i) => o === ['A','B','C','D'][i]))))
     .flatMap(s => s.labels);
 
-  const existing = loadAnswerKey();
+  /** Draft for `key` if one was saved from the editor, else the single legacy
+   *  "active" answer key when `key` is the VJU preset (backward compat for
+   *  users who saved VJU answers before this per-template drafting existed). */
+  function loadStoreForKey(key: TemplateStoreKey): AnswerKeyStore | null {
+    const draft = loadAnswerKeyDraft(key);
+    if (draft) return draft;
+    if (key === 'vju') return loadAnswerKey();
+    return null;
+  }
+
+  const existing = isGradingMode ? loadAnswerKey() : loadStoreForKey(directTemplateKey);
   const canSplitByMaDe = schemaHasMaDe(templateSchema);
 
   const [answers,   setAnswers]   = useState<Record<string, string>>(() => existing?.answers ?? {});
@@ -179,6 +258,32 @@ export default function AnswerKeyPage() {
     return { answers, scoring, updatedAt: now };
   };
 
+  // Re-populate all answer-editing state whenever the dropdown-selected
+  // template changes (direct-open mode only — grading mode's answers are
+  // fixed to whatever template Upload passed in and never switch).
+  useEffect(() => {
+    if (isGradingMode) return;
+    const store = loadStoreForKey(directTemplateKey);
+    setAnswers(store?.answers ?? {});
+    setScoring(store?.scoring ?? { ...DEFAULT_SCORING });
+    setSavedAt(store?.updatedAt ?? null);
+    setMultiMaDe(isMultiMaDe(store));
+    setMaDeCodes(store?.byMaDe ? Object.keys(store.byMaDe) : []);
+    setActiveMaDe(store?.byMaDe ? (Object.keys(store.byMaDe)[0] ?? '') : '');
+    const init: Record<string, Record<string, string>> = {};
+    if (store?.byMaDe) for (const [code, set] of Object.entries(store.byMaDe)) init[code] = { ...set.answers };
+    setAnswersByMaDe(init);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directTemplateKey, isGradingMode]);
+
+  /** Dropdown "Mẫu phiếu" onChange — saves the outgoing template's in-progress
+   *  edits as its own draft first, so switching back later restores them. */
+  const handleTemplateKeyChange = (newKey: TemplateStoreKey) => {
+    if (newKey === directTemplateKey) return;
+    saveAnswerKeyDraft(directTemplateKey, buildStore());
+    setDirectTemplateKey(newKey);
+  };
+
   // ── Mã đề tab management ─────────────────────────────────────────────────
   const startSplitByMaDe = () => {
     const code = (window.prompt('Nhập mã đề hiện tại (VD: 101) — đáp án đã nhập ở trên sẽ chuyển vào đề này:') ?? '').trim();
@@ -224,7 +329,13 @@ export default function AnswerKeyPage() {
 
   const handleSave = () => {
     const store = buildStore();
+    // Always write the single "active" key — every scoring/results/analytics
+    // page reads this one, so saving here is what actually makes this
+    // template's answers the one used for grading (unchanged from before).
     saveAnswerKey(store);
+    // Also keep this template's own draft in sync, so switching away and
+    // back via the dropdown shows the just-saved answers, not a stale draft.
+    if (!isGradingMode) saveAnswerKeyDraft(directTemplateKey, store);
     setSavedAt(store.updatedAt);
     setSaveFlash(true);
     setTimeout(() => setSaveFlash(false), 2000);
@@ -233,6 +344,7 @@ export default function AnswerKeyPage() {
   const handleClear = () => {
     if (!confirm('Xóa toàn bộ answer key?')) return;
     clearAnswerKey();
+    if (!isGradingMode) clearAnswerKeyDraft(directTemplateKey);
     setAnswers({});
     setScoring({ ...DEFAULT_SCORING });
     setSavedAt(null);
@@ -453,6 +565,108 @@ export default function AnswerKeyPage() {
       />
 
       <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+        {/* Opened directly (not via Upload flow): pick which template's answer key to edit.
+            Mirrors the Upload page's own picker (same 2 tabs + pinned "Mẫu 40" option) so
+            both pages feel consistent, instead of a flat dropdown listing every custom
+            template ever created (confusing once there are several old/test ones). */}
+        {!isGradingMode && (
+          <Card>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#C8102E', marginBottom: 12 }}>Mẫu phiếu</div>
+
+            <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+              {([
+                { value: 'vju' as const,    label: 'Mẫu phiếu VJU' },
+                { value: 'custom' as const, label: 'Custom template' },
+              ]).map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setDirectTab(opt.value)}
+                  style={{
+                    padding: '7px 16px', borderRadius: 9999, fontSize: 13, fontWeight: 600,
+                    border: `1.5px solid ${directTab === opt.value ? '#C8102E' : '#E5E7EB'}`,
+                    background: directTab === opt.value ? '#FEF2F2' : '#fff',
+                    color: directTab === opt.value ? '#C8102E' : '#374151',
+                    cursor: 'pointer', fontFamily: 'inherit',
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            {directTab === 'vju' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: directTemplateKey === 'vju' ? 700 : 400, color: directTemplateKey === 'vju' ? '#C8102E' : '#374151' }}>
+                  <input
+                    type="radio" name="direct-template"
+                    checked={directTemplateKey === 'vju'}
+                    onChange={() => handleTemplateKeyChange('vju')}
+                    style={{ accentColor: '#C8102E' }}
+                  />
+                  VJU mặc định
+                </label>
+                {PINNED_TEMPLATES.map(pt => {
+                  const key = templateStoreKeyFor('custom', pt.id);
+                  return (
+                    <label key={pt.id} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: directTemplateKey === key ? 700 : 400, color: directTemplateKey === key ? '#C8102E' : '#374151' }}>
+                      <input
+                        type="radio" name="direct-template"
+                        checked={directTemplateKey === key}
+                        onChange={() => handleTemplateKeyChange(key)}
+                        style={{ accentColor: '#C8102E' }}
+                      />
+                      {pt.label}
+                    </label>
+                  );
+                })}
+                {directSchemaLoading && (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: '#6B7280' }}>
+                    <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                    Đang tải…
+                  </span>
+                )}
+              </div>
+            )}
+
+            {directTab === 'custom' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {customFormOptionsLoading ? (
+                  <div style={{ fontSize: 13, color: '#9CA3AF' }}>Đang tải custom template…</div>
+                ) : customFormOptions.length === 0 ? (
+                  <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#92400E' }}>
+                    Chưa có custom template nào.
+                  </div>
+                ) : (
+                  <>
+                    <select
+                      value={directTemplateKey.startsWith('custom:') ? directTemplateKey.slice('custom:'.length) : ''}
+                      onChange={e => handleTemplateKeyChange(templateStoreKeyFor('custom', Number(e.target.value)))}
+                      style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1.5px solid #E5E7EB', fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff' }}
+                    >
+                      <option value="" disabled>— Chọn custom template —</option>
+                      {customFormOptions.map(f => (
+                        <option key={f.id} value={f.id}>
+                          {f.name}{f.area_count > 0 ? ` — ${f.area_count} vùng OMR` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {directSchemaLoading && (
+                      <span style={{ fontSize: 12.5, color: '#6B7280', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                        Đang tải schema…
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            <div style={{ marginTop: 12, fontSize: 12, color: '#9CA3AF' }}>
+              Mỗi mẫu có đáp án riêng — đổi mẫu không mất đáp án của mẫu khác. "Lưu Answer Key" sẽ dùng đáp án của mẫu đang chọn để chấm.
+            </div>
+          </Card>
+        )}
 
         {/* Custom template schema missing — error banner */}
         {isGradingMode && templateMode === 'custom' && !templateSchema && (

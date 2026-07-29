@@ -51,6 +51,19 @@ export const TEMPLATE_VARIANT_LABEL: Record<TemplateVariant, string> = {
   sbd8: 'Mẫu phiếu VJU - SBD 8 số',
 };
 
+/**
+ * "Pinned" custom templates — shown as a quick one-click option in both the
+ * Upload page's template picker and the Answer Key page's template picker
+ * (2026-07-29: shared here instead of being duplicated in each page, so the
+ * two pickers can't drift apart). See SheetReviewPage's original comment for
+ * the id-portability caveat: the DB id is NOT the same across environments,
+ * hence the env var with a production-id fallback.
+ */
+export const PINNED_TEMPLATE_40_ID = Number(import.meta.env.VITE_PINNED_TEMPLATE_40_ID ?? 2);
+export const PINNED_TEMPLATES: { label: string; id: number }[] = [
+  { label: 'Mẫu 40 câu TN + Đúng/Sai', id: PINNED_TEMPLATE_40_ID },
+];
+
 export interface OmrStudentInfo {
   cccd?:    string | null;
   sbd?:     string | null;
@@ -296,6 +309,87 @@ export function isMultiMaDe(store: AnswerKeyStore | null): boolean {
 export function schemaHasMaDe(schema: TemplateSchema | null | undefined): boolean {
   if (!schema) return false;
   return schema.infoFields.some(f => f.key === 'ma_de' || /mã\s*đề/i.test(f.displayName));
+}
+
+// ── Last-used template (2026-07-29) ────────────────────────────────────────
+// AnswerKeyPage previously had no idea which custom template the user was
+// actually working with unless it was opened via the "Upload → chấm phiếu"
+// flow (which passes the schema through router navigation state). Opening
+// Answer Key directly from the sidebar always silently fell back to
+// VJU_PRESET_SCHEMA, showing the wrong question list for anyone using a
+// custom template — the user then had to go back through the upload flow
+// just to get the right schema loaded, purely to edit answers. Persisted
+// (not sessionStorage — must survive opening a fresh tab/browser restart)
+// so AnswerKeyPage can restore the right schema on its own.
+export interface LastUsedTemplate {
+  mode: 'vju' | 'custom';
+  id:   number | null;
+  name: string | null;
+}
+
+const LAST_TEMPLATE_KEY = 'vju_last_template';
+
+export function saveLastUsedTemplate(t: LastUsedTemplate): void {
+  try { localStorage.setItem(LAST_TEMPLATE_KEY, JSON.stringify(t)); } catch { /* ignore */ }
+}
+
+export function loadLastUsedTemplate(): LastUsedTemplate | null {
+  try {
+    const raw = localStorage.getItem(LAST_TEMPLATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as LastUsedTemplate;
+    if (parsed.mode !== 'vju' && parsed.mode !== 'custom') return null;
+    return parsed;
+  } catch { return null; }
+}
+
+// ── Per-template answer key drafts (2026-07-29) ────────────────────────────
+// AnswerKeyPage only ever had ONE "live" answer key (AK_LS_KEY below) shared
+// across every template — every scoring/results/analytics page reads that
+// single key, matching the reality that only one template's answers can be
+// "active for grading" at a time. That's fine for grading, but it meant
+// switching templates in the Answer Key editor to work on a different one
+// would silently overwrite whatever was there on save. These functions add a
+// separate per-template DRAFT slot purely for the editor UI: switching the
+// template dropdown saves/restores each template's in-progress answers
+// independently, with zero risk to the single active key everything else
+// reads — "Lưu Answer Key" still writes to AK_LS_KEY (via saveAnswerKey) to
+// make that template's answers the one actually used for grading, exactly
+// like before, in addition to updating its own draft slot.
+export type TemplateStoreKey = string; // 'vju' | `custom:${id}`
+
+export function templateStoreKeyFor(mode: 'vju' | 'custom', id: number | null): TemplateStoreKey {
+  return mode === 'custom' && id != null ? `custom:${id}` : 'vju';
+}
+
+const AK_DRAFTS_KEY = 'vju_answer_key_drafts';
+
+function loadAnswerKeyDraftsMap(): Record<string, AnswerKeyStore> {
+  try {
+    const raw = localStorage.getItem(AK_DRAFTS_KEY);
+    if (raw) return JSON.parse(raw) as Record<string, AnswerKeyStore>;
+  } catch { /* ignore */ }
+  return {};
+}
+
+function saveAnswerKeyDraftsMap(map: Record<string, AnswerKeyStore>): void {
+  try { localStorage.setItem(AK_DRAFTS_KEY, JSON.stringify(map)); } catch { /* ignore */ }
+}
+
+export function loadAnswerKeyDraft(templateKey: TemplateStoreKey): AnswerKeyStore | null {
+  return loadAnswerKeyDraftsMap()[templateKey] ?? null;
+}
+
+export function saveAnswerKeyDraft(templateKey: TemplateStoreKey, store: AnswerKeyStore): void {
+  const map = loadAnswerKeyDraftsMap();
+  map[templateKey] = store;
+  saveAnswerKeyDraftsMap(map);
+}
+
+export function clearAnswerKeyDraft(templateKey: TemplateStoreKey): void {
+  const map = loadAnswerKeyDraftsMap();
+  delete map[templateKey];
+  saveAnswerKeyDraftsMap(map);
 }
 
 /**
