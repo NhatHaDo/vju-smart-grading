@@ -13,6 +13,7 @@ interface PageHeaderProps {
 export default function PageHeader({ title, subtitle, actions }: PageHeaderProps) {
   return (
     <div
+      className="page-header-row"
       style={{
         background: '#fff',
         borderBottom: '1px solid #E5E7EB',
@@ -31,7 +32,11 @@ export default function PageHeader({ title, subtitle, actions }: PageHeaderProps
           <p style={{ margin: '3px 0 0', fontSize: 13, color: '#6B7280' }}>{subtitle}</p>
         )}
       </div>
-      {actions && <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>{actions}</div>}
+      {actions && (
+        <div className="page-header-actions" style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
+          {actions}
+        </div>
+      )}
     </div>
   );
 }

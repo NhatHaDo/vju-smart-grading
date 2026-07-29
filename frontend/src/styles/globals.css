@@ -183,3 +183,40 @@ body {
   .dash-stat-grid    { grid-template-columns: 1fr 1fr !important; gap: 10px !important; }
   .dash-subject-grid { grid-template-columns: 1fr !important; }
 }
+
+/* ─── Generic horizontal-scroll table wrapper — mobile ────────────────────── */
+@media (max-width: 768px) {
+  .table-scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .table-scroll-x table { min-width: 640px; }
+}
+
+/* ─── Top red bar (Header.tsx) — mobile ────────────────────────────────────── */
+@media (max-width: 640px) {
+  .app-header-user-text { display: none !important; }
+}
+@media (max-width: 480px) {
+  .app-header-logout-btn { padding: 5px 10px !important; font-size: 0 !important; }
+  .app-header-logout-btn::after { content: '⏻'; font-size: 15px; }
+}
+
+/* ─── PageHeader (title + action buttons) — mobile ─────────────────────────
+   Previously the actions row (Xuất Excel / Xoá kết quả / ...) never wrapped
+   or scrolled — on a narrow screen the flex layout just squeezed the title
+   column down toward 0 width instead, causing "Kết quả & Export" to wrap
+   one character per line. Now: stack title above actions, and let the
+   actions row scroll sideways instead of crushing the title. */
+@media (max-width: 768px) {
+  .page-header-row {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    padding: 14px 16px !important;
+    gap: 10px !important;
+  }
+  .page-header-row h1 { font-size: 17px !important; }
+  .page-header-actions {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
+  }
+  .page-header-actions > * { flex-shrink: 0; }
+}

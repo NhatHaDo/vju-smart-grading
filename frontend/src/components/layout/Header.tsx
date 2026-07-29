@@ -9,12 +9,13 @@ export default function Header() {
   const initials = (user?.name ?? user?.email ?? 'GV').slice(0, 2).toUpperCase();
 
   return (
-    <header style={{
+    <header className="app-header" style={{
       height: 64, background: '#C8102E',
       display: 'flex', alignItems: 'center',
       padding: '0 16px', gap: 12, flexShrink: 0,
       position: 'sticky', top: 0, zIndex: 100,
       boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+      overflow: 'hidden',
     }}>
       {/* Logo ngang — không crop, white trên nền đỏ */}
       <img
@@ -31,20 +32,20 @@ export default function Header() {
       <div style={{ width: 1, height: 32, background: 'rgba(255,255,255,0.35)', flexShrink: 0 }} />
 
       {/* Title */}
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div className="app-header-title" style={{ flex: 1, minWidth: 0 }}>
         <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           Hệ thống chấm phiếu thi trắc nghiệm tự động
         </div>
-        <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 10, letterSpacing: '0.05em' }}>
+        <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 10, letterSpacing: '0.05em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           VNU VIETNAM JAPAN UNIVERSITY
         </div>
       </div>
 
       {/* User */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-        <div style={{ textAlign: 'right', lineHeight: 1.3 }}>
-          <div style={{ color: '#fff', fontWeight: 600, fontSize: 13 }}>{user?.name ?? 'Giảng viên'}</div>
-          {user?.email && <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: 10 }}>{user.email}</div>}
+        <div className="app-header-user-text" style={{ textAlign: 'right', lineHeight: 1.3 }}>
+          <div style={{ color: '#fff', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>{user?.name ?? 'Giảng viên'}</div>
+          {user?.email && <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: 10, whiteSpace: 'nowrap' }}>{user.email}</div>}
         </div>
         <div style={{
           width: 34, height: 34, borderRadius: '50%',
@@ -54,6 +55,7 @@ export default function Header() {
           color: '#fff', fontWeight: 800, fontSize: 13, flexShrink: 0,
         }}>{initials}</div>
         <button onClick={logout}
+          className="app-header-logout-btn"
           style={{
             background: 'none', border: '1.5px solid rgba(255,255,255,0.55)',
             borderRadius: 9999, color: '#fff', padding: '5px 14px',
