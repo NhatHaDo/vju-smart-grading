@@ -59,10 +59,22 @@ const TAB_META: TabMeta[] = [
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+// `path` from the backend's `debug.*_path` fields can be an absolute
+// filesystem path (e.g. production: "/home/scoring/vju-smart-grading/
+// backend/outputs/debug_overlays/xxx.jpg") or a relative one (local dev,
+// when OMR_OUTPUT_DIR/OMR_UPLOAD_DIR are set to "./outputs" / "./uploads").
+// Only the part from "outputs/" or "uploads/" onward is an actual route the
+// server exposes (see app.mount("/outputs", ...) / app.mount("/uploads",
+// ...) in main.py) — blindly prepending BACKEND to the raw path worked by
+// coincidence locally (relative paths) but broke in production (absolute
+// paths). Same fix as OverlayLink() in OmrDebugPage.tsx.
 function imgUrl(path: string | null | undefined): string | null {
   if (!path) return null;
   if (path.startsWith('http')) return path;
-  return `${BACKEND}/${path.replace(/^\//, '')}`;
+  const norm = path.replace(/\\/g, '/');
+  const idx  = Math.max(norm.lastIndexOf('outputs/'), norm.lastIndexOf('uploads/'));
+  const relative = idx >= 0 ? norm.slice(idx) : norm.replace(/^\//, '');
+  return `${BACKEND}/${relative}`;
 }
 
 function zoomBtnStyle(active: boolean): React.CSSProperties {
