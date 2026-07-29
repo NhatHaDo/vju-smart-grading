@@ -102,6 +102,28 @@ def _get_owned_or_404(template_id: int, user: User, repo: TemplateRepository):
     return tpl
 
 
+def _get_readable_or_404(template_id: int, user: User, repo: TemplateRepository):
+    """Like _get_owned_or_404, but also allows *read* access to a template
+    flagged `is_default=True` regardless of who owns it.
+
+    2026-07-29: added for "pinned" custom templates (e.g. a shared VJU sheet
+    layout surfaced as a one-click button on the Upload page — see
+    PINNED_TEMPLATES in SheetReviewPage.tsx). Those need to be gradeable by
+    *any* logged-in account, not just the account that originally drew the
+    template. Only the GET (read) endpoint uses this relaxed check —
+    rename/delete/duplicate still go through the strict owner-only
+    `_get_owned_or_404`, so a shared template can't be edited or removed by
+    someone who doesn't own it.
+    """
+    tpl = repo.get_custom_by_id_and_owner(template_id, user.id)
+    if tpl is not None:
+        return tpl
+    tpl = repo.get_by_id(template_id)
+    if tpl is not None and tpl.type == "custom" and tpl.is_default:
+        return tpl
+    raise HTTPException(404, "Không tìm thấy custom template")
+
+
 def _extract_info_fields(areas: list[dict]) -> list[dict]:
     """Return non-answer (INT info) fields from an areas list."""
     result = []
@@ -176,8 +198,13 @@ def get_custom_form(
     db:          Session = Depends(get_db),
     user:        User    = Depends(get_current_user),
 ):
-    """Return areas + compiled template for a custom form."""
-    tpl = _get_owned_or_404(template_id, user, TemplateRepository(db))
+    """Return areas + compiled template for a custom form.
+
+    Allows read access to templates owned by the caller, OR templates
+    flagged `is_default=True` (shared "pinned" templates — see
+    _get_readable_or_404 docstring).
+    """
+    tpl = _get_readable_or_404(template_id, user, TemplateRepository(db))
 
     areas: list = []
     if tpl.areas_path and Path(tpl.areas_path).exists():
