@@ -55,15 +55,15 @@ backend/data/uploads/
 backend/data/outputs/
 
 # Debug artifacts
-debug/
-debug_*/
-*_debug.*
-*_overlay.*
-*_aligned.*
-*_warnings.*
-*_marked_only.*
-*_means.json
-*_preview.*
+# 2026-07-29: the old broad "*_overlay.*" suffix rule below matched
+# app/core/omr/debug_overlay.py by accident (filename ends in "_overlay.py")
+# and silently excluded that real source file from git for who knows how
+# long — engine.py's try/except ModuleNotFoundError fallback then quietly
+# disabled ALL debug overlay image generation in production with zero error
+# surfaced anywhere. These patterns are redundant anyway: the actual
+# generated debug images live under backend/outputs/ and backend/uploads/,
+# which are already ignored as whole directories above. Scoping remaining
+# rules to image/json extensions (never .py) so this can't happen again.
 calibrate_*.jpg
 calibrate_*.png
 auto_crop_test.*
