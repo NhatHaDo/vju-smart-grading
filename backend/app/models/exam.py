@@ -39,6 +39,7 @@ class Exam(Base):
     exam_time:        Mapped[str | None]  = mapped_column(String(10),  nullable=True)   # HH:MM
     room:             Mapped[str | None]  = mapped_column(String(100), nullable=True)
     shift:            Mapped[str | None]  = mapped_column(String(50),  nullable=True)
+    campus:           Mapped[str | None]  = mapped_column(String(20),  nullable=True)   # MD | HL
     created_at:       Mapped[datetime]    = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at:       Mapped[datetime]    = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 

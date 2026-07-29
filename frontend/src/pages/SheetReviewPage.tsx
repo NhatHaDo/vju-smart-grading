@@ -16,6 +16,17 @@ const SBD_TYPES: { label: string; variant: TemplateVariant }[] = [
   { label: 'SBD 8 số', variant: 'sbd8' },
 ];
 
+/**
+ * "Pinned" custom templates — shown as a fixed one-click button right next to
+ * the SBD 4/8 radios (no need to open the "Custom template" tab), while still
+ * grading through the exact same template_id-based path as the Custom
+ * template flow underneath (already verified working — see id=8 "test").
+ * To add/rename/remove one, just edit this list.
+ */
+const PINNED_TEMPLATES: { label: string; id: number }[] = [
+  { label: 'Mẫu 40 câu TN + Đúng/Sai', id: 8 },
+];
+
 const SOURCES: { label: string; value: ImageSource }[] = [
   { label: 'Tự động phát hiện',                value: 'auto' },
   { label: 'Scan máy (flatbed)',                value: 'flatbed' },
@@ -35,6 +46,8 @@ export default function SheetReviewPage() {
   // ── Template mode: 'vju' | 'custom' ─────────────────────────────────────
   const [templateMode,   setTemplateMode]   = useState<'vju' | 'custom'>('vju');
   const [selectedSbd,    setSelectedSbd]    = useState(1); // 0=sbd4, 1=sbd8
+  /** Non-null when a PINNED_TEMPLATES button is picked (from within the "vju" tab). */
+  const [selectedPinnedCustomId, setSelectedPinnedCustomId] = useState<number | null>(null);
 
   // ── Custom templates ─────────────────────────────────────────────────────
   const [customForms,        setCustomForms]        = useState<CustomFormMeta[]>([]);
@@ -52,6 +65,14 @@ export default function SheetReviewPage() {
 
   const templateVariant: TemplateVariant = SBD_TYPES[selectedSbd].variant;
   const imageSource: ImageSource = SOURCES[selectedSource].value;
+
+  // A pinned template (picked from the "vju" tab) grades through the same
+  // custom-template path as the "custom" tab — these two "effective" values
+  // are what schema-fetching and submission actually use everywhere below.
+  const effectiveTemplateMode: 'vju' | 'custom' =
+    templateMode === 'custom' || selectedPinnedCustomId !== null ? 'custom' : 'vju';
+  const effectiveCustomId: number | null =
+    templateMode === 'custom' ? selectedCustomId : selectedPinnedCustomId;
 
   // ── Load exams from API ──────────────────────────────────────────────────
   const loadExams = async () => {
@@ -108,7 +129,7 @@ export default function SheetReviewPage() {
 
   // ── Fetch full template schema whenever selected custom template changes ──
   useEffect(() => {
-    if (templateMode !== 'custom' || selectedCustomId === null) {
+    if (effectiveTemplateMode !== 'custom' || effectiveCustomId === null) {
       setCustomTemplateSchema(null);
       return;
     }
@@ -125,17 +146,17 @@ export default function SheetReviewPage() {
     // cache; the sessionStorage write below exists only as a fallback for
     // AnswerKeyPage in case navigation state is unavailable.
     setSchemaLoading(true);
-    customFormsApi.get(selectedCustomId)
+    customFormsApi.get(effectiveCustomId)
       .then(detail => {
         const schema = buildSchemaFromDetail(detail);
         setCustomTemplateSchema(schema);
         // Cache for AnswerKeyPage fallback — scoped to this template's id.
-        try { sessionStorage.setItem('vju_template_schema', JSON.stringify({ id: selectedCustomId, schema })); } catch { /* ignore */ }
+        try { sessionStorage.setItem('vju_template_schema', JSON.stringify({ id: effectiveCustomId, schema })); } catch { /* ignore */ }
       })
       .catch(() => setCustomTemplateSchema(null))
       .finally(() => setSchemaLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCustomId, templateMode]);
+  }, [effectiveCustomId, effectiveTemplateMode]);
 
   const handleFiles = (newFiles: FileList | null) => {
     if (!newFiles) return;
@@ -146,7 +167,7 @@ export default function SheetReviewPage() {
     setFiles(prev => prev.filter((_, i) => i !== idx));
   };
 
-  const selectedCustomForm = customForms.find(f => f.id === selectedCustomId) ?? null;
+  const selectedCustomForm = customForms.find(f => f.id === effectiveCustomId) ?? null;
 
   /** Navigate to AnswerKeyPage carrying File objects + selected exam + template in location.state. */
   const handleGoToAnswerKey = () => {
@@ -161,10 +182,10 @@ export default function SheetReviewPage() {
         examId:   exam?.id   ?? null,
         examName: exam?.name ?? null,
         // custom template fields
-        templateMode,
-        customTemplateId:   templateMode === 'custom' ? (selectedCustomForm?.id   ?? null) : null,
-        customTemplateName: templateMode === 'custom' ? (selectedCustomForm?.name ?? null) : null,
-        templateSchema:     templateMode === 'custom' ? customTemplateSchema : null,
+        templateMode: effectiveTemplateMode,
+        customTemplateId:   effectiveTemplateMode === 'custom' ? (selectedCustomForm?.id   ?? null) : null,
+        customTemplateName: effectiveTemplateMode === 'custom' ? (selectedCustomForm?.name ?? null) : null,
+        templateSchema:     effectiveTemplateMode === 'custom' ? customTemplateSchema : null,
       },
     });
   };
@@ -265,14 +286,32 @@ export default function SheetReviewPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 13, color: '#6B7280', fontWeight: 600 }}>Loại SBD:</span>
               {SBD_TYPES.map((s, i) => (
-                <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: i === selectedSbd ? 700 : 400, color: i === selectedSbd ? '#C8102E' : '#374151' }}>
-                  <input type="radio" name="sbd" checked={i === selectedSbd} onChange={() => setSelectedSbd(i)} style={{ accentColor: '#C8102E' }} />
+                <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: selectedPinnedCustomId === null && i === selectedSbd ? 700 : 400, color: selectedPinnedCustomId === null && i === selectedSbd ? '#C8102E' : '#374151' }}>
+                  <input
+                    type="radio" name="sbd"
+                    checked={selectedPinnedCustomId === null && i === selectedSbd}
+                    onChange={() => { setSelectedSbd(i); setSelectedPinnedCustomId(null); }}
+                    style={{ accentColor: '#C8102E' }}
+                  />
                   {s.label}
+                </label>
+              ))}
+              {PINNED_TEMPLATES.map(pt => (
+                <label key={pt.id} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: selectedPinnedCustomId === pt.id ? 700 : 400, color: selectedPinnedCustomId === pt.id ? '#C8102E' : '#374151' }}>
+                  <input
+                    type="radio" name="sbd"
+                    checked={selectedPinnedCustomId === pt.id}
+                    onChange={() => setSelectedPinnedCustomId(pt.id)}
+                    style={{ accentColor: '#C8102E' }}
+                  />
+                  {pt.label}
                 </label>
               ))}
               <div style={{ marginLeft: 8, fontSize: 12, color: '#6B7280', background: '#F9FAFB', borderRadius: 8, padding: '5px 12px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 <CheckCircle2 size={13} color="#10B981" />
-                <strong style={{ color: '#1E1E1E' }}>{TEMPLATE_VARIANT_LABEL[templateVariant]}</strong>
+                <strong style={{ color: '#1E1E1E' }}>
+                  {selectedPinnedCustomId === null ? TEMPLATE_VARIANT_LABEL[templateVariant] : (selectedCustomForm?.name ?? '…')}
+                </strong>
               </div>
             </div>
           )}

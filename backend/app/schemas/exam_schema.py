@@ -23,6 +23,7 @@ class ExamCreate(BaseModel):
     exam_time:        str | None = None
     room:             str | None = None
     shift:            str | None = None
+    campus:           str | None = None
 
 
 class ExamUpdate(BaseModel):
@@ -46,6 +47,7 @@ class ExamUpdate(BaseModel):
     exam_time:        str | None = None
     room:             str | None = None
     shift:            str | None = None
+    campus:           str | None = None
 
 
 class ExamOut(BaseModel):
@@ -74,6 +76,7 @@ class ExamOut(BaseModel):
     exam_time:        str | None = None
     room:             str | None = None
     shift:            str | None = None
+    campus:           str | None = None
     created_at:       datetime
     updated_at:       datetime
 

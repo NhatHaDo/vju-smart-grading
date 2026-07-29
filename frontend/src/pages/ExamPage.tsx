@@ -4,8 +4,8 @@ import { Pencil, Trash2, Search } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
 import ExamDatePicker from '../components/common/ExamDatePicker';
 import {
-  SEMESTER_OPTIONS, LECTURER_TITLE_OPTIONS, FACULTY_OPTIONS, TRAINING_PROGRAMS,
-  semesterLabel, facultyLabel, lecturerDisplay, currentAcademicYear,
+  SEMESTER_OPTIONS, LECTURER_TITLE_OPTIONS, FACULTY_OPTIONS, TRAINING_PROGRAMS, CAMPUS_OPTIONS,
+  semesterLabel, facultyLabel, campusLabel, lecturerDisplay, currentAcademicYear,
 } from '../constants/examMeta';
 import type { ExamOut, ExamFormData } from '../types/exam';
 import { emptyForm, examOutToForm, formToPayload } from '../types/exam';
@@ -396,8 +396,9 @@ export default function ExamPage() {
                     )}
                     {lbl('Thời gian thi', false, inp('exam_time', { type: 'time' }))}
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }} className="wiz-grid-2">
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }} className="wiz-grid-2">
                     {lbl('Phòng thi', false, inp('room',  { placeholder: 'Ví dụ: P.301' }))}
+                    {lbl('Cơ sở',     false, sel('campus', CAMPUS_OPTIONS))}
                     {lbl('Ca thi',    false, inp('shift', { placeholder: 'Ví dụ: Ca 1' }))}
                   </div>
                   {lbl('Ghi chú', false,
@@ -419,12 +420,9 @@ export default function ExamPage() {
                   <h3 style={{ margin: '0 0 4px', fontSize: 18, fontWeight: 700, color: '#1E1E1E' }}>Xác nhận thông tin</h3>
                   <p style={{ margin: 0, fontSize: 13, color: '#6B7280' }}>Kiểm tra lại trước khi lưu</p>
                 </div>
-                <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 12, padding: '12px 16px', marginBottom: 20, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                  <span style={{ fontSize: 20, lineHeight: '1' }}>✅</span>
-                  <div>
-                    <div style={{ fontWeight: 700, color: '#166534', fontSize: 14 }}>Đã điền đủ thông tin bắt buộc</div>
-                    <div style={{ color: '#15803D', fontSize: 12, marginTop: 2 }}>Bạn có thể chỉnh sửa sau khi tạo kỳ thi.</div>
-                  </div>
+                <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 12, padding: '12px 16px', marginBottom: 20 }}>
+                  <div style={{ fontWeight: 700, color: '#166534', fontSize: 14 }}>Đã điền đủ thông tin bắt buộc</div>
+                  <div style={{ color: '#15803D', fontSize: 12, marginTop: 2 }}>Bạn có thể chỉnh sửa sau khi tạo kỳ thi.</div>
                 </div>
                 <div style={{ display: 'grid', gap: 14 }}>
                   <div style={{ background: '#FAFAFA', borderRadius: 12, padding: '14px 16px', border: '1px solid #F3F4F6' }}>
@@ -445,6 +443,7 @@ export default function ExamPage() {
                     <ConfirmRow label="Ngày thi"     value={fmtExamDate(form.exam_date)} />
                     <ConfirmRow label="Thời gian"    value={form.exam_time} />
                     <ConfirmRow label="Phòng thi"    value={form.room} />
+                    <ConfirmRow label="Cơ sở"        value={campusLabel(form.campus)} />
                     <ConfirmRow label="Ca thi"       value={form.shift} />
                     <ConfirmRow label="Ghi chú"      value={form.notes} />
                   </div>
@@ -468,7 +467,7 @@ export default function ExamPage() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10 }}>
                 <button className="wiz-btn-gray"  style={W.btnBack}   onClick={goBack} disabled={submitting}>← Quay lại</button>
                 <button className="wiz-btn-green" style={W.btnSubmit} onClick={() => void save()} disabled={submitting}>
-                  {submitting ? 'Đang lưu...' : editingId !== null ? '💾 Lưu thay đổi' : '✅ Tạo kỳ thi'}
+                  {submitting ? 'Đang lưu...' : editingId !== null ? '💾 Lưu thay đổi' : 'Tạo kỳ thi'}
                 </button>
               </div>
             )}

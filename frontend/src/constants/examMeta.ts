@@ -7,6 +7,11 @@ export const SEMESTER_OPTIONS = [
 
 export const LECTURER_TITLE_OPTIONS = ['TS.', 'ThS.', 'TS./ThS.'];
 
+export const CAMPUS_OPTIONS = [
+  { value: 'MD', label: 'MĐ (Mỹ Đình)' },
+  { value: 'HL', label: 'HL (Hoà Lạc)' },
+];
+
 export const FACULTY_OPTIONS = [
   { value: 'FATE', label: 'Khoa Khoa học và Công nghệ tiên tiến (FATE)' },
   { value: 'SHSS', label: 'Khoa Khoa học Xã hội liên ngành (SHSS)' },
@@ -42,6 +47,7 @@ export function labelFromOptions(
 
 export const semesterLabel  = (value: string) => labelFromOptions(SEMESTER_OPTIONS, value);
 export const facultyLabel   = (value: string) => labelFromOptions(FACULTY_OPTIONS,  value);
+export const campusLabel    = (value: string) => labelFromOptions(CAMPUS_OPTIONS,   value);
 export const lecturerDisplay = (exam: { lecturer_title?: string; lecturer_name?: string }) =>
   [exam?.lecturer_title, exam?.lecturer_name].filter(Boolean).join(' ') || '—';
 

@@ -30,6 +30,7 @@ export interface ExamOut {
   exam_time?:          string | null;
   room?:               string | null;
   shift?:              string | null;
+  campus?:             string | null;
 }
 
 /** Alias for backwards compat with other components that import `Exam` */
@@ -53,6 +54,7 @@ export interface ExamFormData {
   exam_time:        string;
   room:             string;
   shift:            string;
+  campus:           string;
   notes:            string;
 }
 
@@ -62,7 +64,7 @@ export function emptyForm(defaultAcademicYear = ''): ExamFormData {
     name: '', subject_name: '', subject_code: '', semester: '',
     academic_year: defaultAcademicYear, lecturer_title: '', lecturer_name: '',
     student_count: '', class_name: '', faculty: '', training_program: '',
-    exam_date: '', exam_time: '', room: '', shift: '', notes: '',
+    exam_date: '', exam_time: '', room: '', shift: '', campus: '', notes: '',
   };
 }
 
@@ -86,6 +88,7 @@ export interface ExamCreatePayload {
   exam_time?:       string | null;
   room?:            string | null;
   shift?:           string | null;
+  campus?:          string | null;
 }
 
 /** Convert wizard ExamFormData → API ExamCreatePayload */
@@ -106,6 +109,7 @@ export function formToPayload(form: ExamFormData): ExamCreatePayload {
     exam_time:        form.exam_time               || null,
     room:             form.room.trim()             || null,
     shift:            form.shift.trim()            || null,
+    campus:           form.campus                  || null,
   };
   const count = parseInt(form.student_count, 10);
   if (!isNaN(count) && count > 0) payload.total_students = count;
@@ -130,6 +134,7 @@ export function examOutToForm(exam: ExamOut): ExamFormData {
     exam_time:        exam.exam_time        ?? '',
     room:             exam.room             ?? '',
     shift:            exam.shift            ?? '',
+    campus:           exam.campus           ?? '',
     notes:            exam.notes            ?? '',
   };
 }
