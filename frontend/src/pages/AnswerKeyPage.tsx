@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { saveAs } from 'file-saver';
 import { normalizeUploadFile } from '../utils/fileConversion';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import PageHeader from '../components/layout/PageHeader';
-import { Download, Upload, Trash2, FileJson, Save, CheckCircle2, Loader2, ArrowLeft, Zap, AlertTriangle, Layers, Plus, X, Copy } from 'lucide-react';
+import { Upload, Trash2, FileSpreadsheet, Save, CheckCircle2, Loader2, ArrowLeft, Zap, AlertTriangle, Layers, Plus, X, Copy, Library, BookmarkPlus, Pencil } from 'lucide-react';
 import {
   VJU_PRESET_SCHEMA,
   type AnswerKeyStore,
@@ -15,6 +16,7 @@ import {
   type BatchGradeState,
   type OmrGradeResult,
   type TemplateSchema,
+  type SavedAnswerKeyEntry,
   TEMPLATE_VARIANT_LABEL,
   DEFAULT_SCORING,
   loadAnswerKey,
@@ -29,10 +31,16 @@ import {
   saveAnswerKeyDraft,
   clearAnswerKeyDraft,
   PINNED_TEMPLATES,
+  loadAnswerKeyLibrary,
+  addToAnswerKeyLibrary,
+  removeFromAnswerKeyLibrary,
+  updateAnswerKeyLibraryEntry,
+  renameAnswerKeyLibraryEntry,
 } from '../types/grading';
 import { customFormsApi } from '../services/apiClient';
 import type { CustomFormMeta } from '../services/apiClient';
-import { buildSchemaFromDetail } from '../utils/templateSchema';
+import { buildSchemaFromDetail, buildSchemaFromAnswerKeys } from '../utils/templateSchema';
+import { buildAnswerKeyWorkbook, buildAnswerKeySampleWorkbook, parseAnswerKeyWorkbook } from '../utils/answerKeyExcel';
 
 const CHOICES = ['—', 'A', 'B', 'C', 'D'];
 // 2026-07-29: this used to be hardcoded to 'http://localhost:8000/...' —
@@ -180,6 +188,30 @@ export default function AnswerKeyPage() {
     .filter(s => s.inputType !== 'text' && (!s.options || (s.options.length === 4 && s.options.every((o, i) => o === ['A','B','C','D'][i]))))
     .flatMap(s => s.labels);
 
+  // 2026-07-29: grouping every block into one flat grid still read as messy
+  // once a phiếu mixes MCQ blocks with Đúng/Sai blocks with tự luận blocks —
+  // "vẫn hơi rối, tạo kiểu thành các vùng (trắc nghiệm/đúng sai/...) đi". Add
+  // a level above individual sections: bucket them by answer TYPE (MCQ choice
+  // count, Đúng/Sai, hay tự luận) into named zones, each rendered as its own
+  // bordered region with the section-grid inside — same data, clearer shape.
+  function zoneForSection(s: typeof activeSections[number]): { key: string; label: string } {
+    if (s.inputType === 'text') return { key: 'text', label: 'Tự luận / Số' };
+    const opts = s.options && s.options.length > 0 ? s.options : ['A', 'B', 'C', 'D'];
+    if (opts.length === 2) return { key: `bin:${opts.join('')}`, label: `Đúng / Sai (${opts.join('-')})` };
+    const isAbcd = opts.length === 4 && opts.every((o, i) => o === ['A', 'B', 'C', 'D'][i]);
+    return { key: `mcq:${opts.join('')}`, label: isAbcd ? 'Trắc nghiệm (A/B/C/D)' : `Trắc nghiệm (${opts.join('/')})` };
+  }
+  const sectionZones: { key: string; label: string; sections: typeof activeSections }[] = (() => {
+    const order: string[] = [];
+    const byKey = new Map<string, { key: string; label: string; sections: typeof activeSections }>();
+    for (const s of activeSections) {
+      const z = zoneForSection(s);
+      if (!byKey.has(z.key)) { byKey.set(z.key, { ...z, sections: [] }); order.push(z.key); }
+      byKey.get(z.key)!.sections.push(s);
+    }
+    return order.map(k => byKey.get(k)!);
+  })();
+
   /** Draft for `key` if one was saved from the editor, else the single legacy
    *  "active" answer key when `key` is the VJU preset (backward compat for
    *  users who saved VJU answers before this per-template drafting existed). */
@@ -216,7 +248,65 @@ export default function AnswerKeyPage() {
   const [doneCount, setDoneCount] = useState(0);
   const [gradingError, setGradingError] = useState<string | null>(null);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const excelInputRef     = useRef<HTMLInputElement>(null);
+
+  // ── Saved answer-key library (2026-07-29) ─────────────────────────────────
+  const [library,      setLibrary]      = useState<SavedAnswerKeyEntry[]>(() => loadAnswerKeyLibrary());
+  const [showLibrary,  setShowLibrary]  = useState(false);
+  const libraryPanelRef = useRef<HTMLDivElement>(null);
+
+  // Panel renders at the very bottom of a long page — without this, opening
+  // it silently appends off-screen and looks like nothing happened ("ấn vào
+  // thư viện, nó không tự nhảy xuống nên nhiều khi gv không biết là nó ở
+  // dưới"). Scroll it into view a tick after it mounts.
+  useEffect(() => {
+    if (!showLibrary) return;
+    const t = setTimeout(() => {
+      libraryPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+    return () => clearTimeout(t);
+  }, [showLibrary]);
+  const [previewEntry,  setPreviewEntry]  = useState<SavedAnswerKeyEntry | null>(null);
+  const [previewMaDe,   setPreviewMaDe]   = useState<string>('');
+  const [previewSchema, setPreviewSchema] = useState<TemplateSchema | null>(null);
+  const [previewSchemaLoading, setPreviewSchemaLoading] = useState(false);
+  // Editable copy of the entry being previewed ("có thể sửa được nữa") — kept
+  // separate from the stored entry so edits don't silently persist until the
+  // user explicitly hits "Lưu thay đổi". Flat + byMaDe kept side by side like
+  // the main editor's answers/answersByMaDe so switching mã đề tabs inside
+  // the popup never loses in-progress edits on another tab.
+  const [previewAnswers,      setPreviewAnswers]      = useState<Record<string, string>>({});
+  const [previewAnswersByMaDe, setPreviewAnswersByMaDe] = useState<Record<string, Record<string, string>>>({});
+  const [previewDirty, setPreviewDirty] = useState(false);
+
+  // Resolve the REAL schema (proper section names, "Câu N" ordering) for
+  // whichever library entry is being previewed — reuses the current schema
+  // when it's the same template already loaded, otherwise fetches it, so the
+  // popup shows the same section names/labels as the actual editor screen
+  // instead of raw technical labels guessed from the answer keys alone.
+  useEffect(() => {
+    if (!previewEntry) { setPreviewSchema(null); return; }
+    const key = previewEntry.templateKey;
+    if (key === 'vju') { setPreviewSchema(VJU_PRESET_SCHEMA); return; }
+    if (key === directTemplateKey && templateSchema) { setPreviewSchema(templateSchema); return; }
+    const id = Number(key.slice('custom:'.length));
+    if (!Number.isFinite(id)) { setPreviewSchema(null); return; }
+    setPreviewSchemaLoading(true);
+    customFormsApi.get(id)
+      .then(detail => setPreviewSchema(buildSchemaFromDetail(detail)))
+      .catch(() => setPreviewSchema(null))
+      .finally(() => setPreviewSchemaLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewEntry]);
+
+  /** Display label for whichever template is currently loaded — used as the
+   *  "Mẫu phiếu: ..." header inside the exported Excel and as the snapshot
+   *  stored alongside a saved library entry. */
+  const currentTemplateLabel = isGradingMode
+    ? (templateMode === 'custom' && customTemplateName ? customTemplateName : TEMPLATE_VARIANT_LABEL[templateVariant])
+    : (directTemplateKey === 'vju'
+        ? 'Mẫu phiếu VJU'
+        : (customFormOptions.find(f => templateStoreKeyFor('custom', f.id) === directTemplateKey)?.name ?? 'Custom template'));
 
   // Answers currently being edited on screen — the active đề's set in multi-đề
   // mode, or the flat single-key set otherwise. Every read/write in the form
@@ -354,69 +444,171 @@ export default function AnswerKeyPage() {
     setActiveMaDe('');
   };
 
-  const handleExport = () => {
+  // ── Excel import/export (2026-07-29) — primary format for teachers, who
+  // don't work with raw JSON. Mirrors the current template's own sections/
+  // labels/mã đề (never a fixed layout), matching this editor screen. ──────
+
+  const handleExportExcel = async () => {
+    if (!templateSchema) { alert('Chưa xác định được mẫu phiếu — không thể xuất Excel.'); return; }
     const store = buildStore();
-    const blob = new Blob([JSON.stringify(store, null, 2)], { type: 'application/json' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href = url; a.download = 'vju_answer_key.json'; a.click();
-    URL.revokeObjectURL(url);
+    const wb  = buildAnswerKeyWorkbook(templateSchema, store, currentTemplateLabel);
+    const buf = await wb.xlsx.writeBuffer();
+    saveAs(new Blob([buf], { type: 'application/octet-stream' }), 'vju_answer_key.xlsx');
   };
 
-  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSampleExcelDownload = async () => {
+    const schemaForSample = templateSchema ?? VJU_PRESET_SCHEMA;
+    const wb  = buildAnswerKeySampleWorkbook(schemaForSample, currentTemplateLabel);
+    const buf = await wb.xlsx.writeBuffer();
+    saveAs(new Blob([buf], { type: 'application/octet-stream' }), 'vju_answer_key_mau.xlsx');
+  };
+
+  const handleImportExcelFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => {
-      try {
-        const parsed = JSON.parse(ev.target?.result as string);
-        if (parsed.byMaDe && typeof parsed.byMaDe === 'object' && Object.keys(parsed.byMaDe).length > 0) {
-          const codes = Object.keys(parsed.byMaDe);
-          const rebuilt: Record<string, Record<string, string>> = {};
-          for (const c of codes) rebuilt[c] = parsed.byMaDe[c]?.answers ?? {};
-          setAnswersByMaDe(rebuilt);
-          setMaDeCodes(codes);
-          setActiveMaDe(codes[0]);
-          setMultiMaDe(true);
-          if (parsed.scoring) setScoring(parsed.scoring);
-        } else if (parsed.answers && typeof parsed.answers === 'object') {
-          if (multiMaDe) {
-            setAnswersByMaDe(prev => ({ ...prev, [activeMaDe]: parsed.answers }));
-          } else {
-            setAnswers(parsed.answers);
-          }
-          if (parsed.scoring) setScoring(parsed.scoring);
-        } else if (typeof parsed === 'object') {
-          if (multiMaDe) {
-            setAnswersByMaDe(prev => ({ ...prev, [activeMaDe]: parsed as Record<string, string> }));
-          } else {
-            setAnswers(parsed as Record<string, string>);
-          }
-        } else {
-          alert('JSON không đúng format');
-        }
-      } catch { alert('File không phải JSON hợp lệ'); }
-    };
-    reader.readAsText(file);
     e.target.value = '';
+    if (!file) return;
+    if (!templateSchema) { alert('Chưa xác định được mẫu phiếu — không thể import Excel.'); return; }
+    try {
+      const { store: parsed, warnings } = await parseAnswerKeyWorkbook(file, templateSchema);
+      if (parsed.byMaDe && Object.keys(parsed.byMaDe).length > 0) {
+        const codes = Object.keys(parsed.byMaDe);
+        const rebuilt: Record<string, Record<string, string>> = {};
+        for (const c of codes) rebuilt[c] = parsed.byMaDe[c]?.answers ?? {};
+        setAnswersByMaDe(rebuilt);
+        setMaDeCodes(codes);
+        setActiveMaDe(codes[0]);
+        setMultiMaDe(true);
+      } else if (multiMaDe) {
+        setAnswersByMaDe(prev => ({ ...prev, [activeMaDe]: parsed.answers }));
+      } else {
+        setAnswers(parsed.answers);
+      }
+      setScoring(parsed.scoring);
+      if (warnings.length > 0) {
+        alert(`Đã import xong, nhưng có ${warnings.length} cảnh báo:\n\n${warnings.slice(0, 10).join('\n')}${warnings.length > 10 ? `\n… và ${warnings.length - 10} dòng khác.` : ''}`);
+      }
+    } catch {
+      alert('Không đọc được file Excel này. Kiểm tra lại file (.xlsx) và thử lại.');
+    }
   };
 
-  const handleSampleDownload = () => {
-    const sample: Record<string, string> = {};
-    activeSections.forEach(s => {
-      if (s.inputType === 'text') {
-        s.labels.forEach(lbl => { sample[lbl] = '-12.34'; });
-        return;
-      }
-      const choices = s.options && s.options.length > 0 ? s.options : ['A', 'B', 'C', 'D'];
-      s.labels.forEach((lbl, i) => { sample[lbl] = choices[i % choices.length]; });
+  // ── Saved answer-key library ──────────────────────────────────────────────
+
+  const handleSaveToLibrary = () => {
+    const name = (window.prompt('Đặt tên cho đáp án này để tra cứu lại sau (VD: "Đáp án Toán K12 - Cuối kì HK1"):') ?? '').trim();
+    if (!name) return;
+    const store = buildStore();
+    const entry = addToAnswerKeyLibrary({
+      name,
+      templateKey:   isGradingMode ? templateStoreKeyFor(templateMode, customTemplateId) : directTemplateKey,
+      templateLabel: currentTemplateLabel,
+      store,
     });
-    const store: AnswerKeyStore = { answers: sample, scoring: DEFAULT_SCORING, updatedAt: new Date().toISOString() }; // sample export is always the flat single-key shape, regardless of current mode
-    const blob = new Blob([JSON.stringify(store, null, 2)], { type: 'application/json' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href = url; a.download = 'vju_answer_key_sample.json'; a.click();
-    URL.revokeObjectURL(url);
+    setLibrary(prev => [entry, ...prev]);
+  };
+
+  const handleLoadFromLibrary = (entry: SavedAnswerKeyEntry) => {
+    if (isGradingMode) return;
+    if (!confirm(`Nạp đáp án "${entry.name}" (${entry.templateLabel})? Bản nháp đang có của mẫu đó (nếu có) sẽ bị ghi đè bằng đáp án đã lưu này.`)) return;
+    saveAnswerKeyDraft(entry.templateKey, entry.store);
+    if (entry.templateKey === directTemplateKey) {
+      setAnswers(entry.store.answers);
+      setScoring(entry.store.scoring);
+      setSavedAt(null);
+      setMultiMaDe(isMultiMaDe(entry.store));
+      setMaDeCodes(entry.store.byMaDe ? Object.keys(entry.store.byMaDe) : []);
+      setActiveMaDe(entry.store.byMaDe ? (Object.keys(entry.store.byMaDe)[0] ?? '') : '');
+      const init: Record<string, Record<string, string>> = {};
+      if (entry.store.byMaDe) for (const [code, set] of Object.entries(entry.store.byMaDe)) init[code] = { ...set.answers };
+      setAnswersByMaDe(init);
+    } else {
+      const isPinned = PINNED_TEMPLATES.some(pt => templateStoreKeyFor('custom', pt.id) === entry.templateKey);
+      setDirectTab(entry.templateKey === 'vju' || isPinned ? 'vju' : 'custom');
+      setDirectTemplateKey(entry.templateKey); // triggers the reload effect, which picks up the draft just saved above
+    }
+    setShowLibrary(false);
+  };
+
+  const handleRenamePreviewEntry = () => {
+    if (!previewEntry) return;
+    const name = (window.prompt('Đổi tên đáp án:', previewEntry.name) ?? '').trim();
+    if (!name || name === previewEntry.name) return;
+    const updated = renameAnswerKeyLibraryEntry(previewEntry.id, name);
+    if (updated) {
+      setLibrary(prev => prev.map(e => (e.id === updated.id ? updated : e)));
+      setPreviewEntry(updated);
+    }
+  };
+
+  const handleDeleteFromLibrary = (id: string) => {
+    if (!confirm('Xoá đáp án này khỏi thư viện? (Không ảnh hưởng đáp án đang dùng để chấm.)')) return;
+    removeFromAnswerKeyLibrary(id);
+    setLibrary(prev => prev.filter(e => e.id !== id));
+    if (previewEntry?.id === id) setPreviewEntry(null);
+  };
+
+  const openLibraryPreview = (entry: SavedAnswerKeyEntry) => {
+    setPreviewEntry(entry);
+    const codes = entry.store.byMaDe ? Object.keys(entry.store.byMaDe) : [];
+    setPreviewMaDe(codes[0] ?? '');
+    setPreviewAnswers({ ...entry.store.answers });
+    const init: Record<string, Record<string, string>> = {};
+    if (entry.store.byMaDe) for (const [code, set] of Object.entries(entry.store.byMaDe)) init[code] = { ...set.answers };
+    setPreviewAnswersByMaDe(init);
+    setPreviewDirty(false);
+  };
+
+  /** Closes the popup, confirming first if there are unsaved inline edits. */
+  const closePreviewModal = () => {
+    if (previewDirty && !confirm('Đóng mà không lưu thay đổi vừa sửa?')) return;
+    setPreviewEntry(null);
+  };
+
+  const isPreviewMulti = (entry: SavedAnswerKeyEntry): boolean =>
+    !!entry.store.byMaDe && Object.keys(entry.store.byMaDe).length > 0;
+
+  const setPreviewAnswer = (lbl: string, val: string) => {
+    if (!previewEntry) return;
+    const v = val === '—' ? '' : val;
+    setPreviewDirty(true);
+    if (isPreviewMulti(previewEntry)) {
+      setPreviewAnswersByMaDe(prev => ({ ...prev, [previewMaDe]: { ...(prev[previewMaDe] ?? {}), [lbl]: v } }));
+    } else {
+      setPreviewAnswers(prev => ({ ...prev, [lbl]: v }));
+    }
+  };
+
+  /** Persists the inline edits back into the library entry itself. Returns
+   *  the updated entry so callers (e.g. "Nạp vào để dùng") can chain off it
+   *  without re-reading stale state. */
+  const handleSavePreviewChanges = (): SavedAnswerKeyEntry | null => {
+    if (!previewEntry) return null;
+    const now = new Date().toISOString();
+    let newStore: AnswerKeyStore;
+    if (isPreviewMulti(previewEntry)) {
+      const byMaDe: Record<string, AnswerKeySet> = {};
+      for (const [code, set] of Object.entries(previewEntry.store.byMaDe!)) {
+        byMaDe[code] = { ...set, answers: previewAnswersByMaDe[code] ?? set.answers, updatedAt: now };
+      }
+      newStore = { ...previewEntry.store, byMaDe, updatedAt: now };
+    } else {
+      newStore = { ...previewEntry.store, answers: previewAnswers, updatedAt: now };
+    }
+    const updated = updateAnswerKeyLibraryEntry(previewEntry.id, newStore);
+    if (updated) {
+      setLibrary(prev => prev.map(e => (e.id === updated.id ? updated : e)));
+      setPreviewEntry(updated);
+      setPreviewDirty(false);
+    }
+    return updated;
+  };
+
+  /** "Nạp vào để dùng" — saves any pending inline edits first so the main
+   *  editor picks up what's actually on screen, not the stale saved copy. */
+  const handleUseInMainEditor = () => {
+    if (!previewEntry) return;
+    const target = previewDirty ? handleSavePreviewChanges() : previewEntry;
+    if (target) { handleLoadFromLibrary(target); setPreviewEntry(null); }
   };
 
   /** Stub error row helper */
@@ -869,68 +1061,96 @@ export default function AnswerKeyPage() {
               Template này không có câu trắc nghiệm — không cần nhập đáp án.
             </div>
           </Card>
-        ) : activeSections.map(({ name: section, labels, inputType, options }) => {
-          const sectionFilled = labels.filter(l => currentAnswers[l]).length;
-          const isText = inputType === 'text';
-          const choices = ['—', ...(options && options.length > 0 ? options : CHOICES.slice(1))];
-          return (
-            <Card key={section}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#C8102E', flex: 1 }}>{section}</h3>
-                <span style={{ fontSize: 12, color: '#6B7280' }}>{sectionFilled}/{labels.length} đã nhập</span>
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {labels.map((lbl, idx) => {
-                  const val = currentAnswers[lbl] || '';
-                  if (isText) {
+        ) : (
+          // 2026-07-29: flattening every block into one grid still read as
+          // messy once a phiếu mixes MCQ + Đúng/Sai + tự luận blocks side by
+          // side with nothing telling them apart ("vẫn hơi rối, tạo thành
+          // các vùng trắc nghiệm/đúng sai/... đi"). Sections are now grouped
+          // into named zones by answer type — each zone is its own bordered
+          // region with a header, and the section grid from before sits
+          // inside it, so the eye sees "Trắc nghiệm" / "Đúng-Sai" / "Tự luận"
+          // as distinct areas instead of one undifferentiated wall of boxes.
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {sectionZones.map(zone => (
+              <div key={zone.key} style={{ background: '#FAFAFB', border: '1px solid #E5E7EB', borderRadius: 12, padding: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: '#374151', marginBottom: 10, letterSpacing: '0.01em' }}>
+                  {zone.label}
+                  <span style={{ fontWeight: 500, color: '#9CA3AF', marginLeft: 8, fontSize: 11.5 }}>
+                    ({zone.sections.reduce((n, s) => n + s.labels.length, 0)} câu)
+                  </span>
+                </div>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
+                  gap: 10,
+                }}>
+                  {zone.sections.map(({ name: section, labels, inputType, options }) => {
+                    const sectionFilled = labels.filter(l => currentAnswers[l]).length;
+                    const isText = inputType === 'text';
+                    const choices = ['—', ...(options && options.length > 0 ? options : CHOICES.slice(1))];
                     return (
-                      <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-                        <span style={{ fontSize: 10, color: '#9CA3AF', fontWeight: 500 }}>Câu {idx + 1}</span>
-                        <input
-                          type="text"
-                          value={val}
-                          onChange={e => setAnswer(lbl, e.target.value)}
-                          disabled={grading}
-                          placeholder="-12.34"
-                          style={{
-                            padding: '5px 8px', borderRadius: 8,
-                            border: `1.5px solid ${val ? '#C8102E' : '#E5E7EB'}`,
-                            fontSize: 13, fontWeight: 700,
-                            color:      val ? '#C8102E' : '#9CA3AF',
-                            background: val ? '#FEECEC' : '#fff',
-                            fontFamily: 'monospace', cursor: grading ? 'not-allowed' : 'text', outline: 'none',
-                            width: 84, textAlign: 'center',
-                          }}
-                        />
-                      </div>
-                    );
-                  }
-                  return (
-                    <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-                      <span style={{ fontSize: 10, color: '#9CA3AF', fontWeight: 500 }}>Câu {idx + 1}</span>
-                      <select
-                        value={val || '—'}
-                        onChange={e => setAnswer(lbl, e.target.value)}
-                        disabled={grading}
-                        style={{
-                          padding: '5px 4px', borderRadius: 8,
-                          border: `1.5px solid ${val ? '#C8102E' : '#E5E7EB'}`,
-                          fontSize: 13, fontWeight: 700,
-                          color:      val ? '#C8102E' : '#9CA3AF',
-                          background: val ? '#FEECEC' : '#fff',
-                          fontFamily: 'inherit', cursor: grading ? 'not-allowed' : 'pointer', outline: 'none',
-                          width: 50, textAlign: 'center',
-                        }}
-                      >
-                        {choices.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                    </div>
-                  );
-                })}
+                      <div key={section} style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 10, padding: '10px 12px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                          <h3 style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: '#C8102E', flex: 1 }}>{section}</h3>
+                          <span style={{ fontSize: 11, color: '#9CA3AF' }}>{sectionFilled}/{labels.length} đã nhập</span>
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                          {labels.map((lbl, idx) => {
+                      const val = currentAnswers[lbl] || '';
+                      if (isText) {
+                        return (
+                          <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+                            <span style={{ fontSize: 8.5, color: '#9CA3AF', fontWeight: 500 }}>{idx + 1}</span>
+                            <input
+                              type="text"
+                              value={val}
+                              onChange={e => setAnswer(lbl, e.target.value)}
+                              disabled={grading}
+                              placeholder="-12.34"
+                              style={{
+                                padding: '3px 6px', borderRadius: 6,
+                                border: `1.2px solid ${val ? '#D1D5DB' : '#F3B4BC'}`,
+                                fontSize: 11.5, fontWeight: 700,
+                                color:      val ? '#1F2937' : '#C8102E',
+                                background: val ? '#F9FAFB' : '#fff',
+                                fontFamily: 'monospace', cursor: grading ? 'not-allowed' : 'text', outline: 'none',
+                                width: 66, textAlign: 'center',
+                              }}
+                            />
+                          </div>
+                        );
+                      }
+                      return (
+                        <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+                          <span style={{ fontSize: 8.5, color: '#9CA3AF', fontWeight: 500 }}>{idx + 1}</span>
+                          <select
+                            value={val || '—'}
+                            onChange={e => setAnswer(lbl, e.target.value)}
+                            disabled={grading}
+                            style={{
+                              padding: '3px 1px', borderRadius: 6,
+                              border: `1.2px solid ${val ? '#D1D5DB' : '#F3B4BC'}`,
+                              fontSize: 11.5, fontWeight: 700,
+                              color:      val ? '#1F2937' : '#C8102E',
+                              background: val ? '#F9FAFB' : '#fff',
+                              fontFamily: 'inherit', cursor: grading ? 'not-allowed' : 'pointer', outline: 'none',
+                              width: 38, textAlign: 'center',
+                            }}
+                          >
+                            {choices.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+                </div>
               </div>
-            </Card>
-          );
-        })}
+            ))}
+          </div>
+        )}
 
         {/* Scoring config */}
         <Card>
@@ -961,13 +1181,221 @@ export default function AnswerKeyPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingTop: 8, flexWrap: 'wrap' }}>
           {primaryButton}
           <div style={{ width: 1, height: 28, background: '#E5E7EB', margin: '0 2px' }} />
-          <Button size="sm" variant="secondary" icon={<FileJson size={14} />} onClick={handleSampleDownload}>Tải mẫu JSON</Button>
-          <Button size="sm" variant="secondary" icon={<Download size={14} />} onClick={handleExport}>Xuất JSON</Button>
-          <Button size="sm" variant="secondary" icon={<Upload size={14} />} onClick={() => fileInputRef.current?.click()}>Import JSON</Button>
-          <input ref={fileInputRef} type="file" accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportFile} />
+
+          {/* Excel — primary format for giáo viên (không cần biết JSON) */}
+          <Button size="sm" variant="outline" icon={<FileSpreadsheet size={14} />} onClick={handleExportExcel}>Xuất Excel</Button>
+          <Button size="sm" variant="outline" icon={<Upload size={14} />} onClick={() => excelInputRef.current?.click()}>Import Excel</Button>
+          <Button size="sm" variant="secondary" icon={<FileSpreadsheet size={14} />} onClick={handleSampleExcelDownload}>Tải mẫu Excel</Button>
+          <input ref={excelInputRef} type="file" accept=".xlsx" style={{ display: 'none' }} onChange={handleImportExcelFile} />
+
+          {!isGradingMode && (
+            <>
+              <div style={{ width: 1, height: 28, background: '#E5E7EB', margin: '0 2px' }} />
+              <Button size="sm" variant="secondary" icon={<BookmarkPlus size={14} />} onClick={handleSaveToLibrary}>Lưu vào thư viện</Button>
+              <Button size="sm" variant="secondary" icon={<Library size={14} />} onClick={() => setShowLibrary(v => !v)}>
+                Thư viện đáp án {library.length > 0 ? `(${library.length})` : ''}
+              </Button>
+            </>
+          )}
+
           <div style={{ flex: 1 }} />
           <Button size="sm" variant="secondary" icon={<Trash2 size={14} />} onClick={handleClear} style={{ color: '#EF4444', borderColor: '#FECACA' }}>Xóa Answer Key</Button>
         </div>
+
+        {/* Saved answer-key library panel */}
+        {!isGradingMode && showLibrary && (
+          <div ref={libraryPanelRef}>
+          <Card>
+            <h3 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 700, color: '#374151' }}>Thư viện đáp án đã lưu</h3>
+            {library.length === 0 ? (
+              <div style={{ fontSize: 13, color: '#9CA3AF', textAlign: 'center', padding: '16px 0' }}>
+                Chưa lưu đáp án nào. Bấm "Lưu vào thư viện" để đặt tên và lưu lại đáp án đang chỉnh sửa.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {library.map(entry => (
+                  <div key={entry.id}
+                    onClick={() => openLibraryPreview(entry)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
+                      padding: '10px 14px', borderRadius: 10, border: '1.5px solid #E5E7EB',
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 700, color: '#374151' }}>{entry.name}</div>
+                      <div style={{ fontSize: 12, color: '#9CA3AF' }}>
+                        {entry.templateLabel} · Lưu lúc {new Date(entry.savedAt).toLocaleString('vi-VN', { hour12: false })} · bấm để xem chi tiết
+                      </div>
+                    </div>
+                    <Button size="sm" variant="secondary" onClick={e => { e.stopPropagation(); handleLoadFromLibrary(entry); }}>Nạp vào</Button>
+                    <Button size="sm" variant="secondary" icon={<Trash2 size={13} />} onClick={e => { e.stopPropagation(); handleDeleteFromLibrary(entry.id); }} style={{ color: '#EF4444', borderColor: '#FECACA' }} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+          </div>
+        )}
+
+        {/* Preview modal — full detail of a saved library entry */}
+        {previewEntry && (() => {
+          const entry = previewEntry;
+          const codes = entry.store.byMaDe ? Object.keys(entry.store.byMaDe) : [];
+          const isMulti = codes.length > 0;
+          // Read from the editable copies, not entry.store directly, so
+          // in-popup edits ("có thể sửa được nữa") show live before saving.
+          const shownAnswers = isMulti ? (previewAnswersByMaDe[previewMaDe] ?? {}) : previewAnswers;
+          // Prefer the real template schema (proper section names, "Câu N" order)
+          // so the popup reads the same as the actual editor. Falls back to a
+          // guessed grouping only if the real schema couldn't be resolved
+          // (e.g. that custom template was since deleted).
+          const effectiveSchema = previewSchema ?? buildSchemaFromAnswerKeys(Object.keys(shownAnswers));
+          const filledCount = Object.values(shownAnswers).filter(v => v && v.trim() !== '').length;
+          return (
+            <div
+              onClick={closePreviewModal}
+              style={{
+                position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 24,
+              }}
+            >
+              <div
+                onClick={e => e.stopPropagation()}
+                style={{
+                  background: '#fff', borderRadius: 16, width: '100%', maxWidth: 640, maxHeight: '85vh',
+                  display: 'flex', flexDirection: 'column', overflow: 'hidden',
+                  boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+                }}
+              >
+                <div style={{ padding: '18px 22px', borderBottom: '1px solid #E5E7EB', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: '#374151', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {entry.name}
+                      <button onClick={handleRenamePreviewEntry} title="Đổi tên"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', padding: 2, display: 'flex' }}>
+                        <Pencil size={13} />
+                      </button>
+                      {previewDirty && <span style={{ fontSize: 11.5, fontWeight: 600, color: '#C8102E' }}>· có thay đổi chưa lưu</span>}
+                    </div>
+                    <div style={{ fontSize: 12.5, color: '#9CA3AF', marginTop: 3 }}>
+                      {entry.templateLabel} · Lưu lúc {new Date(entry.savedAt).toLocaleString('vi-VN', { hour12: false })}
+                    </div>
+                  </div>
+                  <button onClick={closePreviewModal}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', padding: 4 }}>
+                    <X size={18} />
+                  </button>
+                </div>
+
+                {isMulti && (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '12px 22px 0' }}>
+                    {codes.map(code => (
+                      <button key={code} onClick={() => setPreviewMaDe(code)}
+                        style={{
+                          padding: '5px 12px', borderRadius: 9999, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+                          border: `1.5px solid ${previewMaDe === code ? '#C8102E' : '#E5E7EB'}`,
+                          background: previewMaDe === code ? '#C8102E' : '#fff',
+                          color: previewMaDe === code ? '#fff' : '#374151',
+                        }}
+                      >
+                        Đề {code}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <div style={{ padding: '14px 22px', fontSize: 12.5, color: '#6B7280' }}>
+                  {filledCount}/{Object.keys(shownAnswers).length} câu có đáp án
+                  {' · '}Thang điểm: Đúng {entry.store.scoring.correct} · Sai {entry.store.scoring.wrong} · Trống {entry.store.scoring.blank}
+                </div>
+
+                <div style={{ flex: 1, overflowY: 'auto', padding: '0 22px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {previewSchemaLoading ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#9CA3AF', padding: '20px 0', justifyContent: 'center' }}>
+                      <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Đang tải cấu trúc mẫu phiếu…
+                    </div>
+                  ) : effectiveSchema.answerSections.length === 0 ? (
+                    <div style={{ fontSize: 13, color: '#9CA3AF', textAlign: 'center', padding: '20px 0' }}>Không có đáp án nào được lưu.</div>
+                  ) : (
+                    // Same "zones" grouping + compact/calm styling as the main
+                    // editor screen — teachers said the old red-everywhere
+                    // full-width layout was messy here too.
+                    (() => {
+                      const order: string[] = [];
+                      const byKey = new Map<string, { key: string; label: string; sections: typeof effectiveSchema.answerSections }>();
+                      for (const s of effectiveSchema.answerSections) {
+                        const z = zoneForSection(s);
+                        if (!byKey.has(z.key)) { byKey.set(z.key, { ...z, sections: [] }); order.push(z.key); }
+                        byKey.get(z.key)!.sections.push(s);
+                      }
+                      return order.map(k => byKey.get(k)!);
+                    })().map(zone => (
+                      <div key={zone.key} style={{ background: '#FAFAFB', border: '1px solid #E5E7EB', borderRadius: 12, padding: 12 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 800, color: '#374151', marginBottom: 8 }}>
+                          {zone.label}
+                          <span style={{ fontWeight: 500, color: '#9CA3AF', marginLeft: 8, fontSize: 11 }}>
+                            ({zone.sections.reduce((n, s) => n + s.labels.length, 0)} câu)
+                          </span>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
+                          {zone.sections.map(section => {
+                            const isText = section.inputType === 'text';
+                            const choices = ['—', ...(section.options && section.options.length > 0 ? section.options : ['A', 'B', 'C', 'D'])];
+                            return (
+                            <div key={section.name} style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, padding: '8px 10px' }}>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: '#C8102E', marginBottom: 6 }}>{section.name}</div>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                                {section.labels.map((lbl, idx) => {
+                                  const val = shownAnswers[lbl] || '';
+                                  const filled = !!val;
+                                  const cellStyle: React.CSSProperties = {
+                                    padding: isText ? '2px 4px' : '2px 0', borderRadius: 6,
+                                    border: `1.2px solid ${filled ? '#D1D5DB' : '#F3B4BC'}`,
+                                    fontSize: 11, fontWeight: 700, fontFamily: isText ? 'monospace' : 'inherit',
+                                    color: filled ? '#1F2937' : '#C8102E',
+                                    background: filled ? '#F9FAFB' : '#fff',
+                                    outline: 'none', textAlign: 'center', cursor: 'pointer',
+                                    width: isText ? 52 : 30,
+                                  };
+                                  return (
+                                    <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+                                      <span style={{ fontSize: 8, color: '#9CA3AF' }}>{idx + 1}</span>
+                                      {isText ? (
+                                        <input type="text" value={val} placeholder="-12.34" style={cellStyle}
+                                          onChange={e => setPreviewAnswer(lbl, e.target.value)} />
+                                      ) : (
+                                        <select value={val || '—'} style={cellStyle}
+                                          onChange={e => setPreviewAnswer(lbl, e.target.value)}>
+                                          {choices.map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div style={{ padding: '14px 22px', borderTop: '1px solid #E5E7EB', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                  <Button size="sm" variant="secondary" onClick={closePreviewModal}>Đóng</Button>
+                  <Button size="sm" variant="outline" onClick={() => handleSavePreviewChanges()} disabled={!previewDirty}>
+                    Lưu thay đổi
+                  </Button>
+                  <Button size="sm" onClick={handleUseInMainEditor}
+                    style={{ background: '#C8102E', color: '#fff', borderColor: '#C8102E', fontWeight: 700 }}>
+                    Nạp vào để dùng
+                  </Button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
       </div>
 

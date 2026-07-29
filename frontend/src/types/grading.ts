@@ -392,6 +392,79 @@ export function clearAnswerKeyDraft(templateKey: TemplateStoreKey): void {
   saveAnswerKeyDraftsMap(map);
 }
 
+// ── Saved answer-key library (2026-07-29) ──────────────────────────────────
+// Separate from the single "active" key (AK_LS_KEY) and the per-template
+// drafts above — this is a named, persistent history the user builds up on
+// purpose ("Lưu vào thư viện") so a past exam's answer key can be found and
+// re-used or cross-checked later, even after other work has overwritten the
+// active key/draft for that template. Requested directly by the user
+// ("lưu mẫu cả đáp án để sau còn tra cứu lại").
+export interface SavedAnswerKeyEntry {
+  id:            string;            // stable id, safe to use as a React key
+  name:          string;            // user-given label, e.g. "Đáp án Toán K12 - Cuối kì HK1"
+  savedAt:       string;            // ISO timestamp
+  templateKey:   TemplateStoreKey;  // which template this answer key belongs to
+  templateLabel: string;            // display-name snapshot (template may be renamed/deleted later)
+  store:         AnswerKeyStore;
+}
+
+const AK_LIBRARY_KEY = 'vju_answer_key_library';
+
+export function loadAnswerKeyLibrary(): SavedAnswerKeyEntry[] {
+  try {
+    const raw = localStorage.getItem(AK_LIBRARY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+function saveAnswerKeyLibraryList(list: SavedAnswerKeyEntry[]): void {
+  try { localStorage.setItem(AK_LIBRARY_KEY, JSON.stringify(list)); } catch { /* ignore */ }
+}
+
+export function addToAnswerKeyLibrary(entry: Omit<SavedAnswerKeyEntry, 'id' | 'savedAt'>): SavedAnswerKeyEntry {
+  const full: SavedAnswerKeyEntry = {
+    ...entry,
+    id:      `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    savedAt: new Date().toISOString(),
+  };
+  const list = loadAnswerKeyLibrary();
+  list.unshift(full);
+  saveAnswerKeyLibraryList(list);
+  return full;
+}
+
+export function removeFromAnswerKeyLibrary(id: string): void {
+  saveAnswerKeyLibraryList(loadAnswerKeyLibrary().filter(e => e.id !== id));
+}
+
+/** Overwrite a saved entry's answers in place (used by the preview popup's
+ *  inline edit — "có thể sửa được nữa"), refreshing its savedAt so the
+ *  library list reflects the latest edit time. Returns the updated entry,
+ *  or null if the id no longer exists (e.g. deleted in another tab). */
+export function updateAnswerKeyLibraryEntry(id: string, store: AnswerKeyStore): SavedAnswerKeyEntry | null {
+  const list = loadAnswerKeyLibrary();
+  const idx = list.findIndex(e => e.id === id);
+  if (idx === -1) return null;
+  const updated: SavedAnswerKeyEntry = { ...list[idx], store, savedAt: new Date().toISOString() };
+  list[idx] = updated;
+  saveAnswerKeyLibraryList(list);
+  return updated;
+}
+
+/** Renames a saved entry ("cả sửa được tên này nữa") without touching its
+ *  answers or savedAt. Returns the updated entry, or null if not found. */
+export function renameAnswerKeyLibraryEntry(id: string, name: string): SavedAnswerKeyEntry | null {
+  const list = loadAnswerKeyLibrary();
+  const idx = list.findIndex(e => e.id === id);
+  if (idx === -1) return null;
+  const updated: SavedAnswerKeyEntry = { ...list[idx], name };
+  list[idx] = updated;
+  saveAnswerKeyLibraryList(list);
+  return updated;
+}
+
 /**
  * Find the mã đề value inside a student_info object.
  *

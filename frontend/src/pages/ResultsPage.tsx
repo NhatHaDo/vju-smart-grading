@@ -354,25 +354,34 @@ function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, 
 type DbSaveStatus = 'idle' | 'saving' | 'saved' | 'failed' | 'auth_failed';
 type DataSource   = 'init' | 'db' | 'localStorage';
 
+// 2026-07-29: this whole header area used to mix blue/green/red/amber/yellow
+// banners + colorful summary-card accents — "quá nhiều màu, design lại đi
+// (max 2 màu)". Collapsed the palette down to just neutral gray/white for
+// anything informational, and red (brand color) reserved for things that
+// actually need attention (errors, unsaved data, review needed). Meaning is
+// carried by icon + wording instead of hue.
+const NEUTRAL_BANNER = { background: '#F9FAFB', border: '1px solid #E5E7EB', color: '#374151' };
+const ALERT_BANNER   = { background: '#FEF2F2', border: '1px solid #F3B4BC', color: '#991B1B' };
+
 function DbStatusBanner({ status }: { status: DbSaveStatus }) {
   if (status === 'idle') return null;
   if (status === 'saving') return (
-    <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1D4ED8' }}>
+    <div style={{ ...NEUTRAL_BANNER, borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
       <Database size={14} /> Đang lưu kết quả…
     </div>
   );
   if (status === 'saved') return (
-    <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#065F46' }}>
+    <div style={{ ...NEUTRAL_BANNER, borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
       <Database size={14} /> Đã lưu kết quả
     </div>
   );
   if (status === 'auth_failed') return (
-    <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#991B1B' }}>
+    <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
       <WifiOff size={14} /> Phiên đăng nhập đã hết hạn — kết quả chưa được lưu. Vui lòng đăng nhập lại.
     </div>
   );
   return (
-    <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#92400E' }}>
+    <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
       <WifiOff size={14} /> Không lưu được kết quả lên hệ thống — đang giữ tạm trong trình duyệt
     </div>
   );
@@ -746,7 +755,7 @@ export default function ResultsPage() {
             </Button>
           )}
           <Button
-            variant="secondary" size="sm" icon={<Download size={14} />}
+            variant="outline" size="sm" icon={<Download size={14} />}
             onClick={() => {
               if (!hasBatch || !batch) { alert('Chưa có kết quả để xuất Excel.'); return; }
               if (isAllMode && multipleTemplates) {
@@ -833,7 +842,7 @@ export default function ResultsPage() {
                 <ChevronDown size={14} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: '#9CA3AF' }} />
               </div>
               {isAllMode && multipleTemplates && (
-                <span style={{ fontSize: 11, color: '#B45309', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 7, padding: '3px 10px', whiteSpace: 'nowrap' }}>
+                <span style={{ fontSize: 11, color: '#C8102E', background: '#FEF2F2', border: '1px solid #F3B4BC', borderRadius: 7, padding: '3px 10px', whiteSpace: 'nowrap' }}>
                   ⚠ Chọn 1 mẫu để xuất Excel/CSV
                 </span>
               )}
@@ -846,17 +855,17 @@ export default function ResultsPage() {
 
         {/* Export success toast */}
         {exportToast && (
-          <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#065F46' }}>
+          <div style={{ ...NEUTRAL_BANNER, borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
             <CheckCircle2 size={14} /> Đã xuất file Excel thành công.
           </div>
         )}
 
         {/* Batch info banner — only when real results exist */}
         {hasBatch && (
-          <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
-            <CheckCircle2 size={18} color="#10B981" style={{ flexShrink: 0 }} />
+          <div style={{ ...NEUTRAL_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <CheckCircle2 size={18} style={{ flexShrink: 0, color: '#374151' }} />
             <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#065F46' }}>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>
                 {selectedExamName
                   ? <>Kỳ thi: <span style={{ color: '#C8102E' }}>{selectedExamName}</span> · {getBatchTemplateLabel(batch!)}</>
                   : <>Đợt chấm: {batch ? getBatchTemplateLabel(batch) : '—'}</>
@@ -865,7 +874,7 @@ export default function ResultsPage() {
               <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
                 {totalSheets} phiếu · Chấm lúc: {batch?.gradedAt ? fmtDate(batch.gradedAt) : '—'}
                 {warnCount > 0 && (
-                  <span style={{ color: '#B45309', marginLeft: 10 }}>
+                  <span style={{ color: '#C8102E', marginLeft: 10, fontWeight: 600 }}>
                     · <AlertTriangle size={11} style={{ display: 'inline', verticalAlign: 'middle' }} /> {warnCount} phiếu cần xem lại
                   </span>
                 )}
@@ -876,9 +885,9 @@ export default function ResultsPage() {
 
         {/* Custom template schema missing warning */}
         {hasBatch && schemaMissing && (
-          <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
-            <AlertTriangle size={16} color="#EF4444" style={{ flexShrink: 0 }} />
-            <span style={{ fontSize: 13, color: '#991B1B' }}>
+          <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <AlertTriangle size={16} style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: 13 }}>
               Schema của custom template <strong>{batch.customTemplateName ?? `#${batch.customTemplateId}`}</strong> không có trong batch này.
               Các cột thông tin và đáp án có thể không hiển thị đúng.
               Để chấm lại với schema đúng, vui lòng quay lại Upload và chọn lại template.
@@ -888,13 +897,13 @@ export default function ResultsPage() {
 
         {/* No answer key warning */}
         {hasBatch && !hasKey && (
-          <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#92400E' }}>
+          <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
               <Key size={16} />
               <span>Chưa có Answer Key — kết quả hiện chỉ là đáp án nhận dạng, chưa tính điểm.</span>
             </div>
-            <Button size="sm" variant="secondary" onClick={() => navigate('/app/answer-key')}
-              style={{ color: '#92400E', borderColor: '#FED7AA', whiteSpace: 'nowrap' }}>
+            <Button size="sm" variant="outline" onClick={() => navigate('/app/answer-key')}
+              style={{ whiteSpace: 'nowrap' }}>
               Nhập Answer Key →
             </Button>
           </div>
@@ -905,18 +914,18 @@ export default function ResultsPage() {
           <div style={{ display: 'grid', gridTemplateColumns: `repeat(${hasKey ? 7 : 4}, 1fr)`, gap: 12 }}>
             {[
               { label: 'Tổng phiếu',  value: String(totalSheets), sub: 'Đã xử lý' },
-              { label: 'Cần xem lại', value: String(warnCount),   sub: 'Trước khi export', accent: '#FCB900' },
+              { label: 'Cần xem lại', value: String(warnCount),   sub: 'Trước khi export' },
               { label: 'Template', value: isAllMode ? 'Tất cả' : (selectedTemplateOpt?.templateMode === 'custom' ? 'Custom' : 'VJU'), sub: isAllMode ? `${templateOptions.length} mẫu phiếu` : (selectedTemplateOpt?.label ?? '—'), small: true },
               ...(hasKey ? [
-                { label: 'Phiếu có điểm', value: String(scores.length), sub: `/ ${totalSheets} phiếu`, accent: '#6366F1' },
-                { label: 'Điểm TB',   value: avgScore !== null ? String(avgScore) : '—', sub: 'Trung bình', accent: '#10B981' },
-                { label: 'Cao nhất',  value: maxScore !== null ? String(maxScore) : '—', sub: 'Max score',  accent: '#2563EB' },
-                { label: 'Thấp nhất', value: minScore !== null ? String(minScore) : '—', sub: 'Min score',  accent: '#EF4444' },
+                { label: 'Phiếu có điểm', value: String(scores.length), sub: `/ ${totalSheets} phiếu` },
+                { label: 'Điểm TB',   value: avgScore !== null ? String(avgScore) : '—', sub: 'Trung bình' },
+                { label: 'Cao nhất',  value: maxScore !== null ? String(maxScore) : '—', sub: 'Max score' },
+                { label: 'Thấp nhất', value: minScore !== null ? String(minScore) : '—', sub: 'Min score' },
               ] : [
                 { label: 'Số câu', value: '60', sub: 'Theo template VJU' },
               ]),
             ].map((s, i) => (
-              <Card key={i} style={{ borderTop: `3px solid ${(s as { accent?: string }).accent ?? '#C8102E'}` }}>
+              <Card key={i} style={{ borderTop: '3px solid #C8102E' }}>
                 <div style={{ fontSize: 10, color: '#6B7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>{s.label}</div>
                 <div style={{ fontSize: (s as { small?: boolean }).small ? 18 : 26, fontWeight: 800, color: '#1E1E1E' }}>{s.value}</div>
                 <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 3 }}>{s.sub}</div>
@@ -927,12 +936,12 @@ export default function ResultsPage() {
 
         {/* Warning banner */}
         {warnCount > 0 && (
-          <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#92400E' }}>
+          <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
               <AlertTriangle size={16} />
               <strong>{warnCount} phiếu có cảnh báo</strong> — kiểm tra trước khi tải Excel!
             </div>
-            <Button size="sm" variant="secondary" onClick={() => navigate('/app/review-errors', { state: { examId: selectedExamId, templateKey: selectedTemplateKey, templateSchema: selectedTemplateOpt?.templateSchema ?? null } })}>Kiểm tra ngay →</Button>
+            <Button size="sm" variant="outline" onClick={() => navigate('/app/review-errors', { state: { examId: selectedExamId, templateKey: selectedTemplateKey, templateSchema: selectedTemplateOpt?.templateSchema ?? null } })}>Kiểm tra ngay →</Button>
           </div>
         )}
 
@@ -944,7 +953,7 @@ export default function ResultsPage() {
               {batch && (
                 <Badge
                   label={getBatchTemplateLabel(batch)}
-                  style={{ background: '#EFF6FF', color: '#1D4ED8', borderRadius: 9999, padding: '2px 10px', fontSize: 11, fontWeight: 600 }}
+                  style={{ background: '#F3F4F6', color: '#374151', borderRadius: 9999, padding: '2px 10px', fontSize: 11, fontWeight: 600 }}
                 />
               )}
             </div>
