@@ -343,22 +343,22 @@ function DbStatusBanner({ status }: { status: DbSaveStatus }) {
   if (status === 'idle') return null;
   if (status === 'saving') return (
     <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1D4ED8' }}>
-      <Database size={14} /> Đang lưu kết quả vào database…
+      <Database size={14} /> Đang lưu kết quả…
     </div>
   );
   if (status === 'saved') return (
     <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#065F46' }}>
-      <Database size={14} /> Đã lưu kết quả vào database
+      <Database size={14} /> Đã lưu kết quả
     </div>
   );
   if (status === 'auth_failed') return (
     <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#991B1B' }}>
-      <WifiOff size={14} /> Phiên đăng nhập đã hết hạn — kết quả chưa được lưu vào database. Vui lòng đăng nhập lại.
+      <WifiOff size={14} /> Phiên đăng nhập đã hết hạn — kết quả chưa được lưu. Vui lòng đăng nhập lại.
     </div>
   );
   return (
     <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#92400E' }}>
-      <WifiOff size={14} /> Không lưu được database — kết quả đang giữ tạm trong trình duyệt
+      <WifiOff size={14} /> Không lưu được kết quả lên hệ thống — đang giữ tạm trong trình duyệt
     </div>
   );
 }
@@ -846,13 +846,6 @@ export default function ResultsPage() {
         {exportToast && (
           <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#065F46' }}>
             <CheckCircle2 size={14} /> Đã xuất file Excel thành công.
-          </div>
-        )}
-
-        {/* Data source indicator */}
-        {dataSource === 'db' && hasBatch && (
-          <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1D4ED8' }}>
-            <Database size={14} /> Đang hiển thị kết quả đã lưu ({safeResults.length} phiếu)
           </div>
         )}
 
