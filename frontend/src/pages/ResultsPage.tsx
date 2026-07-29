@@ -282,23 +282,22 @@ function RealRow({ idx, r, merged, corrected, sc, onOpen, onDelete, infoFields, 
   return (
     <tr
       onClick={onOpen}
-      style={{ borderBottom: '1px solid #F3F4F6', background: warn ? '#FFF9F9' : corrected ? '#F0FDF4' : '#fff', cursor: 'pointer' }}
+      style={{ borderBottom: '1px solid #F3F4F6', background: warn ? '#FFF5F5' : '#fff', cursor: 'pointer' }}
     >
       <td style={{ padding: '11px 10px', color: '#9CA3AF' }}>{idx}</td>
       <td style={{ padding: '11px 10px' }}>
         <div style={{ fontWeight: 600, color: '#1E1E1E', display: 'flex', alignItems: 'center', gap: 4 }}>
           {r.input?.filename ?? '—'}
-          {warn && !hasIMM && <AlertTriangle size={12} color="#FCB900" title="Có câu tô nhiều đáp án" />}
-          {hasIMM && <AlertTriangle size={12} color="#CA8A04" title={buildInfoWarningsCsv(r) || 'Có nhiều ô tô trong cột thông tin'} />}
+          {warn && !hasIMM && <AlertTriangle size={12} color="#C8102E" title="Có câu tô nhiều đáp án" />}
+          {hasIMM && <AlertTriangle size={12} color="#C8102E" title={buildInfoWarningsCsv(r) || 'Có nhiều ô tô trong cột thông tin'} />}
           {r._error && <span style={{ fontSize: 10, color: '#EF4444', fontWeight: 400 }}>ERR</span>}
           {corrected && <span style={{ fontSize: 10, color: '#10B981', fontWeight: 700, background: '#D1FAE5', borderRadius: 4, padding: '1px 5px' }}>Đã sửa tay</span>}
-          {r.db_id && <span style={{ fontSize: 9, color: '#6366F1', background: '#EEF2FF', borderRadius: 4, padding: '1px 5px' }}>DB</span>}
         </div>
         {r._error && <div style={{ fontSize: 10, color: '#EF4444', marginTop: 2 }}>{r._error.slice(0, 80)}</div>}
       </td>
       {showTemplateCol
         ? <td style={{ padding: '11px 10px', fontSize: 11 }}>
-            <span style={{ background: '#EFF6FF', color: '#1D4ED8', borderRadius: 9999, padding: '2px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            <span style={{ background: '#F3F4F6', color: '#374151', borderRadius: 9999, padding: '2px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>
               {templateLabel ?? '—'}
             </span>
           </td>
