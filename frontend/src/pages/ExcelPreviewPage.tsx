@@ -23,13 +23,13 @@ import { saveAs } from 'file-saver';
 import { dbRowToOmrResult } from '../utils/resultMapping';
 import { resultsApi, customFormsApi, examsApi } from '../services/apiClient';
 import {
-  loadAnswerKey, loadCorrections, VJU_PRESET_SCHEMA,
+  loadAnswerKey, loadCorrections,
 } from '../types/grading';
 import type {
   BatchGradeState, OmrGradeResult, AnswerKeyStore, CorrectionsStore, TemplateSchema,
 } from '../types/grading';
 import type { ExamOut } from '../types/exam';
-import { buildSchemaFromDetail, getRowTemplateKey, getRowTemplateLabel } from '../utils/templateSchema';
+import { buildSchemaFromDetail, getRowTemplateKey, buildTemplateOptionsFromRows } from '../utils/templateSchema';
 import type { TemplateFilterOption } from '../utils/templateSchema';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -234,29 +234,15 @@ export default function ExcelPreviewPage() {
 
   // ── Template options for the selected exam ─────────────────────────────────
 
-  const templateOptions: TemplateFilterOption[] = useMemo(() => {
-    const seen = new Map<string, TemplateFilterOption>();
-    for (const r of allExamResults) {
-      const key = getRowTemplateKey(r, lsFallbackBatch);
-      if (!seen.has(key)) {
-        const isCustom = key.startsWith('custom:');
-        const tid = isCustom ? (r.template_id ?? lsFallbackBatch?.customTemplateId ?? null) : null;
-        const schema: TemplateSchema = isCustom
-          ? (lsFallbackBatch?.templateSchema && lsFallbackBatch.customTemplateId === tid
-              ? lsFallbackBatch.templateSchema
-              : (tid != null && fetchedSchemas.has(tid) ? fetchedSchemas.get(tid)! : { infoFields: [], answerSections: [] }))
-          : VJU_PRESET_SCHEMA;
-        seen.set(key, {
-          key,
-          label:          getRowTemplateLabel(r, lsFallbackBatch, fetchedTemplateNames),
-          templateMode:   isCustom ? 'custom' : 'vju',
-          templateId:     tid,
-          templateSchema: schema,
-        });
-      }
-    }
-    return Array.from(seen.values());
-  }, [allExamResults, lsFallbackBatch, fetchedSchemas, fetchedTemplateNames]);
+  // Shared with ResultsPage (utils/templateSchema.ts) — includes the
+  // "custom:unknown" fallback for rows with no resolvable template_type
+  // (2026-07-29 fix — previously defaulted to VJU's schema, which showed the
+  // wrong column headers and "—" for every info cell on rows actually
+  // graded with a different form).
+  const templateOptions: TemplateFilterOption[] = useMemo(
+    () => buildTemplateOptionsFromRows(allExamResults, lsFallbackBatch, fetchedSchemas, fetchedTemplateNames),
+    [allExamResults, lsFallbackBatch, fetchedSchemas, fetchedTemplateNames],
+  );
 
   // Auto-pick a valid template once options are known (or when the current
   // selection no longer exists, e.g. right after switching exam)

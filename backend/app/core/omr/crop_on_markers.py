@@ -475,6 +475,45 @@ def _detect_markers(
         [chosen["BL"]["cx"], chosen["BL"]["cy"]],
     ], dtype="float32")
 
+    # ── Diagonal-midpoint plausibility check ──────────────────────────────
+    # For a true rectangular sheet, diagonals TL-BR and TR-BL should bisect
+    # each other at (roughly) the same point regardless of perspective/
+    # rotation — a parallelogram property. If one quadrant's "best" scoring
+    # candidate is actually an internal decorative marker (e.g. a Phần
+    # section-divider square) rather than the true corner, this happens
+    # when the true corner wasn't even detected as a contour in this
+    # threshold pass (confirmed on a real phone photo 2026-07-29: the BL
+    # corner was missing entirely under Otsu — likely a shadow/contrast
+    # issue in that region — so the section-divider square near image
+    # centre won the BL bucket by elimination). The other 3 corners,
+    # solidity, and area-consistency checks all look individually fine, so
+    # nothing else here catches it — but the resulting quad's diagonals
+    # miss each other badly (this exact case: ~15.5% of the diagonal
+    # length, versus a clean photo's usual low single digits). This mirrors
+    # the "diagonal" component already scored in _compute_marker_quality
+    # (same 15% cutoff — that component hits 0 exactly here), but as a
+    # hard reject at the point of candidate SELECTION rather than only a
+    # score penalty: rejecting here lets crop_on_markers' outer loop retry
+    # with the next threshold strategy (adaptive/fixed) or relaxation
+    # stage, which may actually find the true corner — whereas failing
+    # later in the quality gate only leads to "give up, use the original
+    # unwarped image" for this attempt, without ever trying to do better.
+    tl_pt = np.array([chosen["TL"]["cx"], chosen["TL"]["cy"]])
+    tr_pt = np.array([chosen["TR"]["cx"], chosen["TR"]["cy"]])
+    br_pt = np.array([chosen["BR"]["cx"], chosen["BR"]["cy"]])
+    bl_pt = np.array([chosen["BL"]["cx"], chosen["BL"]["cy"]])
+    diag_mid1 = (tl_pt + br_pt) / 2.0
+    diag_mid2 = (tr_pt + bl_pt) / 2.0
+    diag_off  = float(np.linalg.norm(diag_mid1 - diag_mid2))
+    diag_len  = float(np.linalg.norm(br_pt - tl_pt)) + 1.0
+    if diag_off > diag_len * 0.15:
+        if debug:
+            logger.debug(
+                f"  _detect_markers: diagonal mismatch (off={diag_off:.0f}px, "
+                f"{diag_off / diag_len * 100:.0f}% of diagonal) → reject, retry next strategy"
+            )
+        return None, None, None
+
     marker_info = [
         {"quad": q, "cx": chosen[q]["cx"], "cy": chosen[q]["cy"],
          "area": chosen[q]["area"], "solidity": chosen[q]["solidity"]}

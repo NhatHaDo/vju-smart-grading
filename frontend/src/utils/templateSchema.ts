@@ -4,7 +4,7 @@
  */
 import type { CustomFormDetail } from '../services/apiClient';
 import type { BatchGradeState, OmrGradeResult, TemplateSchema } from '../types/grading';
-import { TEMPLATE_VARIANT_LABEL } from '../types/grading';
+import { TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA } from '../types/grading';
 
 /**
  * Returns true if a custom-form area should be treated as an MCQ answer field.
@@ -106,15 +106,36 @@ export type TemplateFilterOption = {
 /** Stable per-row key identifying which template a DB/localStorage row belongs
  *  to — "vju:sbd8" or "custom:123". Falls back to the parent batch's own
  *  template when the row itself doesn't carry template_type/template_id
- *  (e.g. rows from a freshly-graded batch that hasn't round-tripped the DB). */
+ *  (e.g. rows from a freshly-graded batch that hasn't round-tripped the DB).
+ *
+ *  2026-07-29 fix: rows whose `template_type` is missing (older DB rows saved
+ *  before this column was tracked) used to silently default to 'vju', which
+ *  force-fit the row into the fixed 6-field VJU schema (CCCD/SBD/Mã đề/Ca
+ *  thi/Mã CTĐT/Tự chọn) even when the row was actually graded with a
+ *  different custom form. The export then showed the wrong column headers
+ *  and "—" for every info cell, because the row's real values are stored
+ *  under that form's own field keys, not VJU's. We now only trust the
+ *  fallback batch when it's explicitly describing this row set; otherwise
+ *  we bucket the row as "custom:unknown" so the caller can build a schema
+ *  from the row's own data instead of guessing wrong. */
 export function getRowTemplateKey(r: OmrGradeResult, fallbackBatch?: BatchGradeState | null): string {
-  const ttype = r.template_type ?? (fallbackBatch?.templateMode === 'custom' ? 'custom' : 'vju');
-  if (ttype === 'custom') {
+  if (r.template_type === 'custom') {
     const tid = r.template_id ?? fallbackBatch?.customTemplateId ?? null;
     return `custom:${tid ?? 'unknown'}`;
   }
-  const tvar = r.template_variant_row ?? fallbackBatch?.templateVariant ?? 'sbd8';
-  return `vju:${tvar}`;
+  if (r.template_type === 'vju') {
+    const tvar = r.template_variant_row ?? fallbackBatch?.templateVariant ?? 'sbd8';
+    return `vju:${tvar}`;
+  }
+  // r.template_type is missing — only trust fallbackBatch if it actually
+  // claims a mode; never assume 'vju' just because it's the default.
+  if (fallbackBatch?.templateMode === 'custom') {
+    return `custom:${fallbackBatch.customTemplateId ?? 'unknown'}`;
+  }
+  if (fallbackBatch?.templateMode === 'vju') {
+    return `vju:${fallbackBatch.templateVariant ?? 'sbd8'}`;
+  }
+  return 'custom:unknown';
 }
 
 /** Human-readable label for getRowTemplateKey()'s bucket, e.g. "Mẫu phiếu VJU
@@ -130,8 +151,85 @@ export function getRowTemplateLabel(
   if (key.startsWith('custom:')) {
     const tid = r.template_id ?? fallbackBatch?.customTemplateId ?? null;
     const name = fallbackBatch?.customTemplateName ?? (tid != null ? templateNames?.get(tid) : null) ?? null;
-    return name ? `Custom - ${name}` : `Custom #${tid ?? '?'}`;
+    if (name) return `Custom - ${name}`;
+    if (tid != null) return `Custom #${tid}`;
+    return 'Không rõ mẫu phiếu (dữ liệu cũ)';
   }
   const tvar = r.template_variant_row ?? fallbackBatch?.templateVariant ?? 'sbd8';
   return TEMPLATE_VARIANT_LABEL[tvar as keyof typeof TEMPLATE_VARIANT_LABEL] ?? tvar.toUpperCase();
+}
+
+/** Build a fallback TemplateSchema by inspecting the union of keys actually
+ *  present across a set of rows whose real template is unresolvable (the
+ *  "custom:unknown" bucket above). Produces sensible-looking column labels
+ *  from the row's own data instead of showing an empty/wrong schema. */
+export function buildInferredSchemaForRows(rows: OmrGradeResult[]): TemplateSchema {
+  const KNOWN_LABELS: Record<string, string> = {
+    cccd: 'CCCD', sbd: 'SBD', ma_de: 'Mã đề', ca_thi: 'Ca thi',
+    ma_ctdt: 'Mã CTĐT', tu_chon: 'Tự chọn',
+  };
+  const infoKeys = new Set<string>();
+  for (const r of rows) {
+    for (const [k, v] of Object.entries(r.student_info ?? {})) {
+      if (v != null && String(v).trim() !== '') infoKeys.add(k);
+    }
+  }
+  const infoFields = [...infoKeys].sort().map(key => ({
+    key,
+    displayName: KNOWN_LABELS[key] ?? key,
+  }));
+
+  const answerKeys = new Set<string>();
+  for (const r of rows) for (const k of Object.keys(r.answers ?? {})) answerKeys.add(k);
+  const { answerSections } = buildSchemaFromAnswerKeys([...answerKeys]);
+
+  return { infoFields, answerSections };
+}
+
+/** Group a flat list of rows into per-template TemplateFilterOptions, ready
+ *  for a template-picker dropdown or an export builder. Single source of
+ *  truth shared by ResultsPage and ExcelPreviewPage (2026-07-29) so both
+ *  pages resolve "which schema does this row actually use" the same way —
+ *  including the custom:unknown fallback above. */
+export function buildTemplateOptionsFromRows(
+  rows: OmrGradeResult[],
+  fallbackBatch: BatchGradeState | null | undefined,
+  fetchedSchemas: Map<number, TemplateSchema>,
+  templateNames?: Map<number, string>,
+): TemplateFilterOption[] {
+  const seen = new Map<string, TemplateFilterOption>();
+  const rowsByKey = new Map<string, OmrGradeResult[]>();
+
+  for (const r of rows) {
+    const key = getRowTemplateKey(r, fallbackBatch);
+    const bucket = rowsByKey.get(key);
+    if (bucket) bucket.push(r); else rowsByKey.set(key, [r]);
+
+    if (!seen.has(key)) {
+      const isCustom = key.startsWith('custom:');
+      const tid = isCustom ? (r.template_id ?? fallbackBatch?.customTemplateId ?? null) : null;
+      const knownSchema: TemplateSchema | null = isCustom
+        ? (fallbackBatch?.templateSchema && fallbackBatch.customTemplateId === tid
+            ? fallbackBatch.templateSchema
+            : (tid != null && fetchedSchemas.has(tid) ? fetchedSchemas.get(tid)! : null))
+        : VJU_PRESET_SCHEMA;
+      seen.set(key, {
+        key,
+        label:          getRowTemplateLabel(r, fallbackBatch, templateNames),
+        templateMode:   isCustom ? 'custom' : 'vju',
+        templateId:     tid,
+        // Placeholder when knownSchema is null — patched below from the
+        // bucket's own rows once every row has been grouped.
+        templateSchema: knownSchema ?? { infoFields: [], answerSections: [] },
+      });
+    }
+  }
+
+  for (const [key, opt] of seen) {
+    if (opt.templateMode === 'custom' && opt.templateId == null) {
+      opt.templateSchema = buildInferredSchemaForRows(rowsByKey.get(key) ?? []);
+    }
+  }
+
+  return Array.from(seen.values());
 }

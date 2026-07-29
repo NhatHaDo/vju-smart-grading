@@ -10,7 +10,7 @@ import { TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, loadAnswerKey, loadCorrectio
 import ResultDetailModal from '../components/results/ResultDetailModal';
 import ExcelPreviewModal from '../components/results/ExcelPreviewModal';
 import { resultsApi, examsApi, customFormsApi, hasToken, ApiError, type BatchResultOut, type ResultBatchSaveRequest } from '../services/apiClient';
-import { buildSchemaFromDetail, getRowTemplateKey, getRowTemplateLabel } from '../utils/templateSchema';
+import { buildSchemaFromDetail, getRowTemplateKey, getRowTemplateLabel, buildTemplateOptionsFromRows } from '../utils/templateSchema';
 import type { TemplateFilterOption } from '../utils/templateSchema';
 import type { ExamOut } from '../types/exam';
 
@@ -663,32 +663,15 @@ export default function ResultsPage() {
   const hasBatch    = safeResults.length > 0;
   const hasKey      = !!answerKey && (Object.keys(answerKey.answers ?? {}).length > 0 || isMultiMaDe(answerKey));
 
-  // Build template options from all rows in the current exam
-  const templateOptions: TemplateFilterOption[] = (() => {
-    const seen = new Map<string, TemplateFilterOption>();
-    for (const r of safeResults) {
-      const key = getRowTemplateKey(r, batch);
-      if (!seen.has(key)) {
-        const isCustom = key.startsWith('custom:');
-        const tid = isCustom ? (r.template_id ?? batch?.customTemplateId ?? null) : null;
-        const schema: TemplateSchema = isCustom
-          ? (batch?.templateSchema && batch.customTemplateId === tid
-              ? batch.templateSchema
-              : (tid != null && fetchedSchemas.has(tid)
-                  ? fetchedSchemas.get(tid)!
-                  : { infoFields: [], answerSections: [] }))
-          : VJU_PRESET_SCHEMA;
-        seen.set(key, {
-          key,
-          label:         getRowTemplateLabel(r, batch, fetchedTemplateNames),
-          templateMode:  isCustom ? 'custom' : 'vju',
-          templateId:    tid,
-          templateSchema: schema,
-        });
-      }
-    }
-    return Array.from(seen.values());
-  })();
+  // Build template options from all rows in the current exam — shared logic
+  // with ExcelPreviewPage (utils/templateSchema.ts), including the
+  // "custom:unknown" fallback for rows with no resolvable template_type
+  // (2026-07-29 fix — previously defaulted to VJU's schema, which showed the
+  // wrong column headers and "—" for every info cell on rows actually
+  // graded with a different form).
+  const templateOptions: TemplateFilterOption[] = buildTemplateOptionsFromRows(
+    safeResults, batch, fetchedSchemas, fetchedTemplateNames,
+  );
 
   const multipleTemplates  = templateOptions.length > 1;
   const isAllMode          = selectedTemplateKey === 'all';
