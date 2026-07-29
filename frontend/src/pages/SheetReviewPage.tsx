@@ -20,11 +20,15 @@ const SBD_TYPES: { label: string; variant: TemplateVariant }[] = [
  * "Pinned" custom templates — shown as a fixed one-click button right next to
  * the SBD 4/8 radios (no need to open the "Custom template" tab), while still
  * grading through the exact same template_id-based path as the Custom
- * template flow underneath (already verified working — see id=8 "test").
+ * template flow underneath. These are installed via
+ * backend/scripts/import_shared_template.py and flagged is_default=True so
+ * any logged-in account can read them (see _get_readable_or_404 in
+ * custom_forms.py) — the id below MUST match what that script printed on
+ * the target environment's database (production id=2, may differ per env).
  * To add/rename/remove one, just edit this list.
  */
 const PINNED_TEMPLATES: { label: string; id: number }[] = [
-  { label: 'Mẫu 40 câu TN + Đúng/Sai', id: 8 },
+  { label: 'Mẫu 40 câu TN + Đúng/Sai', id: 2 },
 ];
 
 const SOURCES: { label: string; value: ImageSource }[] = [
