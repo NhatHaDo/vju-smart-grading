@@ -27,6 +27,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Union
@@ -396,6 +397,13 @@ class OMREngine:
             vis.overlay_all_path = str(p)
             logger.info(f"Saved overlay_all → {p} (projected={_use_projected})")
         except Exception as e:
+            # 2026-07-29: logger.warning() alone was silently going nowhere in
+            # production (app logger got no output at all — separate logging
+            # config issue), which made this failure invisible for weeks.
+            # print() bypasses logging entirely and is guaranteed to land in
+            # the nohup-redirected log file regardless of logger config.
+            print(f"[run_full_debug] overlay_all FAILED: {type(e).__name__}: {e}", flush=True)
+            traceback.print_exc()
             logger.warning(f"overlay_all failed: {e}")
 
         # ── 3. overlay_marked_only ────────────────────────────────────────
@@ -419,6 +427,8 @@ class OMREngine:
             vis.overlay_marked_only_path = str(p)
             logger.info(f"Saved overlay_marked_only → {p} (projected={_use_projected})")
         except Exception as e:
+            print(f"[run_full_debug] overlay_marked_only FAILED: {type(e).__name__}: {e}", flush=True)
+            traceback.print_exc()
             logger.warning(f"overlay_marked_only failed: {e}")
 
         # ── 4. overlay_warnings ───────────────────────────────────────────
@@ -442,6 +452,8 @@ class OMREngine:
             vis.overlay_warnings_path = str(p)
             logger.info(f"Saved overlay_warnings → {p} (projected={_use_projected})")
         except Exception as e:
+            print(f"[run_full_debug] overlay_warnings FAILED: {type(e).__name__}: {e}", flush=True)
+            traceback.print_exc()
             logger.warning(f"overlay_warnings failed: {e}")
 
         # ── 5. means.json ────────────────────────────────────────────────
