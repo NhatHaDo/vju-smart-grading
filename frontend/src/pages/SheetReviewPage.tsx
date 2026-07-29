@@ -167,7 +167,16 @@ export default function SheetReviewPage() {
     setFiles(prev => prev.filter((_, i) => i !== idx));
   };
 
+  // Note: `customForms` (used for the "Custom template" tab dropdown) can be
+  // scoped/filtered in ways that don't include a pinned template's id (e.g.
+  // if the list endpoint filters by ownership differently than the by-id
+  // fetch used above for the schema). So for the *id* we always trust
+  // `effectiveCustomId` directly — it's either the user's own dropdown pick
+  // (which by construction is in the list) or a hardcoded PINNED_TEMPLATES
+  // id. `selectedCustomForm` below is only used for a nicer display name.
   const selectedCustomForm = customForms.find(f => f.id === effectiveCustomId) ?? null;
+  const pinnedTemplateLabel = PINNED_TEMPLATES.find(pt => pt.id === effectiveCustomId)?.label ?? null;
+  const effectiveCustomName = selectedCustomForm?.name ?? pinnedTemplateLabel;
 
   /** Navigate to AnswerKeyPage carrying File objects + selected exam + template in location.state. */
   const handleGoToAnswerKey = () => {
@@ -183,8 +192,8 @@ export default function SheetReviewPage() {
         examName: exam?.name ?? null,
         // custom template fields
         templateMode: effectiveTemplateMode,
-        customTemplateId:   effectiveTemplateMode === 'custom' ? (selectedCustomForm?.id   ?? null) : null,
-        customTemplateName: effectiveTemplateMode === 'custom' ? (selectedCustomForm?.name ?? null) : null,
+        customTemplateId:   effectiveTemplateMode === 'custom' ? effectiveCustomId    : null,
+        customTemplateName: effectiveTemplateMode === 'custom' ? effectiveCustomName  : null,
         templateSchema:     effectiveTemplateMode === 'custom' ? customTemplateSchema : null,
       },
     });
@@ -310,7 +319,7 @@ export default function SheetReviewPage() {
               <div style={{ marginLeft: 8, fontSize: 12, color: '#6B7280', background: '#F9FAFB', borderRadius: 8, padding: '5px 12px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 <CheckCircle2 size={13} color="#10B981" />
                 <strong style={{ color: '#1E1E1E' }}>
-                  {selectedPinnedCustomId === null ? TEMPLATE_VARIANT_LABEL[templateVariant] : (selectedCustomForm?.name ?? '…')}
+                  {selectedPinnedCustomId === null ? TEMPLATE_VARIANT_LABEL[templateVariant] : (effectiveCustomName ?? '…')}
                 </strong>
               </div>
             </div>
@@ -442,7 +451,7 @@ export default function SheetReviewPage() {
                 {files.length} phiếu sẵn sàng — bước tiếp theo: nhập đáp án
               </div>
               <div style={{ fontSize: 12, color: '#6B7280' }}>
-                Template: <strong>{TEMPLATE_VARIANT_LABEL[templateVariant]}</strong>
+                Template: <strong>{effectiveTemplateMode === 'custom' ? (effectiveCustomName ?? '…') : TEMPLATE_VARIANT_LABEL[templateVariant]}</strong>
                 {currentExam ? <> · Kỳ thi: <strong>{currentExam.name}</strong></> : <span style={{ color: '#EF4444' }}> · Chưa chọn kỳ thi!</span>}
                 {' '}· Bạn sẽ được chuyển sang trang Answer Key để xác nhận đáp án trước khi chấm.
               </div>

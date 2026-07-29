@@ -17,14 +17,14 @@ import {
   TableProperties,
 } from 'lucide-react';
 
-interface NavItem {
+export interface NavItem {
   to: string;
   icon: React.ReactNode;
   label: string;
   end?: boolean;
 }
 
-const NAV_ITEMS: NavItem[] = [
+export const NAV_ITEMS: NavItem[] = [
   { to: '/app',              icon: <LayoutGrid   size={20} />, label: 'Dashboard',           end: true },
   { to: '/app/exams',        icon: <BookOpen     size={20} />, label: 'Kỳ thi' },
   { to: '/app/upload',       icon: <Upload       size={20} />, label: 'Upload & Chấm' },
@@ -37,7 +37,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/app/template-coordinate', icon: <ScanLine size={20} />, label: 'Tạo Template Tọa Độ' },
 ];
 
-const BOTTOM_ITEMS: NavItem[] = [
+export const BOTTOM_ITEMS: NavItem[] = [
   { to: '/omr-debug', icon: <Bug size={20} />, label: 'OMR Debug' },
 ];
 
@@ -115,6 +115,7 @@ function Divider() {
 export default function Sidebar() {
   return (
     <aside
+      className="app-sidebar"
       style={{
         width: 58,
         minHeight: '100%',

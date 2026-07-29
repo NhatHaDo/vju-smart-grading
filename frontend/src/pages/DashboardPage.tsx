@@ -272,10 +272,10 @@ export default function DashboardPage() {
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
       <PageHeader title="Dashboard" subtitle="Tổng quan kỳ thi, phiếu đã chấm và các mục cần kiểm tra" />
 
-      <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div className="dash-content" style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 20 }}>
 
         {/* ── Welcome banner ───────────────────────────────────────────────── */}
-        <div style={{
+        <div className="dash-hero" style={{
           background: 'linear-gradient(135deg, #C8102E 60%, #a00d24)',
           borderRadius: 14, padding: '28px 32px',
           position: 'relative', overflow: 'hidden',
@@ -287,10 +287,10 @@ export default function DashboardPage() {
             <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>
               HỆ THỐNG CHẤM PHIẾU
             </div>
-            <div style={{ fontSize: 26, fontWeight: 800, color: '#fff', lineHeight: 1.2, marginBottom: 20 }}>
+            <div className="dash-hero-title" style={{ fontSize: 26, fontWeight: 800, color: '#fff', lineHeight: 1.2, marginBottom: 20 }}>
               Xin chào, <br />{userName} 👋
             </div>
-            <div style={{ display: 'flex', gap: 10 }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <Button size="md" onClick={() => navigate('/app/upload')}
                 style={{ background: 'rgba(255,255,255,0.18)', color: '#fff', border: '1.5px solid rgba(255,255,255,0.5)' }}>
                 ↑ Chấm phiếu
@@ -304,7 +304,7 @@ export default function DashboardPage() {
         </div>
 
         {/* ── Stat cards ───────────────────────────────────────────────────── */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+        <div className="dash-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
           <StatCard
             label="Kỳ thi"
             value={totalExams}
@@ -352,7 +352,7 @@ export default function DashboardPage() {
         )}
 
         {/* ── Bottom row: bar chart + donut ────────────────────────────────── */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div className="dash-bottom-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
 
           {/* Bar chart: progress per exam */}
           <Card>
@@ -420,42 +420,44 @@ export default function DashboardPage() {
               </button>
             </div>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: '#C8102E' }}>
-                  {['Tên kỳ thi', 'Môn học · Học kỳ', 'Ngày thi', 'SV', 'Tiến độ'].map(h => (
-                    <th key={h} style={{ textAlign: 'left', padding: '10px 16px', fontWeight: 600, color: '#fff', fontSize: 12 }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {[...progressByExam]
-                  .sort((a, b) => b.exam.created_at.localeCompare(a.exam.created_at))
-                  .slice(0, 8)
-                  .map(({ exam, graded }, i) => {
-                    const sc = getExamStudentCount(exam);
-                    const studentStr    = sc !== null ? String(sc) : '—';
-                    const progressLabel = sc !== null ? `${graded}/${sc}` : `${graded}/—`;
-                    const subjectLabel  = [exam.subject, exam.semester].filter(Boolean).join(' · ') || '—';
-                    return (
-                      <tr key={i} style={{ borderBottom: '1px solid #F3F4F6', background: '#fff' }}>
-                        <td style={{ padding: '11px 16px', fontWeight: 600, color: '#1E1E1E' }}>{exam.name}</td>
-                        <td style={{ padding: '11px 16px', color: '#6B7280' }}>{subjectLabel}</td>
-                        <td style={{ padding: '11px 16px', color: '#6B7280' }}>{fmtDate(exam.exam_date)}</td>
-                        <td style={{ padding: '11px 16px', color: '#374151' }}>{studentStr}</td>
-                        <td style={{ padding: '11px 16px' }}>
-                          <Badge
-                            color={progressBadgeColor(graded, sc)}
-                            title={`${graded} phiếu đã chấm / ${sc ?? '?'} sinh viên dự kiến`}
-                          >
-                            {progressLabel}
-                          </Badge>
-                        </td>
-                      </tr>
-                    );
-                  })}
-              </tbody>
-            </table>
+            <div className="dash-table-scroll">
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: '#C8102E' }}>
+                    {['Tên kỳ thi', 'Môn học · Học kỳ', 'Ngày thi', 'SV', 'Tiến độ'].map(h => (
+                      <th key={h} style={{ textAlign: 'left', padding: '10px 16px', fontWeight: 600, color: '#fff', fontSize: 12 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...progressByExam]
+                    .sort((a, b) => b.exam.created_at.localeCompare(a.exam.created_at))
+                    .slice(0, 8)
+                    .map(({ exam, graded }, i) => {
+                      const sc = getExamStudentCount(exam);
+                      const studentStr    = sc !== null ? String(sc) : '—';
+                      const progressLabel = sc !== null ? `${graded}/${sc}` : `${graded}/—`;
+                      const subjectLabel  = [exam.subject, exam.semester].filter(Boolean).join(' · ') || '—';
+                      return (
+                        <tr key={i} style={{ borderBottom: '1px solid #F3F4F6', background: '#fff' }}>
+                          <td style={{ padding: '11px 16px', fontWeight: 600, color: '#1E1E1E' }}>{exam.name}</td>
+                          <td style={{ padding: '11px 16px', color: '#6B7280' }}>{subjectLabel}</td>
+                          <td style={{ padding: '11px 16px', color: '#6B7280' }}>{fmtDate(exam.exam_date)}</td>
+                          <td style={{ padding: '11px 16px', color: '#374151' }}>{studentStr}</td>
+                          <td style={{ padding: '11px 16px' }}>
+                            <Badge
+                              color={progressBadgeColor(graded, sc)}
+                              title={`${graded} phiếu đã chấm / ${sc ?? '?'} sinh viên dự kiến`}
+                            >
+                              {progressLabel}
+                            </Badge>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
           )}
         </Card>
 
@@ -469,7 +471,7 @@ export default function DashboardPage() {
               Chưa có dữ liệu.
             </div>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            <div className="dash-subject-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
               {subjectScores.map(s => (
                 <SubjectBar key={s.label} label={s.label} avg={s.avg} color={s.color} />
               ))}

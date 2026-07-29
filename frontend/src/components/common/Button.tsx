@@ -41,6 +41,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
           gap: 7,
           fontFamily: 'inherit',
           fontWeight: 600,
+          whiteSpace: 'nowrap',
           cursor: isDisabled ? 'not-allowed' : 'pointer',
           opacity: isDisabled ? 0.55 : 1,
           transition: 'transform 150ms, box-shadow 150ms, opacity 150ms',
