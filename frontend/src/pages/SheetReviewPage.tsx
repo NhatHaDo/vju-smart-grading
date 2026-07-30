@@ -1,15 +1,30 @@
 import { useState, useRef, useEffect } from 'react';
-import { FileImage, CheckCircle2, AlertTriangle, X, ArrowRight, RefreshCw, LayoutTemplate } from 'lucide-react';
+import { FileImage, CheckCircle2, AlertTriangle, X, RefreshCw, LayoutTemplate, FolderUp, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import PageHeader from '../components/layout/PageHeader';
 import type { TemplateVariant, ImageSource, TemplateSchema } from '../types/grading';
-import { TEMPLATE_VARIANT_LABEL, saveLastUsedTemplate, PINNED_TEMPLATES } from '../types/grading';
+import {
+  TEMPLATE_VARIANT_LABEL, saveLastUsedTemplate, PINNED_TEMPLATES, PINNED_TEMPLATE_40_ID, VJU_PRESET_SCHEMA,
+  VJU_SBD4_PREVIEW_IMAGE, VJU_SBD8_PREVIEW_IMAGE, PINNED_TEMPLATE_40_PREVIEW_IMAGE,
+} from '../types/grading';
 import { examsApi, customFormsApi } from '../services/apiClient';
 import type { CustomFormMeta } from '../services/apiClient';
 import type { ExamOut } from '../types/exam';
 import { buildSchemaFromDetail } from '../utils/templateSchema';
+import TemplatePreviewThumb, { type TemplateAreaLike } from '../components/common/TemplatePreviewThumb';
+
+// Minimal shape of the File System Access API's directory handle — not in
+// the project's DOM lib target, and we only need `values()`/`getFile()`.
+interface FileSystemFileHandleLike {
+  kind: 'file';
+  getFile: () => Promise<File>;
+}
+interface FileSystemDirectoryHandleLike {
+  kind: 'directory';
+  values: () => AsyncIterable<FileSystemFileHandleLike | FileSystemDirectoryHandleLike>;
+}
 
 const SBD_TYPES: { label: string; variant: TemplateVariant }[] = [
   { label: 'SBD 4 số', variant: 'sbd4' },
@@ -19,12 +34,15 @@ const SBD_TYPES: { label: string; variant: TemplateVariant }[] = [
 // PINNED_TEMPLATES now lives in types/grading.ts (shared with AnswerKeyPage's
 // own template picker so both pages offer the exact same quick options).
 
-const SOURCES: { label: string; value: ImageSource }[] = [
-  { label: 'Tự động phát hiện',                value: 'auto' },
-  { label: 'Scan máy (flatbed)',                value: 'flatbed' },
-  { label: 'Scan app (CamScanner, Adobe Scan...)', value: 'scan_app' },
-  { label: 'Ảnh camera điện thoại',             value: 'camera' },
-];
+// 2026-07-30: "Nguồn ảnh" removed — teachers didn't know which option to
+// pick ("người dùng không biết đâu mà lần"). Always auto-detect now.
+const FIXED_IMAGE_SOURCE: ImageSource = 'auto';
+
+const SUPPORTED_EXTS = ['.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp', '.tif', '.tiff', '.bmp', '.pdf'];
+function isSupportedFile(f: File): boolean {
+  const name = f.name.toLowerCase();
+  return SUPPORTED_EXTS.some(ext => name.endsWith(ext));
+}
 
 export default function SheetReviewPage() {
   const navigate = useNavigate();
@@ -48,15 +66,29 @@ export default function SheetReviewPage() {
   /** Full schema fetched from GET /custom-forms/{id} — drives dynamic columns downstream */
   const [customTemplateSchema, setCustomTemplateSchema] = useState<TemplateSchema | null>(null);
   const [schemaLoading,      setSchemaLoading]      = useState(false);
+  // "chọn mục nào GV cần nhìn được template đó là như thế nào" — sơ đồ vùng
+  // đọc của mẫu đang chọn, cùng nguồn fetch với customTemplateSchema ở trên.
+  const [previewAreas, setPreviewAreas] = useState<TemplateAreaLike[] | null>(null);
+  const [previewPageW, setPreviewPageW] = useState<number | null>(null);
+  const [previewPageH, setPreviewPageH] = useState<number | null>(null);
 
   // ── Other ─────────────────────────────────────────────────────────────────
-  const [selectedSource, setSelectedSource] = useState(0);
   const [files,          setFiles]          = useState<File[]>([]);
   const [dragging,       setDragging]       = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [dupWarning,     setDupWarning]     = useState<string | null>(null);
+  const [selectedIdx,    setSelectedIdx]    = useState<Set<number>>(new Set());
+  const fileRef   = useRef<HTMLInputElement>(null);
+  const folderRef = useRef<HTMLInputElement>(null);
+
+  // webkitdirectory/directory aren't in React's DOM typings, so set them
+  // imperatively once the folder-picker input is mounted.
+  useEffect(() => {
+    const el = folderRef.current;
+    if (el) { el.setAttribute('webkitdirectory', ''); el.setAttribute('directory', ''); }
+  }, []);
 
   const templateVariant: TemplateVariant = SBD_TYPES[selectedSbd].variant;
-  const imageSource: ImageSource = SOURCES[selectedSource].value;
+  const imageSource: ImageSource = FIXED_IMAGE_SOURCE;
 
   // A pinned template (picked from the "vju" tab) grades through the same
   // custom-template path as the "custom" tab — these two "effective" values
@@ -123,6 +155,7 @@ export default function SheetReviewPage() {
   useEffect(() => {
     if (effectiveTemplateMode !== 'custom' || effectiveCustomId === null) {
       setCustomTemplateSchema(null);
+      setPreviewAreas(null); setPreviewPageW(null); setPreviewPageH(null);
       // Remember "VJU preset" as the last-used template too, so AnswerKeyPage
       // (opened directly, not via this upload flow) doesn't keep re-showing a
       // stale custom template's schema after the user switches back to VJU.
@@ -146,6 +179,9 @@ export default function SheetReviewPage() {
       .then(detail => {
         const schema = buildSchemaFromDetail(detail);
         setCustomTemplateSchema(schema);
+        setPreviewAreas((detail.areas as TemplateAreaLike[]) ?? null);
+        setPreviewPageW(detail.page_width  ?? null);
+        setPreviewPageH(detail.page_height ?? null);
         // Cache for AnswerKeyPage fallback — scoped to this template's id.
         try { sessionStorage.setItem('vju_template_schema', JSON.stringify({ id: effectiveCustomId, schema })); } catch { /* ignore */ }
         // Durable (localStorage) record of "last template used" — lets
@@ -153,18 +189,88 @@ export default function SheetReviewPage() {
         // the sidebar instead of always defaulting to VJU preset.
         saveLastUsedTemplate({ mode: 'custom', id: effectiveCustomId, name: detail.name ?? null });
       })
-      .catch(() => setCustomTemplateSchema(null))
+      .catch(() => { setCustomTemplateSchema(null); setPreviewAreas(null); setPreviewPageW(null); setPreviewPageH(null); })
       .finally(() => setSchemaLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveCustomId, effectiveTemplateMode]);
 
-  const handleFiles = (newFiles: FileList | null) => {
+  // 2026-07-30: "khi t up trùng phiếu thì nó sẽ loại đi phiếu trùng và
+  // warning" — dedupe by name+size (good-enough proxy for "same file",
+  // cheap — no need to hash contents) against what's already in the list,
+  // and against duplicates within the same drop/selection itself.
+  const handleFiles = (newFiles: FileList | File[] | null, filterSupported = false) => {
     if (!newFiles) return;
-    setFiles(prev => [...prev, ...Array.from(newFiles)]);
+    const all = Array.from(newFiles);
+    const incoming = filterSupported ? all.filter(isSupportedFile) : all;
+    const seen = new Set(files.map(f => `${f.name}::${f.size}`));
+    const toAdd: File[] = [];
+    let dupCount = 0;
+    for (const f of incoming) {
+      const key = `${f.name}::${f.size}`;
+      if (seen.has(key)) { dupCount++; continue; }
+      seen.add(key);
+      toAdd.push(f);
+    }
+    if (toAdd.length > 0) setFiles(prev => [...prev, ...toAdd]);
+    if (dupCount > 0) {
+      setDupWarning(`Đã bỏ qua ${dupCount} file trùng (đã có trong danh sách).`);
+    } else if (filterSupported && incoming.length !== all.length) {
+      setDupWarning(`Đã bỏ qua ${all.length - incoming.length} file không đúng định dạng hỗ trợ.`);
+    } else {
+      setDupWarning(null);
+    }
+  };
+
+  // 2026-07-30: "cái mà 'hoặc chọn cả thư mục' ấy, t có thấy chọn đc cả thư
+  // mục đâu" — the plain <input webkitdirectory> native picker on macOS
+  // Chrome looks *identical* to a normal "Open File" dialog (same sidebar,
+  // same icon grid, "Open" button) — teachers didn't realize single-clicking
+  // a folder to highlight it then pressing "Open" is how you pick it there,
+  // and gave up. Chrome/Edge expose a purpose-built File System Access API
+  // (`showDirectoryPicker`) whose dialog is unambiguous ("Select" a folder,
+  // nothing else clickable) — use that when available, and only fall back to
+  // the old webkitdirectory input for browsers that don't support it
+  // (Safari/Firefox).
+  const pickFolder = async () => {
+    const picker = (window as unknown as { showDirectoryPicker?: () => Promise<FileSystemDirectoryHandleLike> }).showDirectoryPicker;
+    if (!picker) { folderRef.current?.click(); return; }
+    try {
+      const dirHandle = await picker();
+      const collected: File[] = [];
+      const walk = async (handle: FileSystemDirectoryHandleLike) => {
+        for await (const entry of handle.values()) {
+          if (entry.kind === 'file') {
+            collected.push(await entry.getFile());
+          } else if (entry.kind === 'directory') {
+            await walk(entry);
+          }
+        }
+      };
+      await walk(dirHandle);
+      handleFiles(collected, true);
+    } catch {
+      // user cancelled the picker — nothing to do
+    }
   };
 
   const removeFile = (idx: number) => {
     setFiles(prev => prev.filter((_, i) => i !== idx));
+    setSelectedIdx(prev => { const next = new Set(prev); next.delete(idx); return next; });
+  };
+
+  const toggleSelected = (idx: number) => {
+    setSelectedIdx(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx); else next.add(idx);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => {
+    setSelectedIdx(prev => (prev.size === files.length ? new Set() : new Set(files.map((_, i) => i))));
+  };
+  const removeSelected = () => {
+    setFiles(prev => prev.filter((_, i) => !selectedIdx.has(i)));
+    setSelectedIdx(new Set());
   };
 
   // Note: `customForms` (used for the "Custom template" tab dropdown) can be
@@ -266,142 +372,167 @@ export default function SheetReviewPage() {
         <Card>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#C8102E', marginBottom: 12 }}>Chọn mẫu phiếu</div>
 
-          {/* Mode tabs */}
-          <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-            {([
-              { value: 'vju',    label: 'Mẫu phiếu VJU' },
-              { value: 'custom', label: 'Custom template' },
-            ] as const).map(opt => (
-              <button
-                key={opt.value}
-                onClick={() => setTemplateMode(opt.value)}
-                style={{
-                  padding: '7px 16px', borderRadius: 9999, fontSize: 13, fontWeight: 600,
-                  border: `1.5px solid ${templateMode === opt.value ? '#C8102E' : '#E5E7EB'}`,
-                  background: templateMode === opt.value ? '#FEF2F2' : '#fff',
-                  color: templateMode === opt.value ? '#C8102E' : '#374151',
-                  cursor: 'pointer', fontFamily: 'inherit',
-                  display: 'flex', alignItems: 'center', gap: 5,
-                }}
-              >
-                {opt.value === 'custom' && <LayoutTemplate size={13} />}
-                {opt.label}
-              </button>
-            ))}
-          </div>
-
-          {/* VJU mode — SBD selector */}
-          {templateMode === 'vju' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 13, color: '#6B7280', fontWeight: 600 }}>Loại SBD:</span>
-              {SBD_TYPES.map((s, i) => (
-                <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: selectedPinnedCustomId === null && i === selectedSbd ? 700 : 400, color: selectedPinnedCustomId === null && i === selectedSbd ? '#C8102E' : '#374151' }}>
-                  <input
-                    type="radio" name="sbd"
-                    checked={selectedPinnedCustomId === null && i === selectedSbd}
-                    onChange={() => { setSelectedSbd(i); setSelectedPinnedCustomId(null); }}
-                    style={{ accentColor: '#C8102E' }}
-                  />
-                  {s.label}
-                </label>
-              ))}
-              {PINNED_TEMPLATES.map(pt => (
-                <label key={pt.id} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: selectedPinnedCustomId === pt.id ? 700 : 400, color: selectedPinnedCustomId === pt.id ? '#C8102E' : '#374151' }}>
-                  <input
-                    type="radio" name="sbd"
-                    checked={selectedPinnedCustomId === pt.id}
-                    onChange={() => setSelectedPinnedCustomId(pt.id)}
-                    style={{ accentColor: '#C8102E' }}
-                  />
-                  {pt.label}
-                </label>
-              ))}
-              <div style={{ marginLeft: 8, fontSize: 12, color: '#6B7280', background: '#F9FAFB', borderRadius: 8, padding: '5px 12px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <CheckCircle2 size={13} color="#10B981" />
-                <strong style={{ color: '#1E1E1E' }}>
-                  {selectedPinnedCustomId === null ? TEMPLATE_VARIANT_LABEL[templateVariant] : (effectiveCustomName ?? '…')}
-                </strong>
-              </div>
-            </div>
-          )}
-
-          {/* Custom template mode */}
-          {templateMode === 'custom' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {customFormsLoading ? (
-                <div style={{ fontSize: 13, color: '#9CA3AF' }}>Đang tải custom template…</div>
-              ) : customForms.length === 0 ? (
-                <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#92400E' }}>
-                  Chưa có custom template nào.{' '}
+          {/* 2026-07-30: two-column layout — picker on the left, bigger live
+             preview on the right, so the reference photo is actually legible
+             instead of a 130px-tall thumbnail buried under the picker. */}
+          <div style={{ display: 'flex', gap: 28, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            {/* Left: mode tabs + picker */}
+            <div style={{ flex: '1 1 360px', minWidth: 300 }}>
+              {/* Mode tabs */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+                {([
+                  { value: 'vju',    label: 'Mẫu phiếu VJU' },
+                  { value: 'custom', label: 'Custom template' },
+                ] as const).map(opt => (
                   <button
-                    onClick={() => navigate('/app/templates')}
-                    style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#C8102E', fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: 0 }}
+                    key={opt.value}
+                    onClick={() => setTemplateMode(opt.value)}
+                    style={{
+                      padding: '7px 16px', borderRadius: 9999, fontSize: 13, fontWeight: 600,
+                      border: `1.5px solid ${templateMode === opt.value ? '#C8102E' : '#E5E7EB'}`,
+                      background: templateMode === opt.value ? '#FEF2F2' : '#fff',
+                      color: templateMode === opt.value ? '#C8102E' : '#374151',
+                      cursor: 'pointer', fontFamily: 'inherit',
+                      display: 'flex', alignItems: 'center', gap: 5,
+                    }}
                   >
-                    Vào Template phiếu để define →
+                    {opt.value === 'custom' && <LayoutTemplate size={13} />}
+                    {opt.label}
                   </button>
-                </div>
-              ) : (
-                <>
-                  <select
-                    value={selectedCustomId ?? ''}
-                    onChange={e => setSelectedCustomId(Number(e.target.value))}
-                    style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1.5px solid #E5E7EB', fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff' }}
-                  >
-                    {customForms.map(f => (
-                      <option key={f.id} value={f.id}>
-                        {f.name}{f.area_count > 0 ? ` — ${f.area_count} vùng OMR` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  {selectedCustomForm && (
-                    <div style={{ fontSize: 12, color: '#6B7280', background: '#F9FAFB', borderRadius: 8, padding: '5px 12px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                      <CheckCircle2 size={13} color="#10B981" />
-                      Template: <strong style={{ color: '#1E1E1E' }}>{selectedCustomForm.name}</strong>
-                      {selectedCustomForm.page_width && selectedCustomForm.page_height && (
-                        <span style={{ color: '#9CA3AF' }}>· {selectedCustomForm.page_width}×{selectedCustomForm.page_height}</span>
-                      )}
-                      {schemaLoading && <span style={{ color: '#9CA3AF' }}>· Đang tải schema…</span>}
-                      {!schemaLoading && customTemplateSchema && (
-                        <span style={{ color: '#10B981' }}>
-                          · {customTemplateSchema.infoFields.length} trường thông tin,{' '}
-                          {customTemplateSchema.answerSections.reduce((n, s) => n + s.labels.length, 0)} câu trắc nghiệm
-                        </span>
-                      )}
-                      {!schemaLoading && !customTemplateSchema && (
-                        <span style={{ color: '#EF4444' }}>· Không tải được schema</span>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  onClick={() => navigate('/app/templates')}
-                  style={{ border: '1.5px solid #E5E7EB', borderRadius: 9999, padding: '4px 12px', fontSize: 11, fontWeight: 600, color: '#374151', background: '#fff', cursor: 'pointer', fontFamily: 'inherit' }}
-                >
-                  Quản lý template →
-                </button>
-                <button
-                  onClick={loadCustomForms}
-                  style={{ border: '1.5px solid #E5E7EB', borderRadius: 9999, padding: '4px 12px', fontSize: 11, fontWeight: 600, color: '#374151', background: '#fff', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}
-                >
-                  <RefreshCw size={11} /> Làm mới
-                </button>
+                ))}
               </div>
-            </div>
-          )}
-        </Card>
 
-        {/* Source */}
-        <Card>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>Nguồn ảnh:</span>
-            {SOURCES.map((s, i) => (
-              <label key={s.value} style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 13, color: '#374151' }}>
-                <input type="radio" name="source" checked={i === selectedSource} onChange={() => setSelectedSource(i)} style={{ accentColor: '#C8102E' }} />
-                {s.label}
-              </label>
-            ))}
+              {/* VJU mode — SBD selector */}
+              {templateMode === 'vju' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, color: '#6B7280', fontWeight: 600 }}>Loại SBD:</span>
+                    {SBD_TYPES.map((s, i) => (
+                      <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: selectedPinnedCustomId === null && i === selectedSbd ? 700 : 400, color: selectedPinnedCustomId === null && i === selectedSbd ? '#C8102E' : '#374151' }}>
+                        <input
+                          type="radio" name="sbd"
+                          checked={selectedPinnedCustomId === null && i === selectedSbd}
+                          onChange={() => { setSelectedSbd(i); setSelectedPinnedCustomId(null); }}
+                          style={{ accentColor: '#C8102E' }}
+                        />
+                        {s.label}
+                      </label>
+                    ))}
+                    {PINNED_TEMPLATES.map(pt => (
+                      <label key={pt.id} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: selectedPinnedCustomId === pt.id ? 700 : 400, color: selectedPinnedCustomId === pt.id ? '#C8102E' : '#374151' }}>
+                        <input
+                          type="radio" name="sbd"
+                          checked={selectedPinnedCustomId === pt.id}
+                          onChange={() => setSelectedPinnedCustomId(pt.id)}
+                          style={{ accentColor: '#C8102E' }}
+                        />
+                        {pt.label}
+                      </label>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#6B7280', background: '#F9FAFB', borderRadius: 8, padding: '5px 12px', display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start' }}>
+                    <CheckCircle2 size={13} color="#10B981" />
+                    <strong style={{ color: '#1E1E1E' }}>
+                      {selectedPinnedCustomId === null ? TEMPLATE_VARIANT_LABEL[templateVariant] : (effectiveCustomName ?? '…')}
+                    </strong>
+                  </div>
+                </div>
+              )}
+
+              {/* Custom template mode */}
+              {templateMode === 'custom' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {customFormsLoading ? (
+                    <div style={{ fontSize: 13, color: '#9CA3AF' }}>Đang tải custom template…</div>
+                  ) : customForms.length === 0 ? (
+                    <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#92400E' }}>
+                      Chưa có custom template nào.{' '}
+                      <button
+                        onClick={() => navigate('/app/templates')}
+                        style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#C8102E', fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: 0 }}
+                      >
+                        Vào Template phiếu để define →
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <select
+                        value={selectedCustomId ?? ''}
+                        onChange={e => setSelectedCustomId(Number(e.target.value))}
+                        style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1.5px solid #E5E7EB', fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff' }}
+                      >
+                        {customForms.map(f => (
+                          <option key={f.id} value={f.id}>
+                            {f.name}{f.area_count > 0 ? ` — ${f.area_count} vùng OMR` : ''}
+                          </option>
+                        ))}
+                      </select>
+                      {selectedCustomForm && (
+                        <div style={{ fontSize: 12, color: '#6B7280', background: '#F9FAFB', borderRadius: 8, padding: '5px 12px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <CheckCircle2 size={13} color="#10B981" />
+                          Template: <strong style={{ color: '#1E1E1E' }}>{selectedCustomForm.name}</strong>
+                          {selectedCustomForm.page_width && selectedCustomForm.page_height && (
+                            <span style={{ color: '#9CA3AF' }}>· {selectedCustomForm.page_width}×{selectedCustomForm.page_height}</span>
+                          )}
+                          {schemaLoading && <span style={{ color: '#9CA3AF' }}>· Đang tải schema…</span>}
+                          {!schemaLoading && customTemplateSchema && (
+                            <span style={{ color: '#10B981' }}>
+                              · {customTemplateSchema.infoFields.length} trường thông tin,{' '}
+                              {customTemplateSchema.answerSections.reduce((n, s) => n + s.labels.length, 0)} câu trắc nghiệm
+                            </span>
+                          )}
+                          {!schemaLoading && !customTemplateSchema && (
+                            <span style={{ color: '#EF4444' }}>· Không tải được schema</span>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      onClick={() => navigate('/app/templates')}
+                      style={{ border: '1.5px solid #E5E7EB', borderRadius: 9999, padding: '4px 12px', fontSize: 11, fontWeight: 600, color: '#374151', background: '#fff', cursor: 'pointer', fontFamily: 'inherit' }}
+                    >
+                      Quản lý template →
+                    </button>
+                    <button
+                      onClick={() => loadCustomForms()}
+                      style={{ border: '1.5px solid #E5E7EB', borderRadius: 9999, padding: '4px 12px', fontSize: 11, fontWeight: 600, color: '#374151', background: '#fff', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}
+                    >
+                      <RefreshCw size={11} /> Làm mới
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Right: live preview — "chọn mục nào GV cần nhìn được template
+               đó là như thế nào", now sized so a real reference photo is
+               actually readable instead of a postage-stamp thumbnail. */}
+            <div style={{ flex: '1 1 320px', minWidth: 260, maxWidth: 460 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Xem trước mẫu đang chọn</div>
+              <TemplatePreviewThumb
+                loading={effectiveTemplateMode === 'custom' && schemaLoading}
+                areas={effectiveTemplateMode === 'custom' ? previewAreas : null}
+                pageWidth={previewPageW}
+                pageHeight={previewPageH}
+                schema={effectiveTemplateMode === 'custom' ? customTemplateSchema : VJU_PRESET_SCHEMA}
+                imageUrl={
+                  // "Mẫu 40" is a *pinned* preset but is implemented under the
+                  // hood as a custom template (it has real `areas` geometry —
+                  // that's why the schematic can be drawn at all), so
+                  // selecting it flips effectiveTemplateMode to 'custom'. Must
+                  // check its id BEFORE the generic custom-mode branch below,
+                  // otherwise that branch always wins and this real photo
+                  // never shows (dead code — was unreachable).
+                  selectedPinnedCustomId === PINNED_TEMPLATE_40_ID ? PINNED_TEMPLATE_40_PREVIEW_IMAGE
+                  : effectiveTemplateMode === 'custom' ? null
+                  : templateVariant === 'sbd4' ? VJU_SBD4_PREVIEW_IMAGE
+                  : VJU_SBD8_PREVIEW_IMAGE
+                }
+                height={360}
+              />
+            </div>
           </div>
         </Card>
 
@@ -413,25 +544,72 @@ export default function SheetReviewPage() {
           onClick={() => fileRef.current?.click()}
           style={{
             border: `2px dashed ${dragging ? '#C8102E' : '#FECACA'}`,
-            borderRadius: 14, padding: '48px 24px', textAlign: 'center', cursor: 'pointer',
+            borderRadius: 14, padding: '40px 24px', textAlign: 'center', cursor: 'pointer',
             background: dragging ? '#FFF5F5' : '#FFF9F9',
             transition: 'border-color 140ms, background 140ms',
           }}
         >
           <input ref={fileRef} type="file" accept=".jpg,.jpeg,.png,.heic,.heif,.webp,.tif,.tiff,.bmp,.pdf" multiple style={{ display: 'none' }} onChange={e => handleFiles(e.target.files)} />
-          <FileImage size={40} color={dragging ? '#C8102E' : '#FCA5A5'} style={{ margin: '0 auto 12px' }} />
+          {/* webkitdirectory isn't in React's DOM typings — set it via useEffect below */}
+          <input
+            ref={folderRef}
+            type="file" multiple style={{ display: 'none' }}
+            onChange={e => { handleFiles(e.target.files, true); e.target.value = ''; }}
+          />
+          <FileImage size={36} color={dragging ? '#C8102E' : '#FCA5A5'} style={{ margin: '0 auto 10px' }} />
           <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 15, color: '#374151' }}>Kéo thả ảnh/PDF phiếu thi vào đây</p>
-          <p style={{ margin: 0, fontSize: 13, color: '#9CA3AF' }}>Hỗ trợ JPG, PNG, HEIC/HEIF, WEBP, TIFF, BMP, PDF</p>
+          <p style={{ margin: '0 0 14px', fontSize: 13, color: '#9CA3AF' }}>Hỗ trợ JPG, PNG, HEIC/HEIF, WEBP, TIFF, BMP, PDF</p>
+          <button
+            type="button"
+            onClick={e => { e.stopPropagation(); void pickFolder(); }}
+            style={{ border: '1.5px solid #FECACA', borderRadius: 9999, padding: '6px 16px', fontSize: 12.5, fontWeight: 700, color: '#C8102E', background: '#fff', cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          >
+            <FolderUp size={13} /> Hoặc chọn cả thư mục
+          </button>
         </div>
+
+        {dupWarning && (
+          <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 10, padding: '8px 14px', fontSize: 12.5, color: '#92400E', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <AlertTriangle size={13} style={{ flexShrink: 0 }} />
+            {dupWarning}
+            <button onClick={() => setDupWarning(null)} style={{ marginLeft: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: '#92400E', display: 'flex', padding: 2 }}>
+              <X size={13} />
+            </button>
+          </div>
+        )}
 
         {/* File list */}
         {files.length > 0 && (
           <Card style={{ padding: '12px 16px' }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{files.length} file đã chọn</div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 700 }}>
+                <input
+                  type="checkbox"
+                  checked={files.length > 0 && selectedIdx.size === files.length}
+                  ref={el => { if (el) el.indeterminate = selectedIdx.size > 0 && selectedIdx.size < files.length; }}
+                  onChange={toggleSelectAll}
+                  style={{ accentColor: '#C8102E', width: 14, height: 14 }}
+                />
+                {files.length} file đã chọn
+              </label>
+              {selectedIdx.size > 0 && (
+                <button
+                  onClick={removeSelected}
+                  style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#C8102E', fontSize: 12.5, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5, padding: 4 }}
+                >
+                  <Trash2 size={13} /> Xóa {selectedIdx.size} file đã chọn
+                </button>
+              )}
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {files.map((f, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, padding: '6px 8px', borderRadius: 8, background: '#F9FAFB' }}>
-                  <div style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid #E5E7EB', flexShrink: 0 }} />
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, padding: '6px 8px', borderRadius: 8, background: selectedIdx.has(i) ? '#FFF5F5' : '#F9FAFB' }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIdx.has(i)}
+                    onChange={() => toggleSelected(i)}
+                    style={{ accentColor: '#C8102E', width: 14, height: 14, flexShrink: 0, cursor: 'pointer' }}
+                  />
                   <span style={{ flex: 1, color: '#374151', fontWeight: 500 }}>{f.name}</span>
                   <span style={{ color: '#9CA3AF', fontSize: 11 }}>{(f.size / 1024).toFixed(0)} KB</span>
                   <button onClick={e => { e.stopPropagation(); removeFile(i); }} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#9CA3AF', padding: 2, display: 'flex', flexShrink: 0 }}>
@@ -458,7 +636,6 @@ export default function SheetReviewPage() {
             </div>
             <Button
               size="lg"
-              icon={<ArrowRight size={16} />}
               onClick={handleGoToAnswerKey}
               style={!selectedExamId ? { opacity: 0.5, pointerEvents: 'none' } : undefined}
             >

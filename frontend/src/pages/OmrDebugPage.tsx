@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import PageHeader from '../components/layout/PageHeader';
 import { Upload, Loader2, AlertTriangle, CheckCircle2, ExternalLink, ChevronDown, ChevronRight } from 'lucide-react';
-import { SECTION_MAP, type ImageSource, IMAGE_SOURCE_LABEL } from '../types/grading';
+import { SECTION_MAP, type ImageSource } from '../types/grading';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 

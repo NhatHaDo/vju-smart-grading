@@ -21,7 +21,7 @@ class AuthService:
     def __init__(self, db: Session) -> None:
         self.repo = UserRepository(db)
 
-    def register(self, email: str, password: str, name: str = "") -> User:
+    def register(self, email: str, password: str, name: str = "", phone: str | None = None) -> User:
         if self.repo.get_by_email(email):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -30,7 +30,21 @@ class AuthService:
         hashed = hash_password(password)
         # First user ever → admin; subsequent → teacher
         role = "admin" if self.repo.count() == 0 else "teacher"
-        return self.repo.create(email=email, name=name, password_hash=hashed, role=role)
+        return self.repo.create(email=email, name=name, password_hash=hashed, role=role, phone=phone)
+
+    def reset_password(self, email: str, phone: str, new_password: str) -> User:
+        """Reset-by-match: no OTP/email link — matching email + phone is
+        treated as sufficient proof of ownership, per explicit product
+        choice ("chỉ cần nhập đúng gmail và sđt là cho người ta đặt mật
+        khẩu mới"). Deliberately less secure than a verification-code flow;
+        this trade-off was chosen knowingly, not an oversight."""
+        user = self.repo.get_by_email_and_phone(email, phone)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Không tìm thấy tài khoản khớp với email và số điện thoại này",
+            )
+        return self.repo.update(user, password_hash=hash_password(new_password))
 
     def login(self, email: str, password: str) -> UserWithToken:
         user = self.repo.get_by_email(email)

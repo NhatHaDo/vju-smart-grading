@@ -86,6 +86,7 @@ from app.core.omr.field_reader import (
 from app.core.omr.preprocessor import CropPageResult, crop_page, resize_fit_pad, resize_to_template
 from app.core.omr.roi_extractor import extract_roi, extract_roi_expanded, extract_roi_inverse
 from app.core.omr.scorer import GradingReport, score
+from app.core.omr.signature_detector import SignatureCheck, detect_signatures
 from app.core.templates.template_loader import VJUTemplate
 
 logger = logging.getLogger(__name__)
@@ -180,6 +181,10 @@ class OMRResult:
     omr_read_space: str = "warped_page_dimensions"
     # Inverse homography (template → original image). Set when omr_read_space=="inverse_h_original".
     _M_inv: np.ndarray | None = field(default=None, repr=False)
+    # ── "Ký tên giám thị/chấm thi" (2026-07-30) ───────────────────────────
+    # Only populated when OMREngine(check_signatures=True) — i.e. fixed VJU
+    # presets only, never custom templates (no guaranteed layout there).
+    signature_checks: list[SignatureCheck] | None = None
 
     @property
     def needs_review(self) -> bool:
@@ -226,6 +231,7 @@ class OMREngine:
         enable_crop: bool = True,
         debug_overlay_dir: str | Path | None = None,
         mean_mode: str = "circle_mask",
+        signature_box_set: str | None = None,
     ):
         """
         Args:
@@ -234,11 +240,20 @@ class OMREngine:
             debug_overlay_dir: Auto-save overlay here after every run() call.
             mean_mode:         "circle_mask" (default) or "rect".
                                circle_mask avoids grid lines and digit borders.
+            signature_box_set: Detect ink presence in the "CÁN BỘ COI THI"/
+                               "CÁN BỘ CHẤM THI" boxes (see signature_detector.py)
+                               using this calibrated box set — e.g. "vju_main"
+                               or "mau40". None (default) skips detection
+                               entirely. Only pass a value for templates that
+                               actually have a registered box set — the
+                               calibrated coordinates assume that exact page
+                               layout and are meaningless on anything else.
         """
         self.template = template
         self.enable_crop = enable_crop
         self.debug_overlay_dir = Path(debug_overlay_dir) if debug_overlay_dir else None
         self.mean_mode = mean_mode
+        self.signature_box_set = signature_box_set
         self._morph_kernel: tuple[int, int] = (10, 10)
         self._target_size = tuple(template.page_dimensions)  # (w, h)
 
@@ -554,6 +569,18 @@ class OMREngine:
         logger.info(f"OMR: resized to {page_w}×{page_h} (template dims)")
         aligned_image = image  # capture for OMR reading (always pageDimensions)
 
+        # ── "Ký tên giám thị/chấm thi" ────────────────────────────────────
+        # Runs on aligned_image specifically (grayscale, resized to
+        # template pageDimensions) — the exact coordinate space the
+        # calibrated signature boxes were measured in. Only for fixed VJU
+        # presets (see check_signatures docstring in __init__).
+        signature_checks: list[SignatureCheck] | None = None
+        if self.signature_box_set:
+            try:
+                signature_checks = detect_signatures(aligned_image, box_set=self.signature_box_set)
+            except Exception as exc:
+                logger.warning(f"OMR: signature detection failed — {exc}")
+
         # ── Phase 1 visual fix ────────────────────────────────────────────
         # For scan_app with significant H-stretch: produce a flat, AR-preserving
         # display image by warping to the natural marker-measured rectangle.
@@ -813,6 +840,7 @@ class OMREngine:
             template_aspect_ratio=template_aspect_ratio,
             omr_read_space=omr_read_space,
             _M_inv=M_inv,
+            signature_checks=signature_checks,
         )
         return omr_result, aligned_image, bubble_means, visual_image
 

@@ -542,6 +542,17 @@ async def debug_grade(
             enable_crop=True,
             debug_overlay_dir=debug_overlay_dir,
             mean_mode=mean_mode,
+            # Calibrated signature boxes only exist for templates we've
+            # actually measured — the fixed VJU presets, and the pinned
+            # "Mẫu 40" custom template (matched by file path since its
+            # numeric template_id differs per-DB, see PINNED_TEMPLATE_40_ID
+            # comment on the frontend). Any other custom template has no
+            # registered box set → signature_box_set stays None → skipped.
+            signature_box_set=(
+                "vju_main" if _tpl_meta is None
+                else "mau40" if "40tn_dungsai" in str(tpl_path)
+                else None
+            ),
         )
 
         vis = DebugVisualPaths()
@@ -649,6 +660,19 @@ async def debug_grade(
         "template_type": _tpl_meta["template_type"] if _tpl_meta else (template_variant or "vju"),
         "student_info":       student_info,
         "answers":            answers,
+        # "Ký tên giám thị/chấm thi" — null when not checked (custom
+        # template, or detection failed). Each entry: {key, label, present,
+        # mean_gray}. See signature_detector.py for calibration notes.
+        "signatures": (
+            [
+                {
+                    "key": s.key, "label": s.label,
+                    "present": s.present, "mean_gray": s.mean_gray,
+                }
+                for s in omr_result.signature_checks
+            ]
+            if omr_result.signature_checks is not None else None
+        ),
         "warnings":           warnings,
         "info_field_columns": info_field_columns,
         "score":              score,

@@ -5,7 +5,7 @@ import Button from '../components/common/Button';
 import Badge from '../components/common/Badge';
 import PageHeader from '../components/layout/PageHeader';
 import { Download, Eye, AlertTriangle, CheckCircle2, Trash2, ArrowLeft, Key, Database, WifiOff, TableProperties, ChevronDown } from 'lucide-react';
-import type { BatchGradeState, OmrGradeResult, AnswerKeyStore, CorrectionsStore, InfoFieldColumns, TemplateSchema } from '../types/grading';
+import type { BatchGradeState, OmrGradeResult, AnswerKeyStore, CorrectionsStore, InfoFieldColumns, TemplateSchema, ManualCorrection } from '../types/grading';
 import { TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, loadAnswerKey, loadCorrections, saveCorrections, clearCorrections, computeScore, applyCorrection, resolveAnswerKeyForMaDe, isMultiMaDe, correctionKey, getMaDeValue } from '../types/grading';
 import ResultDetailModal from '../components/results/ResultDetailModal';
 import ExcelPreviewModal from '../components/results/ExcelPreviewModal';
@@ -166,6 +166,13 @@ function hasInfoMultiMark(r: OmrGradeResult): boolean {
   return (r.warnings ?? []).some(w => w.type === 'multi_mark_info_field');
 }
 
+/** OMR-detected missing signatures ("CÁN BỘ COI THI/CHẤM THI" boxes left
+ *  blank) — null/undefined `signatures` means "not checked" (custom
+ *  template), not "all missing", so that case returns []. */
+function missingSignatures(r: OmrGradeResult): string[] {
+  return (r.signatures ?? []).filter(s => !s.present).map(s => s.label);
+}
+
 function infoFieldMultiMarkTooltip(
   cols: InfoFieldColumns[keyof InfoFieldColumns] | undefined,
   label: string,
@@ -264,8 +271,9 @@ function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, 
   showTemplateCol?: boolean;
   templateLabel?:  string;
 }) {
-  const warn   = hasWarnings(r) || !!missingKeyForMaDe;
-  const hasIMM = hasInfoMultiMark(r);
+  const warn      = hasWarnings(r) || !!missingKeyForMaDe;
+  const hasIMM    = hasInfoMultiMark(r);
+  const missingSigs = missingSignatures(r);
   const info   = merged.student_info;
   const ifc    = r.info_field_columns;
 
@@ -295,10 +303,26 @@ function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, 
       <td style={{ padding: '11px 10px' }}>
         <div style={{ fontWeight: 600, color: '#1E1E1E', display: 'flex', alignItems: 'center', gap: 4 }}>
           {r.input?.filename ?? '—'}
-          {warn && !hasIMM && <AlertTriangle size={12} color="#C8102E" title="Có câu tô nhiều đáp án" />}
-          {hasIMM && <AlertTriangle size={12} color="#C8102E" title={buildInfoWarningsCsv(r) || 'Có nhiều ô tô trong cột thông tin'} />}
+          {warn && !hasIMM && (
+            <span title="Có câu tô nhiều đáp án" style={{ display: 'inline-flex' }}>
+              <AlertTriangle size={12} color="#C8102E" />
+            </span>
+          )}
+          {hasIMM && (
+            <span title={buildInfoWarningsCsv(r) || 'Có nhiều ô tô trong cột thông tin'} style={{ display: 'inline-flex' }}>
+              <AlertTriangle size={12} color="#C8102E" />
+            </span>
+          )}
           {r._error && <span style={{ fontSize: 10, color: '#EF4444', fontWeight: 400 }}>ERR</span>}
           {corrected && <span style={{ fontSize: 10, color: '#10B981', fontWeight: 700, background: '#D1FAE5', borderRadius: 4, padding: '1px 5px' }}>Đã sửa tay</span>}
+          {missingSigs.length > 0 && (
+            <span
+              title={`Thiếu chữ ký: ${missingSigs.join(', ')}`}
+              style={{ fontSize: 10, color: '#B45309', fontWeight: 700, background: '#FEF3C7', borderRadius: 4, padding: '1px 5px', flexShrink: 0 }}
+            >
+              Thiếu chữ ký
+            </span>
+          )}
         </div>
         {r._error && <div style={{ fontSize: 10, color: '#EF4444', marginTop: 2 }}>{r._error.slice(0, 80)}</div>}
       </td>
@@ -711,6 +735,30 @@ export default function ResultsPage() {
     return { r, merged, corr, sc: key ? computeScore(merged.answers ?? {}, key) : null, missingKeyForMaDe, maDeValue };
   });
 
+  // 2026-07-30: "check lỗi cần cho GV sửa trực tiếp ở màn view, hiện tại đang
+  // tách màn chỉnh sửa ở 1 page khác" — same persistence logic ReviewErrorsPage
+  // uses (localStorage + fire-and-forget DB save), just triggered from here so
+  // corrections can be made straight from the result-detail modal too.
+  const handleSaveCorrection = (filename: string, c: ManualCorrection) => {
+    const next = { ...corrections, [correctionKey(batch?.gradedAt, filename)]: c };
+    setCorrections(next);
+    saveCorrections(next);
+    const result = safeResults.find(r => (r.input?.filename ?? '') === filename);
+    if (result?.db_id) {
+      resultsApi.saveCorrection(result.db_id, {
+        corrected_answers:      c.corrected_answers,
+        corrected_student_info: c.corrected_student_info as Record<string, string>,
+        mark_as_reviewed:       true,
+      }).catch(err => console.warn('[Results] DB correction failed:', err));
+    }
+  };
+  const handleResetCorrection = (filename: string) => {
+    const next = { ...corrections };
+    delete next[correctionKey(batch?.gradedAt, filename)];
+    setCorrections(next);
+    saveCorrections(next);
+  };
+
   // Rows visible after template filter
   const visibleScoredRows = isAllMode
     ? allScoredRows
@@ -952,9 +1000,10 @@ export default function ResultsPage() {
               👆 Click hàng để xem chi tiết
               {batch && (
                 <Badge
-                  label={getBatchTemplateLabel(batch)}
                   style={{ background: '#F3F4F6', color: '#374151', borderRadius: 9999, padding: '2px 10px', fontSize: 11, fontWeight: 600 }}
-                />
+                >
+                  {getBatchTemplateLabel(batch)}
+                </Badge>
               )}
             </div>
             <div style={{ overflowX: 'auto' }}>
@@ -1018,6 +1067,8 @@ export default function ResultsPage() {
           answerKey={answerKey}
           onClose={() => setModalRow(null)}
           templateSchema={resolveRowSchema(modalRow)}
+          onSaveCorrection={handleSaveCorrection}
+          onResetCorrection={handleResetCorrection}
         />
       )}
 

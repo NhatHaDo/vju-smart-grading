@@ -177,6 +177,17 @@ export default function LoginPage() {
             Đăng nhập bằng tài khoản VJU
           </button>
 
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>
+            <button type="button" onClick={() => navigate('/register')}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#C8102E', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit', padding: 0 }}>
+              Đăng ký tài khoản GV →
+            </button>
+            <button type="button" onClick={() => navigate('/forgot-password')}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', padding: 0 }}>
+              Quên mật khẩu?
+            </button>
+          </div>
+
           <p style={{ textAlign: 'center', fontSize: 12, color: '#9CA3AF', margin: 0 }}>
             Demo: <code>admin@vju.ac.vn</code> / <code>password</code>
           </p>

@@ -13,11 +13,20 @@ class UserRepository:
     def get_by_email(self, email: str) -> User | None:
         return self.db.query(User).filter(User.email == email).first()
 
+    def get_by_email_and_phone(self, email: str, phone: str) -> User | None:
+        """Used by the password-reset-by-match flow: both must match the
+        same account (email is unique, so this just also checks phone)."""
+        return (
+            self.db.query(User)
+            .filter(User.email == email, User.phone == phone)
+            .first()
+        )
+
     def list_all(self, skip: int = 0, limit: int = 100) -> list[User]:
         return self.db.query(User).offset(skip).limit(limit).all()
 
-    def create(self, email: str, name: str, password_hash: str, role: str = "teacher") -> User:
-        user = User(email=email, name=name, password_hash=password_hash, role=role)
+    def create(self, email: str, name: str, password_hash: str, role: str = "teacher", phone: str | None = None) -> User:
+        user = User(email=email, name=name, password_hash=password_hash, role=role, phone=phone)
         self.db.add(user)
         self.db.commit()
         self.db.refresh(user)

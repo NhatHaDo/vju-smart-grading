@@ -4,6 +4,7 @@ import { saveAs } from 'file-saver';
 import { normalizeUploadFile } from '../utils/fileConversion';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
+import TemplatePreviewThumb, { type TemplateAreaLike } from '../components/common/TemplatePreviewThumb';
 import PageHeader from '../components/layout/PageHeader';
 import { Upload, Trash2, FileSpreadsheet, Save, CheckCircle2, Loader2, ArrowLeft, Zap, AlertTriangle, Layers, Plus, X, Copy, Library, BookmarkPlus, Pencil } from 'lucide-react';
 import {
@@ -11,6 +12,8 @@ import {
   type AnswerKeyStore,
   type AnswerKeySet,
   type ScoringWeights,
+  type ProctorInfo,
+  PROCTOR_FIELD_LABELS,
   type TemplateVariant,
   type ImageSource,
   type BatchGradeState,
@@ -31,6 +34,10 @@ import {
   saveAnswerKeyDraft,
   clearAnswerKeyDraft,
   PINNED_TEMPLATES,
+  PINNED_TEMPLATE_40_ID,
+  VJU_SBD4_PREVIEW_IMAGE,
+  VJU_SBD8_PREVIEW_IMAGE,
+  PINNED_TEMPLATE_40_PREVIEW_IMAGE,
   loadAnswerKeyLibrary,
   addToAnswerKeyLibrary,
   removeFromAnswerKeyLibrary,
@@ -71,6 +78,27 @@ function loadTemplateSchemaFromStorage(expectedId: number | null): TemplateSchem
     if (!parsed || parsed.id !== expectedId) return null;
     return parsed.schema ?? null;
   } catch { return null; }
+}
+
+/**
+ * Splits a trailing "(...)" range off a section title — e.g.
+ * "Trắc nghiệm ABCD ( 1-10 )" → ["Trắc nghiệm ABCD", "( 1-10 )"] — so it can
+ * be rendered as one non-breaking chunk. In a narrow card, the browser used
+ * to wrap these titles wherever a space happened to fall, including right
+ * inside the parentheses ("...ABCD ( 1-\n10 )"), which reads like a typo.
+ * Rendering the "(...)" part with `white-space: nowrap` means it still wraps
+ * to the next line as a whole when it doesn't fit, but never splits midway
+ * (2026-07-30).
+ */
+function splitTrailingParen(title: string): [string, string | null] {
+  const m = title.match(/^(.*?)(\s*\([^()]*\)\s*)$/);
+  return m ? [m[1], m[2].trim()] : [title, null];
+}
+
+function SectionTitleText({ title }: { title: string }) {
+  const [base, paren] = splitTrailingParen(title);
+  if (!paren) return <>{title}</>;
+  return <>{base} <span style={{ whiteSpace: 'nowrap' }}>{paren}</span></>;
 }
 
 interface GradingModeState {
@@ -120,6 +148,12 @@ export default function AnswerKeyPage() {
   });
   const [directSchema, setDirectSchema] = useState<TemplateSchema | null>(null);
   const [directSchemaLoading, setDirectSchemaLoading] = useState(false);
+  // Sơ đồ vùng đọc của mẫu đang chọn — "GV cần nhìn được template đó là như
+  // thế nào" trước khi bấm nhập đáp án cho nó. Reuses the same customFormsApi
+  // fetch as directSchema below (no extra network round-trip).
+  const [directAreas,  setDirectAreas]  = useState<TemplateAreaLike[] | null>(null);
+  const [directPageW,  setDirectPageW]  = useState<number | null>(null);
+  const [directPageH,  setDirectPageH]  = useState<number | null>(null);
   // Which picker tab is showing — mirrors the Upload page's "Mẫu phiếu VJU" /
   // "Custom template" tabs so both pages feel the same. Purely a UI concern;
   // `directTemplateKey` (above) is what actually drives the loaded schema.
@@ -148,13 +182,18 @@ export default function AnswerKeyPage() {
   // Fetch the schema for whichever template is currently selected in direct mode.
   useEffect(() => {
     if (isGradingMode) return;
-    if (directTemplateKey === 'vju') { setDirectSchema(null); return; }
+    if (directTemplateKey === 'vju') { setDirectSchema(null); setDirectAreas(null); setDirectPageW(null); setDirectPageH(null); return; }
     const id = Number(directTemplateKey.slice('custom:'.length));
-    if (!Number.isFinite(id)) { setDirectSchema(null); return; }
+    if (!Number.isFinite(id)) { setDirectSchema(null); setDirectAreas(null); return; }
     setDirectSchemaLoading(true);
     customFormsApi.get(id)
-      .then(detail => setDirectSchema(buildSchemaFromDetail(detail)))
-      .catch(() => setDirectSchema(null))
+      .then(detail => {
+        setDirectSchema(buildSchemaFromDetail(detail));
+        setDirectAreas((detail.areas as TemplateAreaLike[]) ?? null);
+        setDirectPageW(detail.page_width  ?? null);
+        setDirectPageH(detail.page_height ?? null);
+      })
+      .catch(() => { setDirectSchema(null); setDirectAreas(null); setDirectPageW(null); setDirectPageH(null); })
       .finally(() => setDirectSchemaLoading(false));
   }, [directTemplateKey, isGradingMode]);
 
@@ -230,6 +269,16 @@ export default function AnswerKeyPage() {
   const [savedAt,   setSavedAt]   = useState<string | null>(existing?.updatedAt ?? null);
   const [saveFlash, setSaveFlash] = useState(false);
 
+  // ── Điểm riêng theo nhóm câu (2026-07-30) ─────────────────────────────────
+  // "hiện tại đáp án chỉ cho điểm bằng nhau cho tất cả câu hỏi, cần có thể cho
+  // giảng viên tích chọn hàng loạt và setup điểm cho chúng" — off by default
+  // (every question still just uses the flat "Đúng" point value from Thang
+  // điểm). Turning it on lets the question chips below become checkboxes;
+  // whatever's ticked gets a custom point value applied in one go.
+  const [pointSelectMode,   setPointSelectMode]   = useState(false);
+  const [selectedForPoints, setSelectedForPoints] = useState<Set<string>>(new Set());
+  const [bulkPointValue,    setBulkPointValue]    = useState('2');
+
   // ── Chia đáp án theo mã đề ────────────────────────────────────────────────
   // Off by default (single answer key, exactly the old behavior). Once turned
   // on, each "đề" (exam code) gets its own answers; the flat `answers` state
@@ -240,6 +289,18 @@ export default function AnswerKeyPage() {
   const [answersByMaDe, setAnswersByMaDe] = useState<Record<string, Record<string, string>>>(() => {
     const init: Record<string, Record<string, string>> = {};
     if (existing?.byMaDe) for (const [code, set] of Object.entries(existing.byMaDe)) init[code] = { ...set.answers };
+    return init;
+  });
+
+  // ── Ký tên giám thị & người chấm thi (2026-07-30) ─────────────────────────
+  // "Ký tên giám thị và ng chấm thi" + "2 ng mỗi loại đề" — unlike Thang điểm
+  // (shared across every đề), these names genuinely differ per đề (different
+  // room/group can have different proctors), so they follow the same
+  // per-mã-đề pattern as `answers`/`answersByMaDe` rather than `scoring`.
+  const [proctors,      setProctors]      = useState<ProctorInfo>(() => existing?.proctors ?? {});
+  const [proctorsByMaDe, setProctorsByMaDe] = useState<Record<string, ProctorInfo>>(() => {
+    const init: Record<string, ProctorInfo> = {};
+    if (existing?.byMaDe) for (const [code, set] of Object.entries(existing.byMaDe)) init[code] = { ...(set.proctors ?? {}) };
     return init;
   });
 
@@ -308,6 +369,19 @@ export default function AnswerKeyPage() {
         ? 'Mẫu phiếu VJU'
         : (customFormOptions.find(f => templateStoreKeyFor('custom', f.id) === directTemplateKey)?.name ?? 'Custom template'));
 
+  // 2026-07-30: "thế ko có cái chọn bộ đáp án để chấm à?" — the saved-answer-
+  // key library was previously only reachable from the standalone Answer Key
+  // page, not from this "xác nhận đáp án trước khi chấm" screen reached
+  // straight from Upload, so there was no way to pick a previously-saved
+  // answer key while setting up a grading run. In grading mode the template
+  // is fixed (whatever Upload graded with) — not switchable like the direct-
+  // open dropdown — so only library entries saved for that exact template
+  // make sense to offer here.
+  const currentGradingTemplateKey = isGradingMode ? templateStoreKeyFor(templateMode, customTemplateId) : null;
+  const visibleLibrary = isGradingMode
+    ? library.filter(e => e.templateKey === currentGradingTemplateKey)
+    : library;
+
   // Answers currently being edited on screen — the active đề's set in multi-đề
   // mode, or the flat single-key set otherwise. Every read/write in the form
   // below goes through these two so the section-rendering JSX doesn't need to
@@ -323,10 +397,46 @@ export default function AnswerKeyPage() {
     }
   };
 
+  const currentProctors = multiMaDe ? (proctorsByMaDe[activeMaDe] ?? {}) : proctors;
+  const setProctorField = (field: keyof ProctorInfo, val: string) => {
+    if (multiMaDe) {
+      setProctorsByMaDe(prev => ({ ...prev, [activeMaDe]: { ...(prev[activeMaDe] ?? {}), [field]: val } }));
+    } else {
+      setProctors(prev => ({ ...prev, [field]: val }));
+    }
+  };
+
   const setScoringField = (field: keyof ScoringWeights, val: string) => {
     const n = parseFloat(val);
     if (!isNaN(n)) setScoring(prev => ({ ...prev, [field]: n }));
   };
+
+  const toggleLabelSelectedForPoints = (lbl: string) => {
+    setSelectedForPoints(prev => {
+      const next = new Set(prev);
+      if (next.has(lbl)) next.delete(lbl); else next.add(lbl);
+      return next;
+    });
+  };
+  const applyBulkPoints = () => {
+    const val = parseFloat(bulkPointValue);
+    if (Number.isNaN(val) || selectedForPoints.size === 0) return;
+    setScoring(prev => ({
+      ...prev,
+      questionPoints: { ...(prev.questionPoints ?? {}), ...Object.fromEntries([...selectedForPoints].map(l => [l, val])) },
+    }));
+    setSelectedForPoints(new Set());
+  };
+  const clearSelectedPointOverrides = () => {
+    setScoring(prev => {
+      const qp = { ...(prev.questionPoints ?? {}) };
+      for (const l of selectedForPoints) delete qp[l];
+      return { ...prev, questionPoints: qp };
+    });
+    setSelectedForPoints(new Set());
+  };
+  const clearAllPointOverrides = () => setScoring(prev => ({ ...prev, questionPoints: {} }));
+  const overrideCount = Object.keys(scoring.questionPoints ?? {}).filter(l => scoring.questionPoints?.[l] != null).length;
 
   /**
    * Builds the full store to persist — flat single key, or byMaDe map.
@@ -341,11 +451,11 @@ export default function AnswerKeyPage() {
     if (multiMaDe && maDeCodes.length > 0) {
       const byMaDe: Record<string, AnswerKeySet> = {};
       for (const code of maDeCodes) {
-        byMaDe[code] = { answers: answersByMaDe[code] ?? {}, scoring, updatedAt: now };
+        byMaDe[code] = { answers: answersByMaDe[code] ?? {}, scoring, updatedAt: now, proctors: proctorsByMaDe[code] ?? {} };
       }
-      return { answers, scoring, updatedAt: now, byMaDe };
+      return { answers, scoring, updatedAt: now, byMaDe, proctors };
     }
-    return { answers, scoring, updatedAt: now };
+    return { answers, scoring, updatedAt: now, proctors };
   };
 
   // Re-populate all answer-editing state whenever the dropdown-selected
@@ -363,6 +473,23 @@ export default function AnswerKeyPage() {
     const init: Record<string, Record<string, string>> = {};
     if (store?.byMaDe) for (const [code, set] of Object.entries(store.byMaDe)) init[code] = { ...set.answers };
     setAnswersByMaDe(init);
+    setProctors(store?.proctors ?? {});
+    const proctorInit: Record<string, ProctorInfo> = {};
+    if (store?.byMaDe) for (const [code, set] of Object.entries(store.byMaDe)) proctorInit[code] = { ...(set.proctors ?? {}) };
+    setProctorsByMaDe(proctorInit);
+    // 2026-07-30 bug fix: this used to NOT reset the "chọn theo nhóm câu"
+    // checkbox selection when switching templates. The question-label chips
+    // shown in the UI change per template, but `selectedForPoints` is a raw
+    // Set<string> of labels — if a teacher had e.g. "cnnn2","cnnn3" ticked on
+    // the VJU template, switched to a custom template, ticked a few of ITS
+    // labels, then hit "Áp dụng điểm", both old and new labels got written
+    // into the same questionPoints object together — the old template's
+    // question keys silently rode along ("Hệ số riêng: cnnn2=+2, ..." showing
+    // up next to a completely different template's "Câu N" overrides in the
+    // Excel export). Clearing the selection here is the actual fix; see
+    // activeQuestionPoints() in types/grading.ts for a defensive filter that
+    // also hides any such leftovers already saved before this fix.
+    setSelectedForPoints(new Set());
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [directTemplateKey, isGradingMode]);
 
@@ -379,6 +506,7 @@ export default function AnswerKeyPage() {
     const code = (window.prompt('Nhập mã đề hiện tại (VD: 101) — đáp án đã nhập ở trên sẽ chuyển vào đề này:') ?? '').trim();
     if (!code) return;
     setAnswersByMaDe({ [code]: { ...answers } });
+    setProctorsByMaDe({ [code]: { ...proctors } });
     setMaDeCodes([code]);
     setActiveMaDe(code);
     setMultiMaDe(true);
@@ -390,6 +518,7 @@ export default function AnswerKeyPage() {
     if (maDeCodes.includes(code)) { setActiveMaDe(code); return; }
     setMaDeCodes(prev => [...prev, code]);
     setAnswersByMaDe(prev => ({ ...prev, [code]: {} }));
+    setProctorsByMaDe(prev => ({ ...prev, [code]: {} }));
     setActiveMaDe(code);
   };
 
@@ -398,6 +527,7 @@ export default function AnswerKeyPage() {
     const remaining = maDeCodes.filter(c => c !== code);
     setMaDeCodes(remaining);
     setAnswersByMaDe(prev => { const next = { ...prev }; delete next[code]; return next; });
+    setProctorsByMaDe(prev => { const next = { ...prev }; delete next[code]; return next; });
     if (activeMaDe === code) setActiveMaDe(remaining[0] ?? '');
     if (remaining.length === 0) setMultiMaDe(false);
   };
@@ -405,9 +535,11 @@ export default function AnswerKeyPage() {
   const stopSplitByMaDe = () => {
     if (!confirm('Tắt chia theo mã đề? Đáp án của đề đang chọn sẽ giữ lại làm bộ đáp án chung, các đề khác sẽ bị xóa.')) return;
     setAnswers(answersByMaDe[activeMaDe] ?? {});
+    setProctors(proctorsByMaDe[activeMaDe] ?? {});
     setMultiMaDe(false);
     setMaDeCodes([]);
     setAnswersByMaDe({});
+    setProctorsByMaDe({});
     setActiveMaDe('');
   };
 
@@ -508,7 +640,34 @@ export default function AnswerKeyPage() {
   };
 
   const handleLoadFromLibrary = (entry: SavedAnswerKeyEntry) => {
-    if (isGradingMode) return;
+    if (isGradingMode) {
+      // No template-switch branch here on purpose — grading mode's template
+      // is fixed to whatever Upload already graded with, so an entry saved
+      // for a different template can't be applied (the panel below only
+      // lists matching entries in the first place, but double-check here
+      // too since this handler is also reachable from the preview modal's
+      // "Nạp vào để dùng").
+      if (entry.templateKey !== currentGradingTemplateKey) {
+        alert(`Đáp án "${entry.name}" được lưu cho mẫu "${entry.templateLabel}" — khác với mẫu đang chấm ("${currentTemplateLabel}"). Không thể dùng cho đợt chấm này.`);
+        return;
+      }
+      if (!confirm(`Nạp đáp án "${entry.name}" để dùng cho đợt chấm này? Đáp án đang nhập trên màn hình (nếu có) sẽ bị ghi đè.`)) return;
+      setAnswers(entry.store.answers);
+      setScoring(entry.store.scoring);
+      setSavedAt(null);
+      setMultiMaDe(isMultiMaDe(entry.store));
+      setMaDeCodes(entry.store.byMaDe ? Object.keys(entry.store.byMaDe) : []);
+      setActiveMaDe(entry.store.byMaDe ? (Object.keys(entry.store.byMaDe)[0] ?? '') : '');
+      const gradingInit: Record<string, Record<string, string>> = {};
+      if (entry.store.byMaDe) for (const [code, set] of Object.entries(entry.store.byMaDe)) gradingInit[code] = { ...set.answers };
+      setAnswersByMaDe(gradingInit);
+      setProctors(entry.store.proctors ?? {});
+      const gradingProctorInit: Record<string, ProctorInfo> = {};
+      if (entry.store.byMaDe) for (const [code, set] of Object.entries(entry.store.byMaDe)) gradingProctorInit[code] = { ...(set.proctors ?? {}) };
+      setProctorsByMaDe(gradingProctorInit);
+      setShowLibrary(false);
+      return;
+    }
     if (!confirm(`Nạp đáp án "${entry.name}" (${entry.templateLabel})? Bản nháp đang có của mẫu đó (nếu có) sẽ bị ghi đè bằng đáp án đã lưu này.`)) return;
     saveAnswerKeyDraft(entry.templateKey, entry.store);
     if (entry.templateKey === directTemplateKey) {
@@ -617,7 +776,15 @@ export default function AnswerKeyPage() {
     student_info: { cccd: null, sbd: null, ma_de: null, ca_thi: null, ma_ctdt: null, tu_chon: null },
     answers: {}, warnings: [],
     score:   { total: null, max: null, correct: null, wrong: null, blank: null },
-    debug:   { threshold: 0, mean_mode: '', prep_method: '', alignment_warnings: [], aligned_image_path: null, overlay_all_path: null, overlay_marked_only_path: null, overlay_warnings_path: null, means_json_path: null, image_source: null, preprocess_strategy_used: null },
+    debug:   {
+      threshold: 0, mean_mode: '', prep_method: '', alignment_info: '', alignment_warnings: [],
+      image_source: null, preprocess_strategy_used: null,
+      marker_centers_detected: null, target_marker_centers: null, homography_matrix: null,
+      marker_quality_score: null, warp_used: null, warp_rejected_reason: null,
+      original_image_path: null, aligned_image_path: null, aligned_candidate_path: null,
+      overlay_all_path: null, markers_debug_path: null,
+      overlay_marked_only_path: null, overlay_warnings_path: null, means_json_path: null,
+    },
     _error:  msg,
   });
 
@@ -743,7 +910,7 @@ export default function AnswerKeyPage() {
                 ? `Custom: ${customTemplateName}`
                 : TEMPLATE_VARIANT_LABEL[templateVariant]
             }`
-          : 'Nhập đáp án đúng, import/export JSON và thiết lập thang điểm'}
+          : 'Nhập đáp án đúng, import/export Excel và thiết lập thang điểm'}
         actions={isGradingMode ? (
           <Button
             size="sm"
@@ -766,96 +933,123 @@ export default function AnswerKeyPage() {
           <Card>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#C8102E', marginBottom: 12 }}>Mẫu phiếu</div>
 
-            <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-              {([
-                { value: 'vju' as const,    label: 'Mẫu phiếu VJU' },
-                { value: 'custom' as const, label: 'Custom template' },
-              ]).map(opt => (
-                <button
-                  key={opt.value}
-                  onClick={() => setDirectTab(opt.value)}
-                  style={{
-                    padding: '7px 16px', borderRadius: 9999, fontSize: 13, fontWeight: 600,
-                    border: `1.5px solid ${directTab === opt.value ? '#C8102E' : '#E5E7EB'}`,
-                    background: directTab === opt.value ? '#FEF2F2' : '#fff',
-                    color: directTab === opt.value ? '#C8102E' : '#374151',
-                    cursor: 'pointer', fontFamily: 'inherit',
-                  }}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+            {/* 2026-07-30: same two-column layout as the Upload page's picker
+               — the picker on the left, a bigger live preview on the right,
+               so a real reference photo is actually legible instead of a
+               130px-tall thumbnail stacked under the picker. */}
+            <div style={{ display: 'flex', gap: 28, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 360px', minWidth: 300 }}>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+                  {([
+                    { value: 'vju' as const,    label: 'Mẫu phiếu VJU' },
+                    { value: 'custom' as const, label: 'Custom template' },
+                  ]).map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setDirectTab(opt.value)}
+                      style={{
+                        padding: '7px 16px', borderRadius: 9999, fontSize: 13, fontWeight: 600,
+                        border: `1.5px solid ${directTab === opt.value ? '#C8102E' : '#E5E7EB'}`,
+                        background: directTab === opt.value ? '#FEF2F2' : '#fff',
+                        color: directTab === opt.value ? '#C8102E' : '#374151',
+                        cursor: 'pointer', fontFamily: 'inherit',
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
 
-            {directTab === 'vju' && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: directTemplateKey === 'vju' ? 700 : 400, color: directTemplateKey === 'vju' ? '#C8102E' : '#374151' }}>
-                  <input
-                    type="radio" name="direct-template"
-                    checked={directTemplateKey === 'vju'}
-                    onChange={() => handleTemplateKeyChange('vju')}
-                    style={{ accentColor: '#C8102E' }}
-                  />
-                  VJU mặc định
-                </label>
-                {PINNED_TEMPLATES.map(pt => {
-                  const key = templateStoreKeyFor('custom', pt.id);
-                  return (
-                    <label key={pt.id} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: directTemplateKey === key ? 700 : 400, color: directTemplateKey === key ? '#C8102E' : '#374151' }}>
+                {directTab === 'vju' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: directTemplateKey === 'vju' ? 700 : 400, color: directTemplateKey === 'vju' ? '#C8102E' : '#374151' }}>
                       <input
                         type="radio" name="direct-template"
-                        checked={directTemplateKey === key}
-                        onChange={() => handleTemplateKeyChange(key)}
+                        checked={directTemplateKey === 'vju'}
+                        onChange={() => handleTemplateKeyChange('vju')}
                         style={{ accentColor: '#C8102E' }}
                       />
-                      {pt.label}
+                      VJU mặc định
                     </label>
-                  );
-                })}
-                {directSchemaLoading && (
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: '#6B7280' }}>
-                    <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                    Đang tải…
-                  </span>
-                )}
-              </div>
-            )}
-
-            {directTab === 'custom' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {customFormOptionsLoading ? (
-                  <div style={{ fontSize: 13, color: '#9CA3AF' }}>Đang tải custom template…</div>
-                ) : customFormOptions.length === 0 ? (
-                  <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#92400E' }}>
-                    Chưa có custom template nào.
-                  </div>
-                ) : (
-                  <>
-                    <select
-                      value={directTemplateKey.startsWith('custom:') ? directTemplateKey.slice('custom:'.length) : ''}
-                      onChange={e => handleTemplateKeyChange(templateStoreKeyFor('custom', Number(e.target.value)))}
-                      style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1.5px solid #E5E7EB', fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff' }}
-                    >
-                      <option value="" disabled>— Chọn custom template —</option>
-                      {customFormOptions.map(f => (
-                        <option key={f.id} value={f.id}>
-                          {f.name}{f.area_count > 0 ? ` — ${f.area_count} vùng OMR` : ''}
-                        </option>
-                      ))}
-                    </select>
+                    {PINNED_TEMPLATES.map(pt => {
+                      const key = templateStoreKeyFor('custom', pt.id);
+                      return (
+                        <label key={pt.id} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: directTemplateKey === key ? 700 : 400, color: directTemplateKey === key ? '#C8102E' : '#374151' }}>
+                          <input
+                            type="radio" name="direct-template"
+                            checked={directTemplateKey === key}
+                            onChange={() => handleTemplateKeyChange(key)}
+                            style={{ accentColor: '#C8102E' }}
+                          />
+                          {pt.label}
+                        </label>
+                      );
+                    })}
                     {directSchemaLoading && (
-                      <span style={{ fontSize: 12.5, color: '#6B7280', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: '#6B7280' }}>
                         <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                        Đang tải schema…
+                        Đang tải…
                       </span>
                     )}
-                  </>
+                  </div>
                 )}
-              </div>
-            )}
 
-            <div style={{ marginTop: 12, fontSize: 12, color: '#9CA3AF' }}>
-              Mỗi mẫu có đáp án riêng — đổi mẫu không mất đáp án của mẫu khác. "Lưu Answer Key" sẽ dùng đáp án của mẫu đang chọn để chấm.
+                {directTab === 'custom' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {customFormOptionsLoading ? (
+                      <div style={{ fontSize: 13, color: '#9CA3AF' }}>Đang tải custom template…</div>
+                    ) : customFormOptions.length === 0 ? (
+                      <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#92400E' }}>
+                        Chưa có custom template nào.
+                      </div>
+                    ) : (
+                      <>
+                        <select
+                          value={directTemplateKey.startsWith('custom:') ? directTemplateKey.slice('custom:'.length) : ''}
+                          onChange={e => handleTemplateKeyChange(templateStoreKeyFor('custom', Number(e.target.value)))}
+                          style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1.5px solid #E5E7EB', fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff' }}
+                        >
+                          <option value="" disabled>— Chọn custom template —</option>
+                          {customFormOptions.map(f => (
+                            <option key={f.id} value={f.id}>
+                              {f.name}{f.area_count > 0 ? ` — ${f.area_count} vùng OMR` : ''}
+                            </option>
+                          ))}
+                        </select>
+                        {directSchemaLoading && (
+                          <span style={{ fontSize: 12.5, color: '#6B7280', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                            Đang tải schema…
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <div style={{ marginTop: 14, fontSize: 12, color: '#9CA3AF' }}>
+                  Mỗi mẫu có đáp án riêng — đổi mẫu không mất đáp án của mẫu khác. "Lưu Answer Key" sẽ dùng đáp án của mẫu đang chọn để chấm.
+                </div>
+              </div>
+
+              <div style={{ flex: '1 1 320px', minWidth: 260, maxWidth: 460 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Xem trước mẫu đang chọn</div>
+                <TemplatePreviewThumb
+                  loading={directTemplateKey !== 'vju' && directSchemaLoading}
+                  areas={directTemplateKey === 'vju' ? null : directAreas}
+                  pageWidth={directPageW}
+                  pageHeight={directPageH}
+                  schema={directTemplateKey === 'vju' ? VJU_PRESET_SCHEMA : directSchema}
+                  imageUrl={
+                    directTemplateKey === 'vju'
+                      ? (templateVariant === 'sbd4' ? VJU_SBD4_PREVIEW_IMAGE : VJU_SBD8_PREVIEW_IMAGE)
+                      : directTemplateKey === templateStoreKeyFor('custom', PINNED_TEMPLATE_40_ID)
+                        ? PINNED_TEMPLATE_40_PREVIEW_IMAGE
+                        : null
+                  }
+                  height={360}
+                />
+              </div>
             </div>
           </Card>
         )}
@@ -1008,6 +1202,31 @@ export default function AnswerKeyPage() {
           </Card>
         )}
 
+        {/* Ký tên giám thị & người chấm thi */}
+        <Card>
+          <h3 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 700, color: '#374151' }}>
+            Giám thị &amp; người chấm thi{multiMaDe && <span style={{ color: '#C8102E' }}> — Đề {activeMaDe}</span>}
+          </h3>
+          <p style={{ margin: '0 0 12px', fontSize: 12, color: '#9CA3AF' }}>
+            Ghi lại tên — dùng khi xuất báo cáo ( nếu cần ).
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
+            {PROCTOR_FIELD_LABELS.map(({ key, label }) => (
+              <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: 11.5, fontWeight: 600, color: '#6B7280' }}>{label}</label>
+                <input
+                  type="text"
+                  value={currentProctors[key] ?? ''}
+                  onChange={e => setProctorField(key, e.target.value)}
+                  disabled={grading}
+                  placeholder="Họ tên…"
+                  style={{ padding: '8px 12px', borderRadius: 8, border: '1.5px solid #E5E7EB', fontSize: 13, fontFamily: 'inherit', outline: 'none' }}
+                />
+              </div>
+            ))}
+          </div>
+        </Card>
+
         {/* Quick-fill */}
         <Card>
           <h3 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 700, color: '#374151' }}>
@@ -1062,83 +1281,148 @@ export default function AnswerKeyPage() {
             </div>
           </Card>
         ) : (
-          // 2026-07-29: flattening every block into one grid still read as
-          // messy once a phiếu mixes MCQ + Đúng/Sai + tự luận blocks side by
-          // side with nothing telling them apart ("vẫn hơi rối, tạo thành
-          // các vùng trắc nghiệm/đúng sai/... đi"). Sections are now grouped
-          // into named zones by answer type — each zone is its own bordered
-          // region with a header, and the section grid from before sits
-          // inside it, so the eye sees "Trắc nghiệm" / "Đúng-Sai" / "Tự luận"
-          // as distinct areas instead of one undifferentiated wall of boxes.
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {sectionZones.map(zone => (
-              <div key={zone.key} style={{ background: '#FAFAFB', border: '1px solid #E5E7EB', borderRadius: 12, padding: 14 }}>
-                <div style={{ fontSize: 13, fontWeight: 800, color: '#374151', marginBottom: 10, letterSpacing: '0.01em' }}>
-                  {zone.label}
-                  <span style={{ fontWeight: 500, color: '#9CA3AF', marginLeft: 8, fontSize: 11.5 }}>
-                    ({zone.sections.reduce((n, s) => n + s.labels.length, 0)} câu)
-                  </span>
-                </div>
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
-                  gap: 10,
-                }}>
-                  {zone.sections.map(({ name: section, labels, inputType, options }) => {
-                    const sectionFilled = labels.filter(l => currentAnswers[l]).length;
-                    const isText = inputType === 'text';
-                    const choices = ['—', ...(options && options.length > 0 ? options : CHOICES.slice(1))];
-                    return (
-                      <div key={section} style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 10, padding: '10px 12px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                          <h3 style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: '#C8102E', flex: 1 }}>{section}</h3>
-                          <span style={{ fontSize: 11, color: '#9CA3AF' }}>{sectionFilled}/{labels.length} đã nhập</span>
-                        </div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                          {labels.map((lbl, idx) => {
-                      const val = currentAnswers[lbl] || '';
-                      if (isText) {
-                        return (
-                          <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
-                            <span style={{ fontSize: 8.5, color: '#9CA3AF', fontWeight: 500 }}>{idx + 1}</span>
-                            <input
-                              type="text"
-                              value={val}
-                              onChange={e => setAnswer(lbl, e.target.value)}
-                              disabled={grading}
-                              placeholder="-12.34"
-                              style={{
-                                padding: '3px 6px', borderRadius: 6,
-                                border: `1.2px solid ${val ? '#D1D5DB' : '#F3B4BC'}`,
-                                fontSize: 11.5, fontWeight: 700,
-                                color:      val ? '#1F2937' : '#C8102E',
-                                background: val ? '#F9FAFB' : '#fff',
-                                fontFamily: 'monospace', cursor: grading ? 'not-allowed' : 'text', outline: 'none',
-                                width: 66, textAlign: 'center',
-                              }}
-                            />
-                          </div>
-                        );
-                      }
+          // 2026-07-30: "cái ak hiện tại hơi rối mắt" — the old per-question
+          // control was a 38px-wide <select>, so you had to open a dropdown
+          // just to see what was picked. Swapped for a row of big tappable
+          // A/B/C/D (or Đúng/Sai) buttons — the chosen one is solid red, so
+          // the whole answer key is readable at a glance without clicking
+          // anything. Also flattened the old zone "box inside a box": the
+          // zone (question-type grouping added 2026-07-29, still useful for
+          // templates mixing MCQ + Đúng/Sai + tự luận) is now just a header
+          // row with an overall progress readout, not another bordered card
+          // wrapping the section cards.
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+            {sectionZones.map(zone => {
+              const zoneLabels = zone.sections.flatMap(s => s.labels);
+              const zoneFilled = zoneLabels.filter(l => currentAnswers[l]).length;
+              const zoneDone   = zoneFilled === zoneLabels.length && zoneLabels.length > 0;
+              return (
+                <div key={zone.key}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12, paddingBottom: 8, borderBottom: '1px solid #F1F3F5' }}>
+                    <h3 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: '#1E1E1E' }}>{zone.label}</h3>
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: zoneDone ? '#10B981' : '#9CA3AF' }}>
+                      Nhập: {zoneFilled}/{zoneLabels.length} câu · {zoneLabels.length ? Math.round(zoneFilled / zoneLabels.length * 100) : 0}%
+                    </span>
+                  </div>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+                    gap: 12,
+                  }}>
+                    {zone.sections.map(({ name: section, labels, inputType, options }) => {
+                      const sectionFilled = labels.filter(l => currentAnswers[l]).length;
+                      const sectionDone   = sectionFilled === labels.length;
+                      const isText = inputType === 'text';
+                      const choices = options && options.length > 0 ? options : CHOICES.slice(1);
+                      const mandatoryMatch = section.match(/^(.*?)\s*\(Bắt buộc\)\s*$/);
+                      const sectionTitle = mandatoryMatch ? mandatoryMatch[1] : section;
                       return (
-                        <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
-                          <span style={{ fontSize: 8.5, color: '#9CA3AF', fontWeight: 500 }}>{idx + 1}</span>
-                          <select
-                            value={val || '—'}
-                            onChange={e => setAnswer(lbl, e.target.value)}
-                            disabled={grading}
-                            style={{
-                              padding: '3px 1px', borderRadius: 6,
-                              border: `1.2px solid ${val ? '#D1D5DB' : '#F3B4BC'}`,
-                              fontSize: 11.5, fontWeight: 700,
-                              color:      val ? '#1F2937' : '#C8102E',
-                              background: val ? '#F9FAFB' : '#fff',
-                              fontFamily: 'inherit', cursor: grading ? 'not-allowed' : 'pointer', outline: 'none',
-                              width: 38, textAlign: 'center',
-                            }}
-                          >
-                            {choices.map(c => <option key={c} value={c}>{c}</option>)}
-                          </select>
+                        <div key={section} style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 12, padding: '12px 14px' }}>
+                          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10 }}>
+                            <h4 style={{ margin: 0, fontSize: 13.5, fontWeight: 800, color: '#1E1E1E' }}><SectionTitleText title={sectionTitle} /></h4>
+                            {mandatoryMatch && (
+                              <span style={{ fontSize: 9.5, fontWeight: 800, color: '#C8102E', letterSpacing: '0.03em' }}>BẮT BUỘC</span>
+                            )}
+                            <span style={{ flex: 1 }} />
+                            <span style={{ fontSize: 12, fontWeight: 700, color: sectionDone ? '#10B981' : '#9CA3AF' }}>{sectionFilled}/{labels.length}</span>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                            {labels.map((lbl, idx) => {
+                              const val = currentAnswers[lbl] || '';
+                              const customPt = scoring.questionPoints?.[lbl];
+                              const isSelected = selectedForPoints.has(lbl);
+                              const pointBadge = customPt != null && (
+                                <span style={{
+                                  position: 'absolute', top: -6, right: -6, minWidth: 15, height: 15, borderRadius: 8,
+                                  background: '#C8102E', color: '#fff', fontSize: 8.5, fontWeight: 800,
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 3px', lineHeight: 1, zIndex: 1,
+                                }}>
+                                  {customPt}
+                                </span>
+                              );
+                              // In "chọn câu để đặt điểm" mode the row becomes a
+                              // plain checkbox-like toggle — answer editing is
+                              // paused so clicks can't accidentally change an
+                              // answer while selecting a group of questions to
+                              // price differently.
+                              if (pointSelectMode) {
+                                return (
+                                  <div key={lbl} style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
+                                    <span style={{ fontSize: 11.5, fontWeight: 700, color: '#9CA3AF', width: 16, textAlign: 'right', flexShrink: 0 }}>{idx + 1}</span>
+                                    {pointBadge}
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleLabelSelectedForPoints(lbl)}
+                                      style={{
+                                        flex: 1, height: 30, borderRadius: 7,
+                                        border: `1.5px solid ${isSelected ? '#C8102E' : '#D1D5DB'}`,
+                                        background: isSelected ? '#FEF2F2' : '#fff',
+                                        color: isSelected ? '#C8102E' : '#9CA3AF',
+                                        fontSize: 12, fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit',
+                                      }}
+                                    >
+                                      {isSelected ? '✓ đã chọn' : 'chọn'}
+                                    </button>
+                                  </div>
+                                );
+                              }
+                              if (isText) {
+                                return (
+                                  <div key={lbl} style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
+                                    <span style={{ fontSize: 11.5, fontWeight: 700, color: '#9CA3AF', width: 16, textAlign: 'right', flexShrink: 0 }}>{idx + 1}</span>
+                                    {pointBadge}
+                                    <input
+                                      type="text"
+                                      value={val}
+                                      onChange={e => setAnswer(lbl, e.target.value)}
+                                      disabled={grading}
+                                      placeholder="-12.34"
+                                      style={{
+                                        flex: 1, minWidth: 0, padding: '6px 10px', borderRadius: 7,
+                                        border: `1.5px solid ${val ? '#D1D5DB' : '#F3B4BC'}`,
+                                        fontSize: 13, fontWeight: 700,
+                                        color:      val ? '#1F2937' : '#C8102E',
+                                        background: val ? '#F9FAFB' : '#fff',
+                                        fontFamily: 'monospace', cursor: grading ? 'not-allowed' : 'text', outline: 'none',
+                                        textAlign: 'center',
+                                      }}
+                                    />
+                                  </div>
+                                );
+                              }
+                              return (
+                                <div key={lbl} style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
+                                  <span style={{ fontSize: 11.5, fontWeight: 700, color: '#9CA3AF', width: 16, textAlign: 'right', flexShrink: 0 }}>{idx + 1}</span>
+                                  {pointBadge}
+                                  <div style={{ display: 'flex', gap: 5 }}>
+                                    {choices.map(c => {
+                                      const chosen = val === c;
+                                      return (
+                                        <button
+                                          key={c}
+                                          type="button"
+                                          disabled={grading}
+                                          onClick={() => setAnswer(lbl, chosen ? '' : c)}
+                                          title={chosen ? `Bấm lại để xoá đáp án câu ${idx + 1}` : undefined}
+                                          style={{
+                                            width: choices.length > 4 ? 26 : 30, height: 30, borderRadius: 7, padding: 0, flexShrink: 0,
+                                            border: `1.5px solid ${chosen ? '#C8102E' : '#E5E7EB'}`,
+                                            background: chosen ? '#C8102E' : '#fff',
+                                            color: chosen ? '#fff' : '#9CA3AF',
+                                            fontSize: 12.5, fontWeight: 800, cursor: grading ? 'not-allowed' : 'pointer',
+                                            fontFamily: 'inherit',
+                                          }}
+                                        >
+                                          {c}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
                       );
                     })}
@@ -1146,9 +1430,6 @@ export default function AnswerKeyPage() {
                 </div>
               );
             })}
-                </div>
-              </div>
-            ))}
           </div>
         )}
 
@@ -1174,7 +1455,46 @@ export default function AnswerKeyPage() {
           </div>
           <p style={{ margin: '12px 0 0', fontSize: 12, color: '#9CA3AF' }}>
             Điểm = Số đúng × {scoring.correct} + Số sai × ({scoring.wrong}) + Số trống × {scoring.blank}
+            {overrideCount > 0 && <> — trừ {overrideCount} câu đã đặt điểm riêng (xem nhãn đỏ trên từng câu).</>}
           </p>
+
+          {/* Điểm riêng theo nhóm câu */}
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid #F1F3F5' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <Button
+                size="sm"
+                variant={pointSelectMode ? 'outline' : 'secondary'}
+                onClick={() => { setPointSelectMode(v => !v); setSelectedForPoints(new Set()); }}
+                disabled={grading}
+              >
+                {pointSelectMode ? 'Xong — thoát chế độ chọn' : 'Chọn câu để đặt điểm riêng'}
+              </Button>
+              {overrideCount > 0 && (
+                <Button size="sm" variant="secondary" onClick={clearAllPointOverrides} disabled={grading} style={{ color: '#EF4444', borderColor: '#FECACA' }}>
+                  Bỏ hết điểm riêng ({overrideCount})
+                </Button>
+              )}
+            </div>
+
+            {pointSelectMode && (
+              <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: '#FEF2F2', border: '1px solid #F3B4BC', borderRadius: 10, padding: '10px 14px' }}>
+                <span style={{ fontSize: 13, color: '#991B1B' }}>
+                  Đã chọn <strong>{selectedForPoints.size}</strong> câu — bấm vào từng ô số thứ tự bên trên để chọn/bỏ chọn.
+                </span>
+                <div style={{ flex: 1 }} />
+                <label style={{ fontSize: 12, color: '#374151', fontWeight: 600 }}>Điểm cho các câu đã chọn:</label>
+                <input
+                  type="number" step="0.05" value={bulkPointValue}
+                  onChange={e => setBulkPointValue(e.target.value)}
+                  style={{ width: 70, padding: '6px 10px', borderRadius: 8, border: '1.5px solid #F3B4BC', fontSize: 13, fontWeight: 700, textAlign: 'center', fontFamily: 'inherit', outline: 'none' }}
+                />
+                <Button size="sm" variant="primary" onClick={applyBulkPoints} disabled={selectedForPoints.size === 0}>Áp dụng</Button>
+                {selectedForPoints.size > 0 && (
+                  <Button size="sm" variant="secondary" onClick={clearSelectedPointOverrides}>Bỏ điểm riêng của câu đã chọn</Button>
+                )}
+              </div>
+            )}
+          </div>
         </Card>
 
         {/* Bottom actions */}
@@ -1188,32 +1508,34 @@ export default function AnswerKeyPage() {
           <Button size="sm" variant="secondary" icon={<FileSpreadsheet size={14} />} onClick={handleSampleExcelDownload}>Tải mẫu Excel</Button>
           <input ref={excelInputRef} type="file" accept=".xlsx" style={{ display: 'none' }} onChange={handleImportExcelFile} />
 
-          {!isGradingMode && (
-            <>
-              <div style={{ width: 1, height: 28, background: '#E5E7EB', margin: '0 2px' }} />
-              <Button size="sm" variant="secondary" icon={<BookmarkPlus size={14} />} onClick={handleSaveToLibrary}>Lưu vào thư viện</Button>
-              <Button size="sm" variant="secondary" icon={<Library size={14} />} onClick={() => setShowLibrary(v => !v)}>
-                Thư viện đáp án {library.length > 0 ? `(${library.length})` : ''}
-              </Button>
-            </>
-          )}
+          <div style={{ width: 1, height: 28, background: '#E5E7EB', margin: '0 2px' }} />
+          <Button size="sm" variant="secondary" icon={<BookmarkPlus size={14} />} onClick={handleSaveToLibrary}>Lưu vào thư viện</Button>
+          <Button size="sm" variant="secondary" icon={<Library size={14} />} onClick={() => setShowLibrary(v => !v)}>
+            Thư viện đáp án {visibleLibrary.length > 0 ? `(${visibleLibrary.length})` : ''}
+          </Button>
 
           <div style={{ flex: 1 }} />
           <Button size="sm" variant="secondary" icon={<Trash2 size={14} />} onClick={handleClear} style={{ color: '#EF4444', borderColor: '#FECACA' }}>Xóa Answer Key</Button>
         </div>
 
-        {/* Saved answer-key library panel */}
-        {!isGradingMode && showLibrary && (
+        {/* Saved answer-key library panel — in grading mode (fixed template),
+            only entries saved for that exact template are listed, since
+            there's no way to switch templates mid-grading to use the rest. */}
+        {showLibrary && (
           <div ref={libraryPanelRef}>
           <Card>
-            <h3 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 700, color: '#374151' }}>Thư viện đáp án đã lưu</h3>
-            {library.length === 0 ? (
+            <h3 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 700, color: '#374151' }}>
+              Thư viện đáp án đã lưu{isGradingMode && <span style={{ fontWeight: 500, color: '#9CA3AF' }}> — chỉ hiện đáp án đã lưu cho mẫu đang chấm ({currentTemplateLabel})</span>}
+            </h3>
+            {visibleLibrary.length === 0 ? (
               <div style={{ fontSize: 13, color: '#9CA3AF', textAlign: 'center', padding: '16px 0' }}>
-                Chưa lưu đáp án nào. Bấm "Lưu vào thư viện" để đặt tên và lưu lại đáp án đang chỉnh sửa.
+                {isGradingMode
+                  ? `Chưa có đáp án nào được lưu sẵn cho mẫu "${currentTemplateLabel}". Nhập đáp án bên trên rồi bấm "Lưu vào thư viện" để dùng lại cho lần chấm sau.`
+                  : 'Chưa lưu đáp án nào. Bấm "Lưu vào thư viện" để đặt tên và lưu lại đáp án đang chỉnh sửa.'}
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {library.map(entry => (
+                {visibleLibrary.map(entry => (
                   <div key={entry.id}
                     onClick={() => openLibraryPreview(entry)}
                     style={{
@@ -1343,7 +1665,7 @@ export default function AnswerKeyPage() {
                             const choices = ['—', ...(section.options && section.options.length > 0 ? section.options : ['A', 'B', 'C', 'D'])];
                             return (
                             <div key={section.name} style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, padding: '8px 10px' }}>
-                              <div style={{ fontSize: 11, fontWeight: 700, color: '#C8102E', marginBottom: 6 }}>{section.name}</div>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: '#C8102E', marginBottom: 6 }}><SectionTitleText title={section.name} /></div>
                               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                                 {section.labels.map((lbl, idx) => {
                                   const val = shownAnswers[lbl] || '';

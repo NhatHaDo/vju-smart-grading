@@ -3,6 +3,8 @@ import { useAuth } from './providers';
 import AppShell from '../components/layout/AppShell';
 import LandingPage       from '../pages/LandingPage';
 import LoginPage         from '../pages/LoginPage';
+import RegisterPage      from '../pages/RegisterPage';
+import ForgotPasswordPage from '../pages/ForgotPasswordPage';
 import DashboardPage     from '../pages/DashboardPage';
 import ExamPage          from '../pages/ExamPage';
 import SheetReviewPage   from '../pages/SheetReviewPage';
@@ -28,6 +30,8 @@ export default function AppRoutes() {
       {/* ── Public routes ── */}
       <Route path="/"      element={<LandingPage />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/register"        element={<RegisterPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
 
       {/* ── Authenticated app at /app ── */}
       <Route

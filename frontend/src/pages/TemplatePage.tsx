@@ -222,7 +222,7 @@ function TemplateDetailPanel({
                 <div style={{ flex: 1 }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>{label}</span>
                 </div>
-                <span style={{ fontSize: 10, color: '#9CA3AF', background: '#FEECEC', color: '#C8102E', padding: '1px 6px', borderRadius: 10 }}>
+                <span style={{ fontSize: 10, background: '#FEECEC', color: '#C8102E', padding: '1px 6px', borderRadius: 10 }}>
                   {count} câu · A/B/C/D
                 </span>
               </div>

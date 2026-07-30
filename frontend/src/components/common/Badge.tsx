@@ -4,6 +4,10 @@
 interface BadgeProps {
   children: React.ReactNode;
   color?: 'red' | 'yellow' | 'green' | 'blue' | 'gray' | 'purple';
+  /** Native tooltip shown on hover */
+  title?: string;
+  /** Optional style overrides, merged over the default pill style */
+  style?: React.CSSProperties;
 }
 
 const COLOR_MAP: Record<NonNullable<BadgeProps['color']>, { bg: string; text: string }> = {
@@ -15,10 +19,11 @@ const COLOR_MAP: Record<NonNullable<BadgeProps['color']>, { bg: string; text: st
   purple: { bg: '#EDE9FE', text: '#5B21B6' },
 };
 
-export default function Badge({ children, color = 'gray' }: BadgeProps) {
+export default function Badge({ children, color = 'gray', title, style }: BadgeProps) {
   const { bg, text } = COLOR_MAP[color];
   return (
     <span
+      title={title}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -30,6 +35,7 @@ export default function Badge({ children, color = 'gray' }: BadgeProps) {
         color: text,
         whiteSpace: 'nowrap',
         lineHeight: 1.6,
+        ...style,
       }}
     >
       {children}

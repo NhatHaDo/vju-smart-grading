@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.security.permissions import get_current_user
 from app.database import get_db
 from app.models.user import User
-from app.schemas.auth_schema import LoginRequest, RegisterRequest, RefreshRequest, RefreshResponse
+from app.schemas.auth_schema import LoginRequest, RegisterRequest, RefreshRequest, RefreshResponse, ForgotPasswordRequest
 from app.schemas.user_schema import UserOut, UserWithToken
 from app.services.audit_service import AuditService
 from app.services.auth_service import AuthService
@@ -20,8 +20,19 @@ def _ip(request: Request) -> str:
 def register(body: RegisterRequest, request: Request, db: Session = Depends(get_db)):
     svc   = AuthService(db)
     audit = AuditService(db)
-    user  = svc.register(email=body.email, password=body.password, name=body.name)
+    user  = svc.register(email=body.email, password=body.password, name=body.name, phone=body.phone)
     audit.log("register", user_id=user.id, resource_type="user", resource_id=user.id, ip_address=_ip(request))
+    return user
+
+
+@router.post("/reset-password", response_model=UserOut)
+def reset_password(body: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
+    """Public, unauthenticated — matching email + phone is enough to set a
+    new password directly (no OTP/email link), per explicit product choice."""
+    svc   = AuthService(db)
+    audit = AuditService(db)
+    user  = svc.reset_password(email=body.email, phone=body.phone, new_password=body.new_password)
+    audit.log("reset_password", user_id=user.id, resource_type="user", resource_id=user.id, ip_address=_ip(request))
     return user
 
 

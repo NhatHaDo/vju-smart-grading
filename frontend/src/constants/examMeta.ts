@@ -48,7 +48,7 @@ export function labelFromOptions(
 export const semesterLabel  = (value: string) => labelFromOptions(SEMESTER_OPTIONS, value);
 export const facultyLabel   = (value: string) => labelFromOptions(FACULTY_OPTIONS,  value);
 export const campusLabel    = (value: string) => labelFromOptions(CAMPUS_OPTIONS,   value);
-export const lecturerDisplay = (exam: { lecturer_title?: string; lecturer_name?: string }) =>
+export const lecturerDisplay = (exam: { lecturer_title?: string | null; lecturer_name?: string | null }) =>
   [exam?.lecturer_title, exam?.lecturer_name].filter(Boolean).join(' ') || '—';
 
 export function currentAcademicYear(): string {

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { X, AlertTriangle, CheckCircle2, Pencil, Save, RotateCcw } from 'lucide-react';
 import type { OmrGradeResult, AnswerKeyStore, ManualCorrection, InfoFieldColumn, TemplateSchema, TemplateAnswerSection, OmrWarning } from '../../types/grading';
 import { VJU_PRESET_SCHEMA, computeScore, resolveAnswerKeyForMaDe, getMaDeValue } from '../../types/grading';
 import { buildSchemaFromAnswerKeys } from '../../utils/templateSchema';
@@ -7,6 +7,7 @@ import { getInfoFieldValue } from '../../utils/resultMapping';
 import SheetImageViewer from './SheetImageViewer';
 
 type Filter = 'all' | 'correct' | 'wrong' | 'blank' | 'warn';
+const CHOICES = ['—', 'A', 'B', 'C', 'D'];
 
 interface Props {
   r: OmrGradeResult;
@@ -15,6 +16,13 @@ interface Props {
   onClose: () => void;
   /** Dynamic schema — drives info header + answer grid. Falls back to VJU preset. */
   templateSchema?: TemplateSchema | null;
+  /** 2026-07-30: "check lỗi cần cho GV sửa trực tiếp ở màn view, hiện tại tách
+   *  màn chỉnh sửa ở 1 page khác" — when both are provided, an "Sửa đáp án"
+   *  toggle appears so corrections can be made right here instead of only on
+   *  the separate "Kiểm tra lỗi" page. Omit both to keep this modal read-only
+   *  (e.g. if reused somewhere that shouldn't allow edits). */
+  onSaveCorrection?: (filename: string, c: ManualCorrection) => void;
+  onResetCorrection?: (filename: string) => void;
 }
 
 const STATUS_COLOR:  Record<string, string> = { correct:'#D1FAE5', wrong:'#FEE2E2', blank:'#fff',     warn:'#EDE9FE', 'no-key':'#F3F4F6' };
@@ -69,8 +77,12 @@ function InfoFieldValue({ label, raw, columns }: InfoFieldValueProps) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function ResultDetailModal({ r, correction, answerKey, onClose, templateSchema }: Props) {
+export default function ResultDetailModal({ r, correction, answerKey, onClose, templateSchema, onSaveCorrection, onResetCorrection }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
+  const [editMode, setEditMode] = useState(false);
+  const [editInfo, setEditInfo] = useState<Record<string, string>>({});
+  const [editAnswers, setEditAnswers] = useState<Record<string, string>>({});
+  const canEdit = !!onSaveCorrection;
   const schema = templateSchema ?? VJU_PRESET_SCHEMA;
 
   // Safety net: if schema has no answer sections but the row has actual answers,
@@ -94,6 +106,38 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
   const answers = correction
     ? { ...r.answers, ...correction.corrected_answers }
     : (r.answers ?? {});
+
+  function enterEditMode() {
+    const info: Record<string, string> = {};
+    for (const field of schema.infoFields) {
+      info[field.key] = String(
+        correction?.corrected_student_info?.[field.key]
+        ?? (student_info[field.key] != null ? student_info[field.key] : undefined)
+        ?? getInfoFieldValue(student_info, r.info_field_columns, field)
+        ?? ''
+      );
+    }
+    const ans: Record<string, string> = {};
+    for (const lbl of allAnswerLabels) ans[lbl] = String(answers[lbl] ?? '');
+    setEditInfo(info);
+    setEditAnswers(ans);
+    setEditMode(true);
+  }
+  const setEditAns = (lbl: string, val: string) =>
+    setEditAnswers(prev => ({ ...prev, [lbl]: val === '—' ? '' : val }));
+  function handleSaveEdit() {
+    if (!onSaveCorrection) return;
+    onSaveCorrection(r.input?.filename ?? '', {
+      corrected_student_info: editInfo,
+      corrected_answers:      editAnswers,
+      updatedAt:               new Date().toISOString(),
+    });
+    setEditMode(false);
+  }
+  function handleResetEdit() {
+    if (onResetCorrection) onResetCorrection(r.input?.filename ?? '');
+    setEditMode(false);
+  }
 
   const corrected  = !!correction;
   const warnList   = r.warnings ?? [];
@@ -217,7 +261,36 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                   );
                 })}
               </div>
+              {/* "ở góc trên bên trái: có 2 chữ kí, cần xác định được điều
+                 này ở mỗi bài với OMR" — mean-pixel ink check in the 4
+                 CÁN BỘ COI THI/CHẤM THI boxes. null/undefined = not
+                 checked (custom template), not "all missing". */}
+              {r.signatures && r.signatures.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                  {r.signatures.map(s => (
+                    <span
+                      key={s.key}
+                      title={s.present ? undefined : `Ô "${s.label}" có vẻ chưa được ký (mean=${s.mean_gray})`}
+                      style={{
+                        fontSize: 10.5, fontWeight: 700, borderRadius: 9999, padding: '2px 8px',
+                        background: s.present ? 'rgba(255,255,255,0.15)' : '#FCD34D',
+                        color: s.present ? 'rgba(255,255,255,0.85)' : '#78350F',
+                      }}
+                    >
+                      {s.present ? '✓' : '✗'} {s.label}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
+            {canEdit && !editMode && (
+              <button
+                onClick={enterEditMode}
+                style={{ border: 'none', background: 'rgba(255,255,255,0.15)', borderRadius: 8, cursor: 'pointer', color: '#fff', padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit' }}
+              >
+                <Pencil size={14} /> Sửa đáp án
+              </button>
+            )}
             <button
               onClick={onClose}
               style={{ border: 'none', background: 'rgba(255,255,255,0.15)', borderRadius: 8, cursor: 'pointer', color: '#fff', padding: 7, display: 'flex', flexShrink: 0 }}
@@ -226,6 +299,27 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
             </button>
           </div>
         </div>
+
+        {/* ── Edit-mode sticky action bar ── */}
+        {editMode && (
+          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', background: '#FFF9F9', borderBottom: '1px solid #FECACA' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#C8102E', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Pencil size={13} /> Đang sửa đáp án — sửa trực tiếp bên trái, đối chiếu ảnh gốc bên phải
+            </span>
+            <div style={{ flex: 1 }} />
+            <button onClick={handleSaveEdit} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#C8102E', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+              <Save size={13} /> Lưu sửa
+            </button>
+            {onResetCorrection && (
+              <button onClick={handleResetEdit} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#fff', color: '#6B7280', border: '1.5px solid #E5E7EB', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                <RotateCcw size={13} /> Reset về gốc
+              </button>
+            )}
+            <button onClick={() => setEditMode(false)} style={{ background: '#fff', color: '#6B7280', border: '1.5px solid #E5E7EB', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+              Hủy
+            </button>
+          </div>
+        )}
 
         {/* ── Body: 38 / 62 split ── */}
         <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '38% 62%', minHeight: 0 }}>
@@ -268,20 +362,41 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
               </div>
             )}
 
-            {/* Filter + answer grid */}
+            {/* Editable student-info block — edit mode only */}
+            {editMode && schema.infoFields.length > 0 && (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Thông tin sinh viên</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+                  {schema.infoFields.map(field => (
+                    <div key={field.key} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <label style={{ fontSize: 10, fontWeight: 600, color: '#6B7280' }}>{field.displayName}</label>
+                      <input
+                        value={editInfo[field.key] ?? ''}
+                        onChange={e => setEditInfo(prev => ({ ...prev, [field.key]: e.target.value }))}
+                        style={{ padding: '6px 9px', borderRadius: 7, border: '1.5px solid #E5E7EB', fontSize: 12, fontFamily: 'monospace', outline: 'none' }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Filter + answer grid (read-only) — or editable inputs in edit mode */}
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Chi tiết câu hỏi</div>
-              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 10 }}>
-                {filterButtons.map(f => (
-                  <button key={f.key} onClick={() => setFilter(f.key)} style={{
-                    padding: '3px 10px', borderRadius: 9999, border: '1.5px solid',
-                    borderColor: filter === f.key ? f.color : '#E5E7EB',
-                    background: filter === f.key ? '#F9FAFB' : '#fff',
-                    color: filter === f.key ? f.color : '#9CA3AF',
-                    fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-                  }}>{f.label}</button>
-                ))}
-              </div>
+              {!editMode && (
+                <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 10 }}>
+                  {filterButtons.map(f => (
+                    <button key={f.key} onClick={() => setFilter(f.key)} style={{
+                      padding: '3px 10px', borderRadius: 9999, border: '1.5px solid',
+                      borderColor: filter === f.key ? f.color : '#E5E7EB',
+                      background: filter === f.key ? '#F9FAFB' : '#fff',
+                      color: filter === f.key ? f.color : '#9CA3AF',
+                      fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+                    }}>{f.label}</button>
+                  ))}
+                </div>
+              )}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {effectiveAnswerSections.length === 0 && (
                   <div style={{ fontSize: 12, color: '#9CA3AF', textAlign: 'center', padding: '12px 0' }}>
@@ -294,7 +409,74 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                     Hiển thị từ dữ liệu thực — schema đang tải hoặc chưa lưu
                   </div>
                 )}
-                {effectiveAnswerSections.map(({ name: section, labels, inputType }) => {
+                {effectiveAnswerSections.map(({ name: section, labels, inputType, options }) => {
+                  if (editMode) {
+                    const isText = inputType === 'text';
+                    const choices = ['—', ...(options && options.length > 0 ? options : CHOICES.slice(1))];
+                    return (
+                      <div key={section}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: '#6B7280', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{section}</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {labels.map((lbl, idx) => {
+                            const val = editAnswers[lbl] || '';
+                            const original = String(answers[lbl] ?? '');
+                            const isChanged = val !== original;
+                            // 2026-07-30: edit mode used to give zero visual cue about
+                            // *which* questions the "⚠ N cảnh báo" in the header referred
+                            // to — a teacher had to scan the whole overlay image by eye to
+                            // find the flagged bubble. Highlight warned questions here too
+                            // (light purple, distinct from the solid purple already used
+                            // for "đã sửa") so they jump out while editing, not just in the
+                            // read-only "Cần xem" filter.
+                            const warnQ = warnList.find(w => w.field === lbl);
+                            const isWarned = !!warnQ;
+                            const tip = isChanged
+                              ? `Đã sửa (gốc: ${original || '—'})`
+                              : warnQ ? describeWarning(warnQ) : undefined;
+                            const borderColor = isChanged ? '#7C3AED' : isWarned ? '#C4B5FD' : '#E5E7EB';
+                            const textColor   = isChanged ? '#7C3AED' : isWarned ? '#6D28D9' : '#1F2937';
+                            const bgColor     = isChanged ? '#F3E8FF' : isWarned ? '#F5F3FF' : '#fff';
+                            if (isText) {
+                              return (
+                                <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                                  <span style={{ fontSize: 9, color: '#9CA3AF' }}>{idx + 1}</span>
+                                  <input
+                                    type="text" value={val} onChange={e => setEditAns(lbl, e.target.value)}
+                                    placeholder="-12.34" title={tip}
+                                    style={{
+                                      padding: '4px 6px', borderRadius: 6, width: 74,
+                                      border: `1.5px solid ${borderColor}`,
+                                      fontSize: 12, fontWeight: 700, color: textColor,
+                                      background: bgColor,
+                                      fontFamily: 'monospace', cursor: 'text', outline: 'none', textAlign: 'center',
+                                    }}
+                                  />
+                                </div>
+                              );
+                            }
+                            return (
+                              <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                                <span style={{ fontSize: 9, color: '#9CA3AF' }}>{idx + 1}</span>
+                                <select
+                                  value={val || '—'} onChange={e => setEditAns(lbl, e.target.value)}
+                                  title={tip}
+                                  style={{
+                                    padding: '4px 2px', borderRadius: 6, width: 42,
+                                    border: `1.5px solid ${borderColor}`,
+                                    fontSize: 12, fontWeight: 700, color: textColor,
+                                    background: bgColor,
+                                    fontFamily: 'inherit', cursor: 'pointer', outline: 'none', textAlign: 'center',
+                                  }}
+                                >
+                                  {choices.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  }
                   const visible = labels.filter(lbl => filter === 'all' || qStatus(lbl) === filter);
                   if (visible.length === 0) return null;
                   const isText = inputType === 'text';

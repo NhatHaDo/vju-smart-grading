@@ -21,7 +21,7 @@ import type {
   TemplateSchema,
   TemplateInfoField,
 } from '../types/grading';
-import { computeScore, applyCorrection, TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, resolveAnswerKeyForMaDe, correctionKey, getMaDeValue } from '../types/grading';
+import { computeScore, computeSectionScores, formatScoring, activeQuestionPoints, applyCorrection, TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, resolveAnswerKeyForMaDe, correctionKey, getMaDeValue, isMultiMaDe } from '../types/grading';
 
 // ── Display model types ───────────────────────────────────────────────────────
 
@@ -112,7 +112,7 @@ function fnt(cell: Cell, opts: { bold?: boolean; color?: string; size?: number; 
   };
 }
 
-function bdr(cell: Cell, color = C.border) {
+function bdr(cell: Cell, color: string = C.border) {
   const s: ExcelJS.BorderStyle = 'thin';
   const c = { style: s, color: { argb: 'FF' + color } };
   cell.border = { top: c, bottom: c, left: c, right: c };
@@ -135,7 +135,11 @@ function styleVjuHeader(row: Row, numCols: number) {
   for (let c = 1; c <= numCols; c++) {
     const cell = row.getCell(c);
     fill(cell, C.red); fnt(cell, { bold: true, color: C.white, size: 11 });
-    aln(cell, 'center'); bdr(cell);
+    // wrapText: long section names (e.g. "Trắc nghiệm ABCD ( 31-40 )",
+    // "Đúng sai ( Câu 8)") used to just get clipped by the column width with
+    // no visual cue anything was cut off — wrap so the full label is always
+    // readable instead of silently truncated (2026-07-30).
+    aln(cell, 'center', true); bdr(cell);
   }
   row.height = 30;
 }
@@ -348,10 +352,25 @@ function buildBangDiem(
 ) {
   const ws = wb.addWorksheet('Bảng điểm');
 
+  // One column per answer-section (Toán, PTBV, Vật lý, ... / Phần I, Phần II, ...)
+  // so a teacher can see điểm từng phần, not just the grand total (2026-07-30).
+  const sections = schema.answerSections;
+
+  // Same "Câu N" labels the "Chi tiết đáp án" sheet uses for its columns —
+  // reused here so a "hệ số riêng" listed in the Thang điểm column points at
+  // a name the reader can actually cross-reference, not a raw internal field
+  // key like "trc_nghim_abcd12" (2026-07-30).
+  const answerCols    = collectAnswerKeys(results, schema);
+  const questionLabelOf = (q: string): string => {
+    const idx = answerCols.indexOf(q);
+    return idx >= 0 ? `Câu ${idx + 1}` : q;
+  };
+
   const HEADERS = [
     'STT', 'File',
     ...infoFields.map(f => f.displayName),
-    'Đúng', 'Sai', 'Trống', 'Điểm', 'Trạng thái', 'Cần xem lại',
+    ...sections.map(s => s.name),
+    'Đúng', 'Sai', 'Trống', 'Tổng điểm', 'Thang điểm', 'Trạng thái', 'Cần xem lại',
   ];
   const NCOLS    = HEADERS.length;
   const MERGE_END = colIndexToLetter(Math.min(NCOLS, 26));
@@ -360,8 +379,9 @@ function buildBangDiem(
     { width: 6  },
     { width: 28 },
     ...infoFields.map(f => ({ width: infoColWidth(f) })),
+    ...sections.map(() => ({ width: 16 })),
     { width: 8  }, { width: 8  }, { width: 8  },
-    { width: 10 }, { width: 16 }, { width: 14 },
+    { width: 11 }, { width: 50 }, { width: 16 }, { width: 14 },
   ];
 
   // Title block
@@ -397,7 +417,16 @@ function buildBangDiem(
       fill(cell, C.metaBg); fnt(cell, { color: C.dark, size: 11 }); bdr(cell);
       cell.alignment = { vertical: 'middle', horizontal: 'left' };
     } else {
-      const row3or4 = r - 2 + 3;
+      // Right-column items (i=2,3) sit on the SAME two rows as the left
+      // column (i=0,1) — i.e. row 3 for i=2, row 4 for i=3. The old formula
+      // here (`r - 2 + 3` where r = 3+i) simplifies to `i + 4`, which lands
+      // on row 6/7 instead — bleeding into whatever comes after the meta
+      // block (previously the first data row, silently; now, with the extra
+      // "Thang điểm" row and the table header pushed down to row 7, item i=3
+      // merges a wide span of columns directly on top of the header row,
+      // which is why one section header cell was rendering abnormally wide
+      // (2026-07-30 fix).
+      const row3or4 = i + 1;
       ws.mergeCells(`${colIndexToLetter(halfN + 1)}${row3or4}:${endCol}${row3or4}`);
       const cell2 = ws.getCell(`${colIndexToLetter(halfN + 1)}${row3or4}`);
       cell2.value = `${lbl}: ${val}`;
@@ -406,14 +435,35 @@ function buildBangDiem(
     }
     ws.getRow(r).height = 22;
   });
-  ws.getRow(5).height = 8;
+
+  // Thang điểm (hệ số) — shown up front so a reader doesn't have to reopen
+  // Answer Key to know what "Tổng điểm" was computed from (2026-07-30).
+  const scoringLine = !answerKey
+    ? 'Thang điểm: chưa có đáp án'
+    : isMultiMaDe(answerKey)
+      ? 'Thang điểm: xem cột "Thang điểm" ở mỗi dòng bên dưới'
+      : `Thang điểm: ${formatScoring(
+          { ...answerKey.scoring, questionPoints: activeQuestionPoints(answerKey) },
+          questionLabelOf,
+        )}`;
+  ws.mergeCells(`A5:${endCol}5`);
+  const scoringCell = ws.getCell('A5');
+  scoringCell.value = scoringLine;
+  fill(scoringCell, C.metaBg); fnt(scoringCell, { color: C.dark, size: 11, italic: true }); bdr(scoringCell);
+  scoringCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+  ws.getRow(5).height = scoringLine.length > 90 ? 34 : 22;
+  ws.getRow(6).height = 8;
 
   // Table header (frozen)
-  const TABLE_START = 6;
+  const TABLE_START = 7;
   ws.views = [{ state: 'frozen', ySplit: TABLE_START }];
   const hRow = ws.getRow(TABLE_START);
   hRow.values = HEADERS;
   styleVjuHeader(hRow, NCOLS);
+  // Section headers here can run long ("Trắc nghiệm ABCD ( 31-40 )", "Đúng
+  // sai ( Câu 8)") — give wrapped text room to breathe across 2-3 lines
+  // instead of the default 30 (2026-07-30).
+  hRow.height = 48;
   ws.autoFilter = { from: { row: TABLE_START, column: 1 }, to: { row: TABLE_START, column: NCOLS } };
 
   // Data rows
@@ -423,6 +473,7 @@ function buildBangDiem(
     const merged = applyCorrection(r, corr);
     const { key: akForRow } = resolveAnswerKeyForMaDe(answerKey, getMaDeValue(merged.student_info, schema));
     const sc     = akForRow ? computeScore(merged.answers ?? {}, akForRow) : null;
+    const secSc  = (akForRow && sections.length > 0) ? computeSectionScores(merged.answers ?? {}, akForRow, schema) : null;
     const info   = merged.student_info ?? r.student_info ?? {};
     const isCorrected = !!corr;
     const review = needsReview(r);
@@ -433,29 +484,46 @@ function buildBangDiem(
     row.getCell(2).value = dash(fname);
     infoFields.forEach((field, fi) => { txt(row.getCell(3 + fi), info[field.key] ?? null); });
 
-    const sc0 = 3 + infoFields.length;
+    const secStart = 3 + infoFields.length;
+    sections.forEach((_s, si) => {
+      const cell = row.getCell(secStart + si);
+      const s = secSc?.[si];
+      cell.value = s ? (s.max > 0 ? `${s.total}/${s.max}` : String(s.total)) : '—';
+      aln(cell, 'center');
+    });
+
+    const sc0 = secStart + sections.length;
+    const scoringText = akForRow
+      ? formatScoring({ ...akForRow.scoring, questionPoints: activeQuestionPoints(akForRow) }, questionLabelOf)
+      : '—';
     row.getCell(sc0).value     = sc ? sc.correct : '—';
     row.getCell(sc0 + 1).value = sc ? sc.wrong   : '—';
     row.getCell(sc0 + 2).value = sc ? sc.blank   : '—';
     row.getCell(sc0 + 3).value = sc ? sc.total   : '—';
-    row.getCell(sc0 + 4).value = statusLabel(r, isCorrected);
-    row.getCell(sc0 + 5).value = review ? 'Có' : 'Không';
+    row.getCell(sc0 + 4).value = scoringText;
+    row.getCell(sc0 + 5).value = statusLabel(r, isCorrected);
+    row.getCell(sc0 + 6).value = review ? 'Có' : 'Không';
 
     styleDataRow(row, NCOLS, isAlt);
     aln(row.getCell(sc0 + 3), 'center');
     fnt(row.getCell(sc0 + 3), { bold: true, color: C.dark });
+    fnt(row.getCell(sc0 + 4), { italic: true, color: C.muted, size: 10 });
+    aln(row.getCell(sc0 + 4), 'left', true);
     row.getCell(2).alignment = { wrapText: true, vertical: 'middle' };
 
     if (highlightReview && review) {
-      fill(row.getCell(sc0 + 5), C.warnBg);
-      fnt(row.getCell(sc0 + 5), { bold: true, color: C.warnTxt });
+      fill(row.getCell(sc0 + 6), C.warnBg);
+      fnt(row.getCell(sc0 + 6), { bold: true, color: C.warnTxt });
     }
     if (isCorrected) {
-      fill(row.getCell(sc0 + 4), C.okBg);
-      fnt(row.getCell(sc0 + 4), { color: C.okTxt });
+      fill(row.getCell(sc0 + 5), C.okBg);
+      fnt(row.getCell(sc0 + 5), { color: C.okTxt });
     }
     if (r._error) for (let c = 1; c <= NCOLS; c++) fill(row.getCell(c), C.errBg);
-    row.height = 22;
+    // Thang điểm can wrap to multiple lines once "Hệ số riêng" lists several
+    // questions — grow the row instead of clipping it (2026-07-30).
+    const estLines = Math.max(1, Math.ceil(scoringText.length / 60));
+    row.height = Math.max(22, estLines * 15);
   });
 
   // Summary footer
@@ -679,21 +747,21 @@ function getCellDisplayValue(cell: ExcelJS.Cell): string {
   if (v === null || v === undefined) return '';
   if (typeof v === 'object') {
     // RichText
-    if (Array.isArray((v as Record<string, unknown>)['richText'])) {
+    if (Array.isArray((v as unknown as Record<string, unknown>)['richText'])) {
       return ((v as { richText: { text?: string }[] }).richText)
         .map(r => r.text ?? '').join('');
     }
     // Formula
-    if (typeof (v as Record<string, unknown>)['formula'] === 'string') {
+    if (typeof (v as unknown as Record<string, unknown>)['formula'] === 'string') {
       const result = (v as { result?: unknown }).result;
       return result !== undefined && result !== null ? String(result) : '';
     }
     // Hyperlink
-    if (typeof (v as Record<string, unknown>)['text'] === 'string') {
+    if (typeof (v as unknown as Record<string, unknown>)['text'] === 'string') {
       return (v as { text: string }).text;
     }
     // Error
-    if (typeof (v as Record<string, unknown>)['error'] !== 'undefined') return '#ERR';
+    if (typeof (v as unknown as Record<string, unknown>)['error'] !== 'undefined') return '#ERR';
   }
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
   if (v instanceof Date) return v.toLocaleDateString('vi-VN');
@@ -703,7 +771,7 @@ function getCellDisplayValue(cell: ExcelJS.Cell): string {
 function getCellFormula(cell: ExcelJS.Cell): string | undefined {
   const v = cell.value;
   if (v && typeof v === 'object') {
-    const formula = (v as Record<string, unknown>)['formula'];
+    const formula = (v as unknown as Record<string, unknown>)['formula'];
     if (typeof formula === 'string') return formula;
   }
   return undefined;

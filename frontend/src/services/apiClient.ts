@@ -136,7 +136,8 @@ function dispatchAuthExpired() {
 // ── Paths that must never trigger a refresh attempt ─────────────────────────
 
 function isAuthPath(path: string): boolean {
-  return path.includes('/auth/login') || path.includes('/auth/refresh');
+  return path.includes('/auth/login') || path.includes('/auth/refresh')
+    || path.includes('/auth/register') || path.includes('/auth/reset-password');
 }
 
 // ── Core fetch wrapper ────────────────────────────────────────────────────────
@@ -226,10 +227,18 @@ export const authApi = {
       { method: 'POST', body: JSON.stringify({ email, password }) },
     ),
 
-  register: (email: string, password: string, name: string) =>
+  register: (email: string, password: string, phone: string, name: string) =>
     request('/api/v1/auth/register', {
       method: 'POST',
-      body:   JSON.stringify({ email, password, name }),
+      body:   JSON.stringify({ email, password, phone, name }),
+    }),
+
+  /** Reset-by-match: matching email + phone sets a new password directly —
+   *  no OTP/email-link step, per explicit product choice. */
+  resetPassword: (email: string, phone: string, newPassword: string) =>
+    request('/api/v1/auth/reset-password', {
+      method: 'POST',
+      body:   JSON.stringify({ email, phone, new_password: newPassword }),
     }),
 
   me: () => request('/api/v1/auth/me'),

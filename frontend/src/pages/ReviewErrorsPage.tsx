@@ -71,6 +71,23 @@ interface ModalProps {
 function EditModal({ r, correction, schema, onSave, onReset, onClose }: ModalProps) {
   const base_info    = r.student_info ?? {};
   const base_answers = r.answers ?? {};
+  // 2026-07-30: "sửa đáp án" gave zero visual cue about *which* questions the
+  // "N cảnh báo" badge referred to — had to eyeball the whole overlay image
+  // to spot the flagged bubble. Highlight warned questions here too (light
+  // purple), same treatment as ResultDetailModal's edit mode.
+  const warnList = r.warnings ?? [];
+  function warnTip(lbl: string): string | undefined {
+    const w = warnList.find(x => x.field === lbl);
+    if (!w) return undefined;
+    const cands = w.candidates?.length ? w.candidates.join(' và ') : '';
+    const m = lbl.match(/(\d+)$/);
+    const qLabel = m ? `Câu ${parseInt(m[1], 10)}` : lbl;
+    if (w.type === 'multi_mark') return `${qLabel}: tô nhiều đáp án (${cands}) — cần xem lại phiếu gốc`;
+    if (w.type === 'too_light')  return `${qLabel}: đáp án "${cands}" tô hơi mờ — nên xác nhận lại`;
+    return cands
+      ? `${qLabel}: chưa đủ rõ để phân biệt (${cands}) — cần xem lại phiếu gốc`
+      : `${qLabel}: chưa đủ rõ để xác định đáp án — cần xem lại phiếu gốc`;
+  }
 
   // Dynamic info state — keys from schema.infoFields
   // getInfoFieldValue is used as safety-net: covers alias keys + info_field_columns
@@ -214,6 +231,10 @@ function EditModal({ r, correction, schema, onSave, onReset, onClose }: ModalPro
                   <span style={{ width: 10, height: 10, borderRadius: 3, background: '#F3E8FF', border: '1.5px solid #7C3AED', display: 'inline-block' }} />
                   Đã sửa khác kết quả gốc
                 </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#6D28D9' }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: '#F5F3FF', border: '1.5px solid #C4B5FD', display: 'inline-block' }} />
+                  Cần xem lại (OMR cảnh báo)
+                </div>
               </div>
               {schema.answerSections.length === 0 ? (
                 <div style={{ fontSize: 12, color: '#9CA3AF' }}>Template này không có phần đáp án cần sửa.</div>
@@ -231,6 +252,11 @@ function EditModal({ r, correction, schema, onSave, onReset, onClose }: ModalPro
                       // phân biệt với màu đỏ (chỉ báo "có giá trị") đã dùng sẵn.
                       const original = String(base_answers[lbl] ?? '');
                       const isChanged = val !== original;
+                      const tip = isChanged ? `Đã sửa (gốc: ${original || '—'})` : warnTip(lbl);
+                      const isWarned = !isChanged && !!warnTip(lbl);
+                      const borderColor = isChanged ? '#7C3AED' : isWarned ? '#C4B5FD' : val ? '#C8102E' : '#E5E7EB';
+                      const textColor   = isChanged ? '#7C3AED' : isWarned ? '#6D28D9' : val ? '#C8102E' : '#9CA3AF';
+                      const bgColor     = isChanged ? '#F3E8FF' : isWarned ? '#F5F3FF' : val ? '#FEECEC' : '#fff';
                       if (isText) {
                         return (
                           <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
@@ -240,13 +266,13 @@ function EditModal({ r, correction, schema, onSave, onReset, onClose }: ModalPro
                               value={val}
                               onChange={e => setAns(lbl, e.target.value)}
                               placeholder="-12.34"
-                              title={isChanged ? `Đã sửa (gốc: ${original || '—'})` : undefined}
+                              title={tip}
                               style={{
                                 padding: '4px 6px', borderRadius: 6, width: 80,
-                                border: `1.5px solid ${isChanged ? '#7C3AED' : val ? '#C8102E' : '#E5E7EB'}`,
+                                border: `1.5px solid ${borderColor}`,
                                 fontSize: 12, fontWeight: 700,
-                                color: isChanged ? '#7C3AED' : val ? '#C8102E' : '#9CA3AF',
-                                background: isChanged ? '#F3E8FF' : val ? '#FEECEC' : '#fff',
+                                color: textColor,
+                                background: bgColor,
                                 fontFamily: 'monospace', cursor: 'text', outline: 'none', textAlign: 'center',
                               }}
                             />
@@ -259,13 +285,13 @@ function EditModal({ r, correction, schema, onSave, onReset, onClose }: ModalPro
                           <select
                             value={val || '—'}
                             onChange={e => setAns(lbl, e.target.value)}
-                            title={isChanged ? `Đã sửa (gốc: ${original || '—'})` : undefined}
+                            title={tip}
                             style={{
                               padding: '4px 2px', borderRadius: 6, width: 46,
-                              border: `1.5px solid ${isChanged ? '#7C3AED' : val ? '#C8102E' : '#E5E7EB'}`,
+                              border: `1.5px solid ${borderColor}`,
                               fontSize: 12, fontWeight: 700,
-                              color: isChanged ? '#7C3AED' : val ? '#C8102E' : '#9CA3AF',
-                              background: isChanged ? '#F3E8FF' : val ? '#FEECEC' : '#fff',
+                              color: textColor,
+                              background: bgColor,
                               fontFamily: 'inherit', cursor: 'pointer', outline: 'none', textAlign: 'center',
                             }}
                           >
@@ -449,7 +475,7 @@ export default function ReviewErrorsPage() {
 
   const handleReset = (filename: string) => {
     const next = { ...corrections };
-    delete next[filename];
+    delete next[correctionKey(batch.gradedAt, filename)]; // was deleting the bare filename — never actually cleared anything
     setCorrections(next);
     saveCorrections(next);
     setSelected(null);

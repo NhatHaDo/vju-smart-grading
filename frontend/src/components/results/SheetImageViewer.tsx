@@ -45,19 +45,6 @@ export interface SheetImageViewerProps {
   className?: string;
 }
 
-// ── Per-tab metadata ──────────────────────────────────────────────────────────
-interface TabMeta {
-  key:      ImgTab;
-  label:    string;
-  subtitle: string;
-}
-
-const TAB_META: TabMeta[] = [
-  { key: 'detect',   label: 'Ảnh detect',          subtitle: 'Overlay kết quả nhận diện bubble' },
-  { key: 'aligned',  label: 'Ảnh đã căn chỉnh',    subtitle: 'Ảnh sau căn chỉnh phối cảnh'      },
-  { key: 'original', label: 'Ảnh gốc',              subtitle: 'Ảnh upload ban đầu'               },
-];
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 // `path` from the backend's `debug.*_path` fields can be an absolute
 // filesystem path (e.g. production: "/home/scoring/vju-smart-grading/

@@ -64,6 +64,19 @@ export const PINNED_TEMPLATES: { label: string; id: number }[] = [
   { label: 'Mẫu 40 câu TN + Đúng/Sai', id: PINNED_TEMPLATE_40_ID },
 ];
 
+/**
+ * 2026-07-30: real reference photos for the fixed VJU presets, used by
+ * TemplatePreviewThumb ("GV cần nhìn được template đó là như thế nào") — these
+ * presets have no drawn `areas` geometry to build a schematic from like custom
+ * templates do, so a real photo is the only option. Drop the actual sheet
+ * photos into `frontend/public/template-previews/` under these exact
+ * filenames and they'll show up automatically — no code change needed. Until
+ * then, TemplatePreviewThumb quietly falls back to a text summary.
+ */
+export const VJU_SBD4_PREVIEW_IMAGE = '/template-previews/vju-sbd4.jpg';
+export const VJU_SBD8_PREVIEW_IMAGE = '/template-previews/vju-sbd8.jpg';
+export const PINNED_TEMPLATE_40_PREVIEW_IMAGE = '/template-previews/vju-mau40.jpg';
+
 export interface OmrStudentInfo {
   cccd?:    string | null;
   sbd?:     string | null;
@@ -165,6 +178,21 @@ export interface OmrDebugInfo {
   means_json_path:          string | null;
 }
 
+/** OMR-detected ink presence in one "CÁN BỘ COI THI"/"CÁN BỘ CHẤM THI" box —
+ *  tells you IF a box was physically signed, never WHO signed it (that's
+ *  `ProctorInfo`, entered by the teacher in Answer Key). Only populated for
+ *  templates with a calibrated box set on the backend (see
+ *  signature_detector.py — currently the fixed VJU presets SBD4/SBD8, and
+ *  the pinned "Mẫu 40 câu TN + Đúng/Sai" custom template — the latter only
+ *  has coi_thi_1/coi_thi_2, no separate cham_thi boxes on that sheet
+ *  design). null on any other custom template. */
+export interface SignatureCheck {
+  key:       'coi_thi_1' | 'coi_thi_2' | 'cham_thi_1' | 'cham_thi_2';
+  label:     string;
+  present:   boolean;
+  mean_gray: number;
+}
+
 export interface OmrGradeResult {
   input:               { filename: string; saved_as: string };
   student_info:        OmrStudentInfo;
@@ -174,6 +202,8 @@ export interface OmrGradeResult {
   info_field_columns?: InfoFieldColumns;
   score:               OmrScore;
   debug:               OmrDebugInfo;
+  /** null = not checked (custom template, or detection failed) */
+  signatures?:         SignatureCheck[] | null;
   /** client-side only — set after fetch */
   _error?:             string;
   /** client-side only — set after POST /results/batch succeeds; used for DB delete/correction */
@@ -252,13 +282,42 @@ export interface ScoringWeights {
   correct: number;
   wrong:   number;
   blank:   number;
+  /** Optional per-question point overrides for a CORRECT answer, keyed by the
+   *  same question label used in `answers`/`sheetAnswers` (e.g. "toan3"). A
+   *  question with no entry here just uses the flat `correct` value above —
+   *  this only exists so a teacher can bulk-select a group of questions (e.g.
+   *  "5 câu khó hơn") and give them a different point value than the rest,
+   *  instead of every question always being worth the same (2026-07-30). Wrong
+   *  and blank still use the flat `wrong`/`blank` rates for every question. */
+  questionPoints?: Record<string, number>;
 }
+
+/** "Ký tên giám thị và người chấm thi" (2026-07-30) — names recorded per mã đề
+ *  (a room/group sitting a different đề can have different proctors/graders),
+ *  purely informational (shows up in exports) — separate from the OMR-detected
+ *  ink-presence check (`signatures` on the grade response / `signature_detector.py`
+ *  backend), which only tells you IF a box was physically signed, never who
+ *  signed it — this is where the actual name gets recorded by the teacher. */
+export interface ProctorInfo {
+  coi_thi_1?:  string;
+  coi_thi_2?:  string;
+  cham_thi_1?: string;
+  cham_thi_2?: string;
+}
+
+export const PROCTOR_FIELD_LABELS: { key: keyof ProctorInfo; label: string }[] = [
+  { key: 'coi_thi_1',  label: 'Cán bộ coi thi 1' },
+  { key: 'coi_thi_2',  label: 'Cán bộ coi thi 2' },
+  { key: 'cham_thi_1', label: 'Cán bộ chấm thi 1' },
+  { key: 'cham_thi_2', label: 'Cán bộ chấm thi 2' },
+];
 
 /** One đề's worth of answers + its own scoring weights (used inside `byMaDe`). */
 export interface AnswerKeySet {
   answers:   Record<string, string>;  // e.g. { toan1: "A", ... }
   scoring:   ScoringWeights;
   updatedAt: string;                  // ISO string
+  proctors?: ProctorInfo;
 }
 
 export interface AnswerKeyStore {
@@ -273,6 +332,8 @@ export interface AnswerKeyStore {
    *  least one entry exists here, `resolveAnswerKeyForMaDe` switches to strict
    *  per-đề matching instead of falling back to the top-level set. */
   byMaDe?: Record<string, AnswerKeySet>;
+  /** Proctor/grader names for single-đề mode. */
+  proctors?: ProctorInfo;
 }
 
 export const DEFAULT_SCORING: ScoringWeights = { correct: 1, wrong: 0, blank: 0 };
@@ -517,20 +578,113 @@ export function computeScore(
   key: AnswerKeySet | AnswerKeyStore,
 ): { correct: number; wrong: number; blank: number; total: number } {
   const keyed = Object.keys(key.answers);
-  let correct = 0, wrong = 0, blank = 0;
+  const qp = key.scoring.questionPoints;
+  let correct = 0, wrong = 0, blank = 0, total = 0;
   for (const q of keyed) {
     const student = sheetAnswers[q] ?? null;
     const correct_ans = key.answers[q];
     if (!correct_ans) continue;          // no answer defined for this question
-    if (!student)       { blank++;  continue; }
-    if (student === correct_ans) correct++;
-    else                         wrong++;
+    if (!student)       { blank++;  total += key.scoring.blank; continue; }
+    if (student === correct_ans) { correct++; total += qp?.[q] ?? key.scoring.correct; }
+    else                         { wrong++;   total += key.scoring.wrong; }
   }
-  const total =
-    correct * key.scoring.correct +
-    wrong   * key.scoring.wrong   +
-    blank   * key.scoring.blank;
   return { correct, wrong, blank, total: Math.round(total * 100) / 100 };
+}
+
+/** One answer-section's worth of score (e.g. "Toán (Bắt buộc)", "Vật lý") —
+ *  same scoring rules as `computeScore`, just scoped to that section's labels.
+ *  `max` = best-possible score for the section under the row's own thang điểm
+ *  (accounts for `questionPoints` overrides), so a teacher can see "8/15" not
+ *  just "8" (2026-07-30, for the Excel "điểm từng phần" column). */
+export interface SectionScore {
+  name:    string;
+  correct: number;
+  wrong:   number;
+  blank:   number;
+  total:   number;
+  max:     number;
+}
+
+export function computeSectionScores(
+  sheetAnswers: Record<string, string | null>,
+  key: AnswerKeySet | AnswerKeyStore,
+  schema: TemplateSchema,
+): SectionScore[] {
+  const qp = key.scoring.questionPoints;
+  return schema.answerSections.map(section => {
+    let correct = 0, wrong = 0, blank = 0, total = 0, max = 0;
+    for (const q of section.labels) {
+      const correct_ans = key.answers[q];
+      if (!correct_ans) continue;   // no answer defined for this question
+      max += qp?.[q] ?? key.scoring.correct;
+      const student = sheetAnswers[q] ?? null;
+      if (!student)                 { blank++;  total += key.scoring.blank; continue; }
+      if (student === correct_ans)  { correct++; total += qp?.[q] ?? key.scoring.correct; }
+      else                          { wrong++;   total += key.scoring.wrong; }
+    }
+    return {
+      name: section.name, correct, wrong, blank,
+      total: Math.round(total * 100) / 100,
+      max:   Math.round(max * 100) / 100,
+    };
+  });
+}
+
+/**
+ * `scoring.questionPoints` can end up holding leftover entries for questions
+ * that don't belong to the current answer key at all — e.g. a teacher used
+ * "chọn theo nhóm" to set overrides on one template, then switched templates
+ * in Answer Key without the checkbox selection clearing, and applied points
+ * again: the old template's question keys silently rode along into the new
+ * questionPoints object (2026-07-30 bug — the UI-side fix is resetting that
+ * selection on template switch, but data already saved before the fix stays
+ * contaminated). `computeScore` already effectively ignores any override key
+ * that isn't in `key.answers` — this just makes that same filtering explicit
+ * so *display* (the "Thang điểm" export column) matches what's actually
+ * scored, instead of listing dead keys from a different template. */
+export function activeQuestionPoints(key: AnswerKeySet | AnswerKeyStore): Record<string, number> {
+  const qp = key.scoring.questionPoints;
+  if (!qp) return {};
+  const out: Record<string, number> = {};
+  for (const [q, pts] of Object.entries(qp)) {
+    if (q in key.answers) out[q] = pts;
+  }
+  return out;
+}
+
+/** Human-readable summary of a thang điểm (scoring weights) — e.g.
+ *  "Đúng +1 · Sai 0 · Bỏ trống 0", with a note when some questions carry a
+ *  per-question point override so the reader knows the flat rate isn't the
+ *  whole story. Used in the Excel export's "Thang điểm" column/metadata so
+ *  the grading scale is visible next to the scores it produced, not just
+ *  implied (2026-07-30). Callers should pass an already-filtered
+ *  `questionPoints` (see `activeQuestionPoints`) so stale cross-template
+ *  overrides don't show up here. */
+export function formatScoring(
+  scoring: ScoringWeights,
+  /** Optional: map a raw question key (e.g. "toan5") to its display label
+   *  (e.g. "Câu 5") so the override list reads the same way as the "Chi tiết
+   *  đáp án" sheet's column headers, instead of raw internal field keys. */
+  labelFor?: (question: string) => string,
+): string {
+  const signed = (n: number) => (n > 0 ? `+${n}` : `${n}`);
+  const parts = [
+    `Đúng ${signed(scoring.correct)}`,
+    `Sai ${signed(scoring.wrong)}`,
+    `Bỏ trống ${signed(scoring.blank)}`,
+  ];
+  const qp = scoring.questionPoints;
+  if (qp && Object.keys(qp).length > 0) {
+    // List every overridden question + its point value explicitly — a bare
+    // count ("8 câu hệ số riêng") tells the reader a fact exists but not
+    // which questions it applies to, which is the whole point of showing it
+    // (2026-07-30).
+    const overrides = Object.entries(qp)
+      .map(([q, pts]) => `${labelFor ? labelFor(q) : q}=${signed(pts)}`)
+      .join(', ');
+    parts.push(`Hệ số riêng: ${overrides}`);
+  }
+  return parts.join(' · ');
 }
 
 // ── Section map ─────────────────────────────────────────────────────────────

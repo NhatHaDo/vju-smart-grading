@@ -109,6 +109,28 @@ def _migrate_batch_result_columns() -> None:
         pass
 
 
+def _migrate_user_columns() -> None:
+    """
+    Safe incremental migration: adds the `phone` column to `users` (used to
+    identify a teacher for the phone-based password-reset flow) without
+    touching existing rows or dropping data.
+    """
+    NEW_COLUMNS: list[tuple[str, str]] = [
+        ("phone", "VARCHAR(20)"),
+    ]
+    try:
+        import sqlalchemy as _sa
+        with engine.connect() as conn:
+            result = conn.execute(_sa.text("PRAGMA table_info(users)"))
+            existing = {row[1] for row in result}
+            for col, typ in NEW_COLUMNS:
+                if col not in existing:
+                    conn.execute(_sa.text(f"ALTER TABLE users ADD COLUMN {col} {typ}"))
+                    conn.commit()
+    except Exception:
+        pass
+
+
 _ADMIN_EMAIL    = "admin@vju.ac.vn"
 _ADMIN_PASSWORD = "password"
 
@@ -164,4 +186,5 @@ def init_db() -> None:
     _migrate_exam_columns()
     _migrate_template_columns()
     _migrate_batch_result_columns()
+    _migrate_user_columns()
     _seed_admin_user()
