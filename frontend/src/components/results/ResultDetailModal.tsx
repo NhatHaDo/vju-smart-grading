@@ -394,7 +394,7 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
             </button>
             {onResetCorrection && (
               <button onClick={handleResetEdit} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#fff', color: '#6B7280', border: '1.5px solid #E5E7EB', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
-                <RotateCcw size={13} /> Reset về gốc
+                <RotateCcw size={13} /> Reset về kết quả gốc
               </button>
             )}
             <button onClick={seedEditsFromCurrent} title="Bỏ các thay đổi chưa lưu, quay về đáp án hiện tại" style={{ background: '#fff', color: '#6B7280', border: '1.5px solid #E5E7EB', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
