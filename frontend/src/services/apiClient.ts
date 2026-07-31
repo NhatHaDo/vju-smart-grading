@@ -306,6 +306,7 @@ export interface BatchResultOut {
   warnings_json:           string | null;
   info_field_columns_json: string | null;
   debug_paths_json:        string | null;
+  signatures_json?:        string | null;
   manual_corrections_json: string | null;
   graded_at:               string;
   corrected_at:            string | null;
@@ -339,6 +340,7 @@ export interface ResultBatchSaveItem {
   warnings?:          unknown;
   info_field_columns?:unknown;
   debug_paths?:       unknown;
+  signatures?:        unknown;
 }
 
 export interface ResultBatchSaveRequest {

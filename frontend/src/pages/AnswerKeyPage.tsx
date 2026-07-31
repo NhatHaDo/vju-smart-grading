@@ -398,7 +398,7 @@ export default function AnswerKeyPage() {
   };
 
   const currentProctors = multiMaDe ? (proctorsByMaDe[activeMaDe] ?? {}) : proctors;
-  const setProctorField = (field: keyof ProctorInfo, val: string) => {
+  const setProctorField = (field: keyof ProctorInfo, val: boolean) => {
     if (multiMaDe) {
       setProctorsByMaDe(prev => ({ ...prev, [activeMaDe]: { ...(prev[activeMaDe] ?? {}), [field]: val } }));
     } else {
@@ -1047,7 +1047,7 @@ export default function AnswerKeyPage() {
                         ? PINNED_TEMPLATE_40_PREVIEW_IMAGE
                         : null
                   }
-                  height={360}
+                  height={460}
                 />
               </div>
             </div>
@@ -1202,27 +1202,37 @@ export default function AnswerKeyPage() {
           </Card>
         )}
 
-        {/* Ký tên giám thị & người chấm thi */}
+        {/* Ký tên giám thị & người chấm thi — 2026-07-31: simplified from
+           free-text name fields to plain "có" checkboxes; verifying whether
+           the box was actually signed is the automatic OMR check, not
+           something typed here (see ProctorInfo comment in types/grading.ts). */}
         <Card>
           <h3 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 700, color: '#374151' }}>
             Giám thị &amp; người chấm thi{multiMaDe && <span style={{ color: '#C8102E' }}> — Đề {activeMaDe}</span>}
           </h3>
           <p style={{ margin: '0 0 12px', fontSize: 12, color: '#9CA3AF' }}>
-            Ghi lại tên — dùng khi xuất báo cáo ( nếu cần ).
+            Tích chọn nếu đề này có vai trò tương ứng.
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
             {PROCTOR_FIELD_LABELS.map(({ key, label }) => (
-              <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <label style={{ fontSize: 11.5, fontWeight: 600, color: '#6B7280' }}>{label}</label>
+              <label
+                key={key}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+                  borderRadius: 8, border: '1.5px solid #E5E7EB', fontSize: 13, fontWeight: 600,
+                  color: currentProctors[key] ? '#374151' : '#9CA3AF', cursor: grading ? 'default' : 'pointer',
+                  background: currentProctors[key] ? '#FEF2F2' : '#fff',
+                }}
+              >
                 <input
-                  type="text"
-                  value={currentProctors[key] ?? ''}
-                  onChange={e => setProctorField(key, e.target.value)}
+                  type="checkbox"
+                  checked={!!currentProctors[key]}
+                  onChange={e => setProctorField(key, e.target.checked)}
                   disabled={grading}
-                  placeholder="Họ tên…"
-                  style={{ padding: '8px 12px', borderRadius: 8, border: '1.5px solid #E5E7EB', fontSize: 13, fontFamily: 'inherit', outline: 'none' }}
+                  style={{ accentColor: '#C8102E', width: 16, height: 16 }}
                 />
-              </div>
+                Có {label.toLowerCase()}
+              </label>
             ))}
           </div>
         </Card>

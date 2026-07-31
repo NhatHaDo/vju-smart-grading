@@ -9,7 +9,6 @@ import {
   Upload,
   BarChart2,
   BarChart3,
-  AlertTriangle,
   Key,
   FileText,
   ScanLine,
@@ -31,7 +30,11 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/app/results',        icon: <BarChart2        size={20} />, label: 'Kết quả & Export' },
   { to: '/app/excel-preview', icon: <TableProperties  size={20} />, label: 'Xem trước Excel' },
   { to: '/app/analytics',     icon: <BarChart3        size={20} />, label: 'Thống kê & Phân tích' },
-  { to: '/app/review-errors',icon: <AlertTriangle size={20} />, label: 'Kiểm tra lỗi' },
+  // 2026-07-31: "cho giảng viên sửa trực tiếp luôn ở màn results; không cần
+  // trang review-errors nữa" — ResultDetailModal (opened by clicking any row
+  // on /app/results) already supports full inline editing, so this separate
+  // nav destination was redundant. Route still exists (harmless if bookmarked)
+  // but is no longer a first-class nav item.
   { to: '/app/answer-key',   icon: <Key          size={20} />, label: 'Answer Key' },
   { to: '/app/templates',    icon: <FileText     size={20} />, label: 'Template phiếu' },
   { to: '/app/template-coordinate', icon: <ScanLine size={20} />, label: 'Tạo Template Tọa Độ' },
@@ -128,21 +131,22 @@ export default function Sidebar() {
       }}
     >
       <nav style={{ flex: 1, paddingTop: 8, display: 'flex', flexDirection: 'column' }}>
+        {/* 2026-07-31 fix: this used to render NAV_ITEMS[0..9] by hardcoded
+           index. Removing the "Kiểm tra lỗi" entry shifted every later index
+           down by one, which this hardcoded list never accounted for —
+           "Answer Key" silently jumped into the wrong group, and the last
+           line (NAV_ITEMS[9]) pointed past the end of the array, spreading
+           `undefined` into <SidebarLink> (no icon, no `to`) — the empty pink
+           box the user saw. Sliced by group instead, so this can't drift out
+           of sync with NAV_ITEMS's length again. */}
         {/* Group 1: Main */}
-        <SidebarLink {...NAV_ITEMS[0]} />
-        <SidebarLink {...NAV_ITEMS[1]} />
-        <SidebarLink {...NAV_ITEMS[2]} />
+        {NAV_ITEMS.slice(0, 3).map(item => <SidebarLink key={item.to} {...item} />)}
         <Divider />
         {/* Group 2: Results */}
-        <SidebarLink {...NAV_ITEMS[3]} />
-        <SidebarLink {...NAV_ITEMS[4]} />
-        <SidebarLink {...NAV_ITEMS[5]} />
-        <SidebarLink {...NAV_ITEMS[6]} />
+        {NAV_ITEMS.slice(3, 6).map(item => <SidebarLink key={item.to} {...item} />)}
         <Divider />
         {/* Group 3: Config */}
-        <SidebarLink {...NAV_ITEMS[7]} />
-        <SidebarLink {...NAV_ITEMS[8]} />
-        <SidebarLink {...NAV_ITEMS[9]} />
+        {NAV_ITEMS.slice(6).map(item => <SidebarLink key={item.to} {...item} />)}
       </nav>
 
       <div style={{ paddingBottom: 8, borderTop: '1px solid #F0F0F0' }}>

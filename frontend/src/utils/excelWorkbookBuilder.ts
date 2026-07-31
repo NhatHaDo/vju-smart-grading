@@ -174,6 +174,20 @@ function statusLabel(r: OmrGradeResult, corrected: boolean): string {
   return needsReview(r) ? 'Cần kiểm tra' : 'Đã chấm';
 }
 
+// 2026-07-31: "file export kết quả cần hiện cả Giám thị coi thi đã kí tên
+// hay chưa" — OMR already auto-detects ink presence in the 2 "CÁN BỘ COI
+// THI" boxes (signature_detector.py) and shows it in ResultDetailModal, but
+// the Excel export never surfaced it. Only "coi_thi_*" keys are used here
+// (not "cham_thi_*") since the request is specifically about the giám thị
+// coi thi, not người chấm thi. null/empty signatures = not checked (custom
+// template with no calibrated boxes, or backend too old) → '—', not "chưa
+// ký", so this doesn't falsely flag templates that were never checked.
+function giamThiLabel(r: OmrGradeResult): string {
+  const sigs = (r.signatures ?? []).filter(s => s.key === 'coi_thi_1' || s.key === 'coi_thi_2');
+  if (sigs.length === 0) return '—';
+  return sigs.map(s => `${s.present ? '✓' : '✗'} ${s.label}`).join(' · ');
+}
+
 function lyrDo(r: OmrGradeResult): string {
   if (r._error) return 'Lỗi chấm phiếu';
   const warns = r.warnings ?? [];
@@ -370,7 +384,7 @@ function buildBangDiem(
     'STT', 'File',
     ...infoFields.map(f => f.displayName),
     ...sections.map(s => s.name),
-    'Đúng', 'Sai', 'Trống', 'Tổng điểm', 'Thang điểm', 'Trạng thái', 'Cần xem lại',
+    'Đúng', 'Sai', 'Trống', 'Tổng điểm', 'Thang điểm', 'Trạng thái', 'Cần xem lại', 'Giám thị coi thi',
   ];
   const NCOLS    = HEADERS.length;
   const MERGE_END = colIndexToLetter(Math.min(NCOLS, 26));
@@ -381,7 +395,7 @@ function buildBangDiem(
     ...infoFields.map(f => ({ width: infoColWidth(f) })),
     ...sections.map(() => ({ width: 16 })),
     { width: 8  }, { width: 8  }, { width: 8  },
-    { width: 11 }, { width: 50 }, { width: 16 }, { width: 14 },
+    { width: 11 }, { width: 50 }, { width: 16 }, { width: 14 }, { width: 26 },
   ];
 
   // Title block
@@ -503,6 +517,7 @@ function buildBangDiem(
     row.getCell(sc0 + 4).value = scoringText;
     row.getCell(sc0 + 5).value = statusLabel(r, isCorrected);
     row.getCell(sc0 + 6).value = review ? 'Có' : 'Không';
+    row.getCell(sc0 + 7).value = giamThiLabel(r);
 
     styleDataRow(row, NCOLS, isAlt);
     aln(row.getCell(sc0 + 3), 'center');

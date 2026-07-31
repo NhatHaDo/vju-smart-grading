@@ -15,15 +15,18 @@
  *  E. Hardest questions table
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   PieChart, Pie, Cell, Legend,
   AreaChart, Area, ResponsiveContainer,
 } from 'recharts';
-import { BarChart3, TrendingUp, Users, Percent, AlertCircle, ChevronDown } from 'lucide-react';
+import { BarChart3, TrendingUp, Users, Percent, AlertCircle, ChevronDown, Loader2 } from 'lucide-react';
 
 import { loadAnswerKey, getMaDeValue, VJU_PRESET_SCHEMA } from '../types/grading';
+import type { BatchGradeState } from '../types/grading';
+import { resultsApi } from '../services/apiClient';
+import { dbRowToOmrResult } from '../utils/resultMapping';
 import {
   loadBatchFromStorage,
   allScores,
@@ -33,9 +36,6 @@ import {
   computeSubjectStats,
   computeHardQuestions,
   getTrendData,
-  MOCK_SCORES,
-  MOCK_KPI,
-  MOCK_HARD_QUESTIONS,
 } from '../utils/analytics';
 import type { KpiData, HardQuestion } from '../utils/analytics';
 
@@ -163,6 +163,15 @@ function EmptyState() {
   );
 }
 
+function LoadingState() {
+  return (
+    <div className="flex flex-col items-center justify-center py-20 text-center">
+      <Loader2 size={32} className="text-gray-300 mb-4 animate-spin" />
+      <p className="text-sm text-gray-400">Đang tải dữ liệu…</p>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function AnalyticsPage() {
@@ -170,7 +179,43 @@ export default function AnalyticsPage() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
   // ── Load data ──────────────────────────────────────────────────────────────
-  const batch     = useMemo(() => loadBatchFromStorage(), []);
+  // 2026-07-31: "sao cái trang thống kê phân tích này kì vậy? rõ là có dữ
+  // liệu mà" — Results page correctly showed 66 phiếu (it fetches the real
+  // DB via GET /results), but this page only ever read the local browser
+  // cache `vju_last_batch_grade`, which is populated solely by the last
+  // grading run done *in this exact browser tab* and gets wiped on account
+  // switch/logout (see providers.tsx). Any other session — including this
+  // one, which never ran a batch grade locally — saw an empty state despite
+  // the server holding plenty of graded results. Fetch from the DB first,
+  // same as ResultsPage/ReviewErrorsPage/ExcelPreviewPage already do; fall
+  // back to the local cache only if the DB call fails or is empty.
+  const [batch, setBatch] = useState<BatchGradeState | null>(null);
+  const [loadingBatch, setLoadingBatch] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await resultsApi.list({ limit: 500 });
+        if (!cancelled && resp.items.length > 0) {
+          const converted = resp.items.map(dbRowToOmrResult);
+          const first = resp.items[0];
+          setBatch({
+            templateVariant: (first.template_variant as BatchGradeState['templateVariant']) ?? 'sbd8',
+            results:  converted,
+            gradedAt: first.graded_at,
+            examId:   first.exam_id ?? null,
+          });
+          return;
+        }
+      } catch {
+        // fall through to localStorage below
+      }
+      if (!cancelled) setBatch(loadBatchFromStorage());
+    })().finally(() => { if (!cancelled) setLoadingBatch(false); });
+    return () => { cancelled = true; };
+  }, []);
+
   const answerKey = useMemo(() => loadAnswerKey(), []);
 
   const hasRealData = batch !== null && batch.results.length > 0;
@@ -178,25 +223,21 @@ export default function AnalyticsPage() {
   // fixed "ma_de" key VJU preset uses — schema tells getMaDeValue() which.
   const schema = batch?.templateSchema ?? VJU_PRESET_SCHEMA;
 
-  // Scores: real or mock
+  // 2026-07-31: "sao có cai này vậy" — a brand-new account with zero graded
+  // batches was seeing full-looking charts (30 SV, 7.24 điểm TB...) because
+  // this page silently fell back to hardcoded MOCK_* demo numbers whenever
+  // there was no real batch, instead of an empty state like every other page
+  // uses. Kept the small "dữ liệu minh hoạ" label as the only tell — too
+  // easy to miss. Now: no data → no mock numbers, just the EmptyState below.
   const scores = useMemo(() => {
-    if (!hasRealData) return MOCK_SCORES;
-    const real = allScores(batch!.results, answerKey, schema);
-    return real.length > 0 ? real : MOCK_SCORES;
+    if (!hasRealData) return [];
+    return allScores(batch!.results, answerKey, schema);
   }, [batch, answerKey, hasRealData, schema]);
-
-  const usingMockScores = !hasRealData || allScores(batch?.results ?? [], answerKey, schema).length === 0;
 
   // KPI
   const kpi: KpiData = useMemo(() => {
-    if (!hasRealData) return MOCK_KPI;
-    const computed = computeKpi(batch!.results, answerKey, schema);
-    return {
-      avgScore:            computed.avgScore            ?? MOCK_KPI.avgScore,
-      totalStudents:       computed.totalStudents > 0   ? computed.totalStudents : MOCK_KPI.totalStudents,
-      passRate:            computed.passRate             ?? MOCK_KPI.passRate,
-      hardQuestionsCount:  computed.hardQuestionsCount  ?? MOCK_KPI.hardQuestionsCount,
-    };
+    if (!hasRealData) return { avgScore: null, totalStudents: 0, passRate: null, hardQuestionsCount: null };
+    return computeKpi(batch!.results, answerKey, schema);
   }, [batch, answerKey, hasRealData, schema]);
 
   // Distribution
@@ -219,9 +260,8 @@ export default function AnalyticsPage() {
 
   // Hard questions
   const hardQuestions: HardQuestion[] = useMemo(() => {
-    if (!hasRealData) return MOCK_HARD_QUESTIONS;
-    const real = computeHardQuestions(batch!.results, answerKey, schema);
-    return real && real.length > 0 ? real.slice(0, 5) : MOCK_HARD_QUESTIONS;
+    if (!hasRealData) return [];
+    return (computeHardQuestions(batch!.results, answerKey, schema) ?? []).slice(0, 5);
   }, [batch, answerKey, hasRealData, schema]);
 
   // Exam filter options from batch
@@ -247,11 +287,6 @@ export default function AnalyticsPage() {
             </h1>
             <p className="text-sm text-gray-500 mt-1">
               Tổng quan kết quả chấm thi, phân phối điểm và câu hỏi cần chú ý
-              {usingMockScores && (
-                <span className="ml-2 inline-flex items-center gap-1 text-amber-500">
-                  <AlertCircle size={12} /> dữ liệu minh hoạ
-                </span>
-              )}
             </p>
           </div>
 
@@ -286,11 +321,12 @@ export default function AnalyticsPage() {
           </div>
         </div>
 
-        {/* Empty state when no data at all */}
-        {!hasRealData && scores === MOCK_SCORES && false /* always show with mock */ && (
-          <EmptyState />
-        )}
+        {/* Loading (DB fetch in flight), then empty state, then real charts */}
+        {loadingBatch && <LoadingState />}
+        {!loadingBatch && !hasRealData && <EmptyState />}
 
+        {!loadingBatch && hasRealData && (
+        <>
         {/* ── B. KPI Cards ── */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <KpiCard
@@ -450,6 +486,8 @@ export default function AnalyticsPage() {
             </div>
           )}
         </AnalyticsCard>
+        </>
+        )}
 
       </div>
     </div>

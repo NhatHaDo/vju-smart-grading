@@ -187,10 +187,6 @@ export default function LoginPage() {
               Quên mật khẩu?
             </button>
           </div>
-
-          <p style={{ textAlign: 'center', fontSize: 12, color: '#9CA3AF', margin: 0 }}>
-            Demo: <code>admin@vju.ac.vn</code> / <code>password</code>
-          </p>
         </form>
       </div>
 

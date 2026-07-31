@@ -9,10 +9,11 @@ import type { BatchGradeState, OmrGradeResult, AnswerKeyStore, CorrectionsStore,
 import { TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, loadAnswerKey, loadCorrections, saveCorrections, clearCorrections, computeScore, applyCorrection, resolveAnswerKeyForMaDe, isMultiMaDe, correctionKey, getMaDeValue } from '../types/grading';
 import ResultDetailModal from '../components/results/ResultDetailModal';
 import ExcelPreviewModal from '../components/results/ExcelPreviewModal';
-import { resultsApi, examsApi, customFormsApi, hasToken, ApiError, type BatchResultOut, type ResultBatchSaveRequest } from '../services/apiClient';
+import { resultsApi, examsApi, customFormsApi, hasToken, ApiError, type ResultBatchSaveRequest } from '../services/apiClient';
 import { buildSchemaFromDetail, getRowTemplateKey, getRowTemplateLabel, buildTemplateOptionsFromRows } from '../utils/templateSchema';
 import type { TemplateFilterOption } from '../utils/templateSchema';
 import type { ExamOut } from '../types/exam';
+import { dbRowToOmrResult } from '../utils/resultMapping';
 
 const LS_KEY = 'vju_last_batch_grade';
 
@@ -39,54 +40,13 @@ function clearStorage() {
 }
 
 // ── DB result converter ────────────────────────────────────────────────────
-
-function parseJson<T>(s: string | null | undefined, fallback: T): T {
-  if (!s) return fallback;
-  try { return JSON.parse(s) as T; } catch { return fallback; }
-}
-
-function dbRowToOmrResult(row: BatchResultOut): OmrGradeResult & { db_id: number } {
-  const debugPaths = parseJson<Record<string, string | null>>(row.debug_paths_json, {});
-  return {
-    db_id:               row.id,
-    template_type:       row.template_type,
-    template_id:         row.template_id,
-    template_variant_row: row.template_variant,
-    input:   { filename: row.file_name ?? '(unknown)', saved_as: '' },
-    student_info: {
-      cccd:    row.cccd    ?? null,
-      sbd:     row.sbd     ?? null,
-      ma_de:   row.ma_de   ?? null,
-      ca_thi:  row.ca_thi  ?? null,
-      ma_ctdt: null,
-      tu_chon: null,
-    },
-    answers:            parseJson<Record<string, string | null>>(row.answers_json, {}),
-    warnings:           parseJson(row.warnings_json, []),
-    info_field_columns: parseJson<InfoFieldColumns | undefined>(row.info_field_columns_json, undefined),
-    score: {
-      total:   row.total_score,
-      max:     null,
-      correct: null,
-      wrong:   null,
-      blank:   row.empty_count,
-    },
-    debug: {
-      threshold: 0, mean_mode: '', prep_method: '', alignment_info: '',
-      alignment_warnings: [], image_source: null, preprocess_strategy_used: null,
-      marker_centers_detected: null, target_marker_centers: null, homography_matrix: null,
-      marker_quality_score: null, warp_used: null, warp_rejected_reason: null,
-      original_image_path:       debugPaths['original_image_path']      ?? null,
-      aligned_image_path:        debugPaths['aligned_image_path']        ?? null,
-      aligned_candidate_path: null,
-      markers_debug_path: null,
-      overlay_all_path:          debugPaths['overlay_all_path']          ?? null,
-      overlay_marked_only_path:  debugPaths['overlay_marked_only_path']  ?? null,
-      overlay_warnings_path:     debugPaths['overlay_warnings_path']     ?? null,
-      means_json_path:           null,
-    },
-  };
-}
+// 2026-07-31: this used to be a local, stale duplicate of the shared
+// dbRowToOmrResult() in utils/resultMapping.ts — it never parsed ma_ctdt/
+// tu_chon from info_field_columns_json (hardcoded null) and, as of this
+// change, wouldn't have carried `signatures` either. Now imports the shared
+// version (see resultMapping.ts) so ResultsPage — and everything downstream
+// of it, including the Excel export — gets the same, fully-featured
+// conversion as ReviewErrorsPage/ExcelPreviewPage already use.
 
 // ── Template label helper ──────────────────────────────────────────────────
 
@@ -135,6 +95,12 @@ function buildBatchSaveRequest(batch: BatchGradeState, examId?: number | null): 
         multi_mark_count:   (r.warnings ?? []).filter(w => w.type === 'multi_mark').length,
         warnings:           r.warnings             ?? [],
         info_field_columns: r.info_field_columns   ?? null,
+        // 2026-07-31: "file export kết quả cần hiện cả Giám thị coi thi đã
+        // kí tên hay chưa" — carry the signature ink-detection result
+        // through to the DB so it survives past this grading session (see
+        // signatures_json on BatchResult / giamThiLabel() in the Excel
+        // builder). Previously dropped here entirely.
+        signatures:         r.signatures            ?? null,
         debug_paths: {
           overlay_all_path:         r.debug?.overlay_all_path         ?? null,
           overlay_marked_only_path: r.debug?.overlay_marked_only_path ?? null,
@@ -249,13 +215,15 @@ function exportCsv(
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function hasWarnings(r: OmrGradeResult) { return (r.warnings ?? []).length > 0; }
+/** Stable per-row key for bulk-select — mirrors the key already used for the table's .map(). */
+function rowKey(r: OmrGradeResult): string { return String(r.db_id ?? r.input?.filename ?? ''); }
 function fmtDate(iso: string) {
   try { return new Date(iso).toLocaleString('vi-VN', { hour12: false }); } catch { return iso; }
 }
 
 // ── RealRow ────────────────────────────────────────────────────────────────
 
-function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, onOpen, onDelete, infoFields, showTemplateCol, templateLabel }: {
+function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, onOpen, onDelete, infoFields, showTemplateCol, templateLabel, selected, onToggleSelect }: {
   idx:             number;
   r:               OmrGradeResult;
   merged:          { student_info: OmrGradeResult['student_info']; answers: Record<string, string | null> };
@@ -270,6 +238,8 @@ function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, 
   infoFields:      import('../types/grading').TemplateInfoField[];
   showTemplateCol?: boolean;
   templateLabel?:  string;
+  selected:        boolean;
+  onToggleSelect:  () => void;
 }) {
   const warn      = hasWarnings(r) || !!missingKeyForMaDe;
   const hasIMM    = hasInfoMultiMark(r);
@@ -297,8 +267,11 @@ function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, 
   return (
     <tr
       onClick={onOpen}
-      style={{ borderBottom: '1px solid #F3F4F6', background: warn ? '#FFF5F5' : '#fff', cursor: 'pointer' }}
+      style={{ borderBottom: '1px solid #F3F4F6', background: selected ? '#FEF2F2' : warn ? '#FFF5F5' : '#fff', cursor: 'pointer' }}
     >
+      <td style={{ padding: '11px 10px' }} onClick={e => e.stopPropagation()}>
+        <input type="checkbox" checked={selected} onChange={onToggleSelect} style={{ accentColor: '#C8102E', width: 15, height: 15, cursor: 'pointer' }} />
+      </td>
       <td style={{ padding: '11px 10px', color: '#9CA3AF' }}>{idx}</td>
       <td style={{ padding: '11px 10px' }}>
         <div style={{ fontWeight: 600, color: '#1E1E1E', display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -431,6 +404,18 @@ export default function ResultsPage() {
   const [answerKey,     setAnswerKey]      = useState<AnswerKeyStore | null>(null);
   const [corrections,   setCorrections]    = useState<CorrectionsStore>({});
   const [modalRow,      setModalRow]       = useState<OmrGradeResult | null>(null);
+  // 2026-07-31: "ở màn results cho giảng viên sửa trực tiếp luôn; không cần
+  // trang review-errors nữa" — ResultDetailModal already supports full
+  // editing right here (handleSaveCorrection above), so the separate
+  // /app/review-errors page is redundant. Instead of navigating away,
+  // "Kiểm tra lỗi" / "Kiểm tra ngay →" now just filter this same table down
+  // to flagged rows and open the first one in the modal.
+  const [reviewOnly,    setReviewOnly]     = useState(false);
+  // 2026-07-31: "trang results cũng để action hàng loạt nhé, ví dụ a muốn
+  // xóa vẫn phải xóa từng cái" — checkbox-select rows + bulk delete, instead
+  // of one confirm dialog per row. Keyed the same way table rows already
+  // are (db_id when saved, else filename) so it stays stable across renders.
+  const [selectedKeys,  setSelectedKeys]   = useState<Set<string>>(new Set());
   const [exportToast,       setExportToast]       = useState(false);
   const [showExcelPreview,  setShowExcelPreview]  = useState(false);
   const [dataSource,    setDataSource]     = useState<DataSource>('init');
@@ -615,6 +600,8 @@ export default function ResultsPage() {
     setSelectedTemplateKey('all'); // reset template filter when exam changes
     setBatch(null);
     setDataSource('init');
+    setSelectedKeys(new Set());
+    setReviewOnly(false);
     try {
       const params: Parameters<typeof resultsApi.list>[0] = { limit: 500 };
       if (eid !== null) params.exam_id = eid;
@@ -655,6 +642,13 @@ export default function ResultsPage() {
     if (db_id) {
       resultsApi.deleteOne(db_id).catch(e => console.warn('[DB delete]', e));
     }
+    setSelectedKeys(prev => {
+      const key = String(db_id ?? filename);
+      if (!prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
     setBatch(prev => {
       if (!prev) return prev;
       const newResults = prev.results.filter(r => r.input?.filename !== filename);
@@ -671,6 +665,51 @@ export default function ResultsPage() {
     });
   };
 
+  const toggleSelectRow = (key: string) => {
+    setSelectedKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+  const toggleSelectAllVisible = () => {
+    setSelectedKeys(prev => {
+      const visibleKeys = visibleScoredRows.map(({ r }) => rowKey(r));
+      const allSelected  = visibleKeys.length > 0 && visibleKeys.every(k => prev.has(k));
+      if (allSelected) {
+        const next = new Set(prev);
+        for (const k of visibleKeys) next.delete(k);
+        return next;
+      }
+      return new Set([...prev, ...visibleKeys]);
+    });
+  };
+
+  const handleBulkDelete = () => {
+    const targets = safeResults.filter(r => selectedKeys.has(rowKey(r)));
+    if (targets.length === 0) return;
+    if (!window.confirm(`Xoá ${targets.length} phiếu đã chọn? Hành động này không thể hoàn tác.`)) return;
+    for (const r of targets) {
+      if (r.db_id) resultsApi.deleteOne(r.db_id).catch(e => console.warn('[DB bulk delete]', e));
+    }
+    const targetFilenames = new Set(targets.map(r => r.input?.filename ?? ''));
+    setBatch(prev => {
+      if (!prev) return prev;
+      const newResults = prev.results.filter(r => !targetFilenames.has(r.input?.filename ?? ''));
+      if (newResults.length === 0) { clearStorage(); return null; }
+      const updated = { ...prev, results: newResults };
+      try { localStorage.setItem(LS_KEY, JSON.stringify(updated)); } catch { /* ignore */ }
+      return updated;
+    });
+    setCorrections(prev => {
+      const next = { ...prev };
+      for (const fname of targetFilenames) delete next[correctionKey(batch?.gradedAt, fname)];
+      saveCorrections(next);
+      return next;
+    });
+    setSelectedKeys(new Set());
+  };
+
   const handleClear = () => {
     const examLabel = selectedExamName ? `"${selectedExamName}"` : 'kỳ thi này';
     if (!window.confirm(`Xoá tất cả kết quả của ${examLabel}? Hành động này không thể hoàn tác.`)) return;
@@ -685,6 +724,7 @@ export default function ResultsPage() {
     setBatch(null);
     clearCorrections();
     setCorrections({});
+    setSelectedKeys(new Set());
     setDataSource('localStorage');
     setDbSaveStatus('idle');
     savedBatchKeyRef.current = null;
@@ -760,16 +800,31 @@ export default function ResultsPage() {
   };
 
   // Rows visible after template filter
-  const visibleScoredRows = isAllMode
+  const templateFilteredRows = isAllMode
     ? allScoredRows
     : allScoredRows.filter(({ r }) => getRowTemplateKey(r, batch) === selectedTemplateKey);
+  const visibleScoredRows = reviewOnly
+    ? templateFilteredRows.filter(({ r, missingKeyForMaDe }) => hasWarnings(r) || !!missingKeyForMaDe)
+    : templateFilteredRows;
+
+  // Jump straight into "review mode": filter the table to flagged rows and
+  // open the first one so a teacher can start correcting immediately,
+  // without ever leaving this page.
+  const startReview = () => {
+    const flagged = templateFilteredRows.filter(({ r, missingKeyForMaDe }) => hasWarnings(r) || !!missingKeyForMaDe);
+    setReviewOnly(true);
+    if (flagged.length > 0) setModalRow(flagged[0].r);
+  };
 
   const scores      = visibleScoredRows.map(x => x.sc?.total ?? null).filter((s): s is number => s !== null);
   const avgScore    = scores.length ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100 : null;
   const maxScore    = scores.length ? Math.max(...scores) : null;
   const minScore    = scores.length ? Math.min(...scores) : null;
-  const warnCount   = visibleScoredRows.filter(({ r }) => hasWarnings(r)).length;
-  const totalSheets = visibleScoredRows.length;
+  // Always computed off the template filter alone (not reviewOnly), so these
+  // stay stable while a teacher is stepping through the review-only view
+  // instead of jumping around as the table shrinks to just flagged rows.
+  const warnCount   = templateFilteredRows.filter(({ r, missingKeyForMaDe }) => hasWarnings(r) || !!missingKeyForMaDe).length;
+  const totalSheets = templateFilteredRows.length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
@@ -779,14 +834,7 @@ export default function ResultsPage() {
         actions={<>
           <Button variant="secondary" size="sm" icon={<ArrowLeft size={14} />} onClick={() => navigate('/app/upload')}>Quay lại Upload</Button>
           {hasBatch && (
-            <Button variant="secondary" size="sm" icon={<AlertTriangle size={14} />}
-              onClick={() => navigate('/app/review-errors', {
-                state: {
-                  examId:         selectedExamId,
-                  templateKey:    selectedTemplateKey,
-                  templateSchema: selectedTemplateOpt?.templateSchema ?? null,
-                }
-              })}>
+            <Button variant="secondary" size="sm" icon={<AlertTriangle size={14} />} onClick={startReview}>
               Kiểm tra lỗi
             </Button>
           )}
@@ -983,13 +1031,41 @@ export default function ResultsPage() {
         )}
 
         {/* Warning banner */}
-        {warnCount > 0 && (
+        {warnCount > 0 && !reviewOnly && (
           <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
               <AlertTriangle size={16} />
               <strong>{warnCount} phiếu có cảnh báo</strong> — kiểm tra trước khi tải Excel!
             </div>
-            <Button size="sm" variant="outline" onClick={() => navigate('/app/review-errors', { state: { examId: selectedExamId, templateKey: selectedTemplateKey, templateSchema: selectedTemplateOpt?.templateSchema ?? null } })}>Kiểm tra ngay →</Button>
+            <Button size="sm" variant="outline" onClick={startReview}>Kiểm tra ngay →</Button>
+          </div>
+        )}
+
+        {/* Review-only filter indicator — 2026-07-31: replaces the old
+           "Kiểm tra lỗi" separate page; sửa trực tiếp ngay trong bảng này. */}
+        {reviewOnly && (
+          <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+              <AlertTriangle size={16} />
+              Đang chỉ hiện <strong>{warnCount} phiếu cần xem lại</strong> — click hàng để sửa trực tiếp.
+            </div>
+            <Button size="sm" variant="outline" onClick={() => setReviewOnly(false)}>Xem tất cả →</Button>
+          </div>
+        )}
+
+        {/* Bulk-action bar — 2026-07-31: "để action hàng loạt nhé, ví dụ a
+           muốn xóa vẫn phải xóa từng cái" — select rows via the checkbox
+           column and delete them all in one go instead of one confirm per row. */}
+        {selectedKeys.size > 0 && (
+          <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+              <CheckCircle2 size={16} />
+              Đã chọn <strong>{selectedKeys.size} phiếu</strong>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button size="sm" variant="outline" onClick={() => setSelectedKeys(new Set())}>Bỏ chọn</Button>
+              <Button size="sm" variant="danger" icon={<Trash2 size={13} />} onClick={handleBulkDelete}>Xoá đã chọn</Button>
+            </div>
           </div>
         )}
 
@@ -1006,10 +1082,26 @@ export default function ResultsPage() {
                 </Badge>
               )}
             </div>
+            {reviewOnly && visibleScoredRows.length === 0 ? (
+              <div style={{ padding: '48px 24px', textAlign: 'center' }}>
+                <div style={{ fontSize: 32, marginBottom: 10 }}>✅</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#065F46', marginBottom: 4 }}>Không còn phiếu nào cần xem lại</div>
+                <Button size="sm" variant="outline" onClick={() => setReviewOnly(false)} style={{ marginTop: 8 }}>Xem tất cả →</Button>
+              </div>
+            ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: '#C8102E' }}>
+                    <th style={{ padding: '10px 10px', width: 32 }}>
+                      <input
+                        type="checkbox"
+                        checked={visibleScoredRows.length > 0 && visibleScoredRows.every(({ r }) => selectedKeys.has(rowKey(r)))}
+                        onChange={toggleSelectAllVisible}
+                        title="Chọn tất cả"
+                        style={{ accentColor: '#fff', width: 15, height: 15, cursor: 'pointer' }}
+                      />
+                    </th>
                     {['STT', 'File',
                       ...(isAllMode ? ['Mẫu phiếu'] : activeInfoFields.map(f => f.displayName)),
                       ...(hasKey ? ['Đúng','Sai','Trống','Điểm'] : []),
@@ -1031,11 +1123,14 @@ export default function ResultsPage() {
                       infoFields={activeInfoFields}
                       showTemplateCol={isAllMode}
                       templateLabel={getRowTemplateLabel(r, batch, fetchedTemplateNames)}
+                      selected={selectedKeys.has(rowKey(r))}
+                      onToggleSelect={() => toggleSelectRow(rowKey(r))}
                     />
                   ))}
                 </tbody>
               </table>
             </div>
+            )}
           </Card>
         ) : dataSource !== 'init' ? (
           /* Empty state — shown after delete-all or when DB+localStorage are both empty */

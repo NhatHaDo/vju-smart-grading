@@ -67,6 +67,13 @@ class BatchResult(Base):
     warnings_json:           Mapped[str | None] = mapped_column(Text, nullable=True)
     info_field_columns_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     debug_paths_json:        Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 2026-07-31: "file export kết quả cần hiện cả Giám thị coi thi đã kí tên
+    # hay chưa" — OMR's signature ink-detection (SignatureCheck[]) used to be
+    # ephemeral (only in the /omr/debug-grade response), never persisted, so
+    # historical results loaded from the DB had no way to show it in Excel
+    # export. Stored the same way as debug_paths_json — JSON blob, nullable
+    # (null = not checked, e.g. custom template with no calibrated boxes).
+    signatures_json:         Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # ── Manual corrections ────────────────────────────────────────────────────
     manual_corrections_json: Mapped[str | None] = mapped_column(Text, nullable=True)

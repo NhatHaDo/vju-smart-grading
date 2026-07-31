@@ -292,24 +292,28 @@ export interface ScoringWeights {
   questionPoints?: Record<string, number>;
 }
 
-/** "Ký tên giám thị và người chấm thi" (2026-07-30) — names recorded per mã đề
- *  (a room/group sitting a different đề can have different proctors/graders),
- *  purely informational (shows up in exports) — separate from the OMR-detected
- *  ink-presence check (`signatures` on the grade response / `signature_detector.py`
- *  backend), which only tells you IF a box was physically signed, never who
- *  signed it — this is where the actual name gets recorded by the teacher. */
+/** "Ký tên giám thị và người chấm thi" (2026-07-30, simplified 2026-07-31) —
+ *  presence flags recorded per mã đề (a room/group sitting a different đề
+ *  can have different proctors/graders) — separate from the OMR-detected
+ *  ink-presence check (`signatures` on the grade response /
+ *  `signature_detector.py` backend, which checks 2 physical boxes —
+ *  coi_thi_1/coi_thi_2 — for the actual ✓/✗ ký hay chưa), which only tells
+ *  you IF a box was physically signed on the actual scanned sheet.
+ *  2026-07-31: "ở chọn đáp án cũng k cần ghi tên giám thị đâu, chỉ cần tích
+ *  chọn là có hoặc chủ động kiểm tra xem giám thị đã kí tên chưa thôi" —
+ *  first pass simplified free-text name fields to 4 checkboxes (1 per
+ *  physical box, mirroring the OMR check), but that's still more detail
+ *  than asked for here: "ý là chỗ này cần tick chọn có cán bộ chấm thi cán
+ *  bộ coi thi hay không thôi (1 tick)" — just whether each *role* applies to
+ *  this đề at all, not per-box. Collapsed to 2 checkboxes. */
 export interface ProctorInfo {
-  coi_thi_1?:  string;
-  coi_thi_2?:  string;
-  cham_thi_1?: string;
-  cham_thi_2?: string;
+  coi_thi?:  boolean;
+  cham_thi?: boolean;
 }
 
 export const PROCTOR_FIELD_LABELS: { key: keyof ProctorInfo; label: string }[] = [
-  { key: 'coi_thi_1',  label: 'Cán bộ coi thi 1' },
-  { key: 'coi_thi_2',  label: 'Cán bộ coi thi 2' },
-  { key: 'cham_thi_1', label: 'Cán bộ chấm thi 1' },
-  { key: 'cham_thi_2', label: 'Cán bộ chấm thi 2' },
+  { key: 'coi_thi',  label: 'Cán bộ coi thi' },
+  { key: 'cham_thi', label: 'Cán bộ chấm thi' },
 ];
 
 /** One đề's worth of answers + its own scoring weights (used inside `byMaDe`). */

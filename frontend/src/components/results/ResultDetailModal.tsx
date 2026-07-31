@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { X, AlertTriangle, CheckCircle2, Pencil, Save, RotateCcw } from 'lucide-react';
-import type { OmrGradeResult, AnswerKeyStore, ManualCorrection, InfoFieldColumn, TemplateSchema, TemplateAnswerSection, OmrWarning } from '../../types/grading';
+import type { OmrGradeResult, AnswerKeyStore, ManualCorrection, InfoFieldColumn, TemplateSchema, TemplateAnswerSection, TemplateInfoField, OmrWarning } from '../../types/grading';
 import { VJU_PRESET_SCHEMA, computeScore, resolveAnswerKeyForMaDe, getMaDeValue } from '../../types/grading';
 import { buildSchemaFromAnswerKeys } from '../../utils/templateSchema';
 import { getInfoFieldValue } from '../../utils/resultMapping';
@@ -107,16 +107,21 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
     ? { ...r.answers, ...correction.corrected_answers }
     : (r.answers ?? {});
 
+  // Starting value for one info field when entering edit mode — factored out
+  // so handleSaveEdit's diff below computes against the exact same baseline,
+  // instead of drifting out of sync with a second, hand-copied formula.
+  function startingInfoValue(field: TemplateInfoField): string {
+    return String(
+      correction?.corrected_student_info?.[field.key]
+      ?? (student_info[field.key] != null ? student_info[field.key] : undefined)
+      ?? getInfoFieldValue(student_info, r.info_field_columns, field)
+      ?? ''
+    );
+  }
+
   function enterEditMode() {
     const info: Record<string, string> = {};
-    for (const field of schema.infoFields) {
-      info[field.key] = String(
-        correction?.corrected_student_info?.[field.key]
-        ?? (student_info[field.key] != null ? student_info[field.key] : undefined)
-        ?? getInfoFieldValue(student_info, r.info_field_columns, field)
-        ?? ''
-      );
-    }
+    for (const field of schema.infoFields) info[field.key] = startingInfoValue(field);
     const ans: Record<string, string> = {};
     for (const lbl of allAnswerLabels) ans[lbl] = String(answers[lbl] ?? '');
     setEditInfo(info);
@@ -127,9 +132,30 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
     setEditAnswers(prev => ({ ...prev, [lbl]: val === '—' ? '' : val }));
   function handleSaveEdit() {
     if (!onSaveCorrection) return;
+    // 2026-07-31: "ko phải vậy, mà là cái nào tôi đã sửa/ ấn sửa thôi chứ" —
+    // this used to send the ENTIRE editAnswers/editInfo snapshot (every
+    // question/field, touched or not — enterEditMode pre-fills all of them
+    // so the form has values to show) as "corrected_answers", so literally
+    // every question ended up flagged as "manually corrected" the instant
+    // ANY single one was changed and saved. Only keep entries whose value
+    // actually differs from what it was when this edit session started, and
+    // merge with whatever was already recorded as corrected in prior
+    // sessions (a save must not un-flag/lose those).
+    const changedAnswers: Record<string, string> = {};
+    for (const lbl of allAnswerLabels) {
+      const editVal = editAnswers[lbl] ?? '';
+      const origVal = String(answers[lbl] ?? '');
+      if (editVal !== origVal) changedAnswers[lbl] = editVal;
+    }
+    const changedInfo: Record<string, string> = {};
+    for (const field of schema.infoFields) {
+      const editVal = editInfo[field.key] ?? '';
+      const origVal = startingInfoValue(field);
+      if (editVal !== origVal) changedInfo[field.key] = editVal;
+    }
     onSaveCorrection(r.input?.filename ?? '', {
-      corrected_student_info: editInfo,
-      corrected_answers:      editAnswers,
+      corrected_student_info: { ...(correction?.corrected_student_info ?? {}), ...changedInfo },
+      corrected_answers:      { ...(correction?.corrected_answers ?? {}),      ...changedAnswers },
       updatedAt:               new Date().toISOString(),
     });
     setEditMode(false);
@@ -181,6 +207,30 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
     return cands
       ? `${qLabel}: chưa đủ rõ để phân biệt (${cands}) — cần xem lại phiếu gốc`
       : `${qLabel}: chưa đủ rõ để xác định đáp án — cần xem lại phiếu gốc`;
+  }
+
+  // 2026-07-31: "mấy cái đáp án nó ko có cảnh báo, lúc t sửa xong thì trong
+  // lúc sửa với lúc xem lại kq nó ko có gì để nhận biết à?" — a question with
+  // no OMR warning that a teacher manually corrected had zero visual trace
+  // afterward: not in edit mode (isChanged only compares against THIS
+  // session's starting value, which already includes prior corrections —
+  // so reopening edit mode showed no highlight at all for old corrections),
+  // and not in the read-only view either (only correct/wrong/blank/warn
+  // colors, no "was this hand-edited" signal). Amber ring = "manually
+  // corrected at some point", independent of session/status, everywhere.
+  function wasCorrected(lbl: string): boolean {
+    if (!correction?.corrected_answers || !Object.prototype.hasOwnProperty.call(correction.corrected_answers, lbl)) return false;
+    // 2026-07-31: "cái nào sửa mới vàng nhạt thôi, còn đâu vẫn thế (trắng)
+    // chứ?" — checking presence alone isn't enough: corrections saved
+    // BEFORE the earlier fix (2026-07-31, same day) still have EVERY
+    // question crammed into corrected_answers, touched or not, so presence
+    // matched on all 79. Comparing against `r.answers` — the raw, never-
+    // mutated OMR read — instead of just checking the key exists makes this
+    // self-healing for that old data too: a stale entry whose value happens
+    // to equal what OMR originally read isn't visually "corrected" anyway.
+    const correctedVal = String(correction.corrected_answers[lbl] ?? '');
+    const originalVal  = String(r.answers?.[lbl] ?? '');
+    return correctedVal !== originalVal;
   }
 
   function qStatus(lbl: string): 'correct' | 'wrong' | 'blank' | 'warn' | 'no-key' {
@@ -420,22 +470,24 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                           {labels.map((lbl, idx) => {
                             const val = editAnswers[lbl] || '';
                             const original = String(answers[lbl] ?? '');
+                            // 2026-07-31: "khi ấn sửa câu nào đó thì n hiện màu
+                            // vàng cả ô đấy (trong trường hợp bỏ ra thì n lại
+                            // về như cũ)" — purely session-local: turns pastel
+                            // yellow the moment you change a value away from
+                            // what it was when this edit session started, and
+                            // reverts the instant you change it back. No ring,
+                            // no badge, no separate "was corrected before"
+                            // signal here — that only shows up after Lưu, in
+                            // the read-only view below.
                             const isChanged = val !== original;
-                            // 2026-07-30: edit mode used to give zero visual cue about
-                            // *which* questions the "⚠ N cảnh báo" in the header referred
-                            // to — a teacher had to scan the whole overlay image by eye to
-                            // find the flagged bubble. Highlight warned questions here too
-                            // (light purple, distinct from the solid purple already used
-                            // for "đã sửa") so they jump out while editing, not just in the
-                            // read-only "Cần xem" filter.
                             const warnQ = warnList.find(w => w.field === lbl);
                             const isWarned = !!warnQ;
                             const tip = isChanged
                               ? `Đã sửa (gốc: ${original || '—'})`
                               : warnQ ? describeWarning(warnQ) : undefined;
-                            const borderColor = isChanged ? '#7C3AED' : isWarned ? '#C4B5FD' : '#E5E7EB';
-                            const textColor   = isChanged ? '#7C3AED' : isWarned ? '#6D28D9' : '#1F2937';
-                            const bgColor     = isChanged ? '#F3E8FF' : isWarned ? '#F5F3FF' : '#fff';
+                            const borderColor = isChanged ? '#FBBF24' : isWarned ? '#C4B5FD' : '#E5E7EB';
+                            const textColor   = isChanged ? '#92400E' : isWarned ? '#6D28D9' : '#1F2937';
+                            const bgColor     = isChanged ? '#FEF9C3' : isWarned ? '#F5F3FF' : '#fff';
                             if (isText) {
                               return (
                                 <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
@@ -488,14 +540,25 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                           const st  = qStatus(lbl);
                           const ans = answers[lbl];
                           const gi  = allAnswerLabels.indexOf(lbl) + 1;
+                          // 2026-07-31: "khi ấn lưu thì câu nào đổi đáp án thì
+                          // n cũng hiện vàng trong kết quả" — same pastel
+                          // yellow as the live edit-mode highlight, filling
+                          // the whole cell (no ring, no badge icon), replacing
+                          // the correct/wrong/blank color for that cell since
+                          // "manually corrected" is the more useful signal
+                          // once it's been reviewed by a human.
+                          const wasCorr = wasCorrected(lbl);
+                          const bg     = wasCorr ? '#FEF9C3' : STATUS_COLOR[st];
+                          const border = wasCorr ? '#FDE68A' : STATUS_BORDER[st];
+                          const textCl = wasCorr ? '#92400E' : STATUS_TEXT[st];
                           return (
-                            <div key={lbl} style={{
+                            <div key={lbl} title={wasCorr ? 'Đã sửa tay' : undefined} style={{
                               minWidth: isText ? 74 : 42, height: 42, borderRadius: 8, padding: isText ? '0 6px' : 0,
                               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1,
-                              background: STATUS_COLOR[st], border: `1.5px solid ${STATUS_BORDER[st]}`,
+                              background: bg, border: `1.5px solid ${border}`,
                             }}>
-                              <span style={{ fontSize: 9, color: STATUS_TEXT[st], fontWeight: 500 }}>C{gi}</span>
-                              <span style={{ fontSize: isText ? 12 : 13, fontWeight: 800, color: STATUS_TEXT[st], fontFamily: isText ? 'monospace' : 'inherit', whiteSpace: 'nowrap' }}>{ans || '—'}</span>
+                              <span style={{ fontSize: 9, color: textCl, fontWeight: 500 }}>C{gi}</span>
+                              <span style={{ fontSize: isText ? 12 : 13, fontWeight: 800, color: textCl, fontFamily: isText ? 'monospace' : 'inherit', whiteSpace: 'nowrap' }}>{ans || '—'}</span>
                             </div>
                           );
                         })}

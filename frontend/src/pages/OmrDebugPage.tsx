@@ -1,7 +1,26 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import PageHeader from '../components/layout/PageHeader';
-import { Upload, Loader2, AlertTriangle, CheckCircle2, ExternalLink, ChevronDown, ChevronRight } from 'lucide-react';
-import { SECTION_MAP, type ImageSource } from '../types/grading';
+import { Upload, Loader2, AlertTriangle, CheckCircle2, ExternalLink, ChevronDown, ChevronRight, LayoutTemplate, RefreshCw } from 'lucide-react';
+import { SECTION_MAP, TEMPLATE_VARIANT_LABEL, PINNED_TEMPLATES, type ImageSource, type TemplateVariant } from '../types/grading';
+import { customFormsApi, type CustomFormMeta } from '../services/apiClient';
+
+// 2026-07-31: "bỏ cái nguồn ảnh đi (mặc định là tự động)" — mirrors the same
+// removal already done on SheetReviewPage's Upload & Chấm page ("Nguồn ảnh"
+// removed — teachers didn't know which option to pick). Debug-grade always
+// auto-detects now; no picker needed.
+const FIXED_IMAGE_SOURCE: ImageSource = 'auto';
+
+// 2026-07-31: "phải có đủ như kia chứ" — this page only offered a bare
+// "Loại SBD: SBD 4 số / SBD 8 số" toggle, while the real Upload & Chấm page
+// (SheetReviewPage) has the full "Chọn mẫu phiếu" picker: VJU/Custom
+// template tabs, plus the pinned "Mẫu 40 câu TN + Đúng/Sai" template. OMR
+// Debug is meant to test grading exactly like the real upload flow, so it
+// needs the same picker — otherwise you can't reproduce a bug that only
+// happens on a custom/pinned template.
+const SBD_TYPES: { label: string; variant: TemplateVariant }[] = [
+  { label: 'SBD 4 số', variant: 'sbd4' },
+  { label: 'SBD 8 số', variant: 'sbd8' },
+];
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -62,18 +81,6 @@ interface DebugGradeResult {
 // the full explanation of why this pattern matters).
 const BACKEND_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
 const API_BASE = `${BACKEND_BASE}/api/v1/omr/debug-grade`;
-
-const SBD_VARIANTS = [
-  { label: 'SBD 4 số', value: 'sbd4' },
-  { label: 'SBD 8 số', value: 'sbd8' },
-];
-
-const IMAGE_SOURCES: { label: string; value: ImageSource }[] = [
-  { label: 'Tự động', value: 'auto' },
-  { label: 'Scan máy', value: 'flatbed' },
-  { label: 'Scan app', value: 'scan_app' },
-  { label: 'Camera', value: 'camera' },
-];
 
 // Build reverse map: field label → section name
 const LABEL_TO_SECTION: Record<string, string> = {};
@@ -179,13 +186,23 @@ function SectionAnswers({
   );
 }
 
+// Convert a server-side path → public URL.
+// 2026-07-31: "đâu ảnh detect đâu ?" — backend actually returns a RELATIVE
+// path here (e.g. "outputs/debug_overlays/xxx.jpg", no leading slash), but
+// this used to require a leading "/outputs/" to match — so it silently
+// matched nothing and every image (and even the "Means JSON" link) failed
+// to render, with no error shown. Find "outputs/" wherever it occurs
+// instead, so both "/abs/path/outputs/..." and "outputs/..." work.
+function overlayHref(path: string | null): string | null {
+  if (!path) return null;
+  const idx = path.indexOf('outputs/');
+  if (idx === -1) return null;
+  return `${BACKEND_BASE}/${path.slice(idx)}`;
+}
+
 function OverlayLink({ label, path }: { label: string; path: string | null }) {
   if (!path) return null;
-  // Convert absolute server path → public URL
-  // e.g. /abs/path/outputs/debug_overlays/xxx.jpg → /outputs/debug_overlays/xxx.jpg
-  const match = path.match(/\/outputs\/.+/);
-  const href = match ? `${BACKEND_BASE}${match[0]}` : null;
-
+  const href = overlayHref(path);
   return (
     <div style={{ marginBottom: 6 }}>
       <span style={{ fontSize: 12, color: '#666', width: 200, display: 'inline-block' }}>{label}</span>
@@ -200,6 +217,37 @@ function OverlayLink({ label, path }: { label: string; path: string | null }) {
   );
 }
 
+// 2026-07-31: "ko có ảnh detect thì sao mà nhìn đc" — the overlay images
+// (bubbles the engine detected, marked/warned ones highlighted) used to be
+// text links you had to click and open in a new tab to see anything at all.
+// Now shown inline so you can actually look at the detection result on this
+// page, click to open full-size only when you need to zoom in.
+function OverlayImage({ label, path }: { label: string; path: string | null }) {
+  const href = overlayHref(path);
+  if (!href) return null;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      style={{ display: 'block', textDecoration: 'none' }}
+      title="Bấm để xem ảnh gốc kích thước đầy đủ"
+    >
+      <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+        {label} <ExternalLink size={11} color="#9ca3af" />
+      </div>
+      <img
+        src={href}
+        alt={label}
+        style={{
+          width: '100%', maxHeight: 480, objectFit: 'contain',
+          border: '1px solid #e5e7eb', borderRadius: 8, background: '#fafafa',
+        }}
+      />
+    </a>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function OmrDebugPage() {
@@ -209,9 +257,39 @@ export default function OmrDebugPage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DebugGradeResult | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [templateVariant, setTemplateVariant] = useState<'sbd4' | 'sbd8'>('sbd8');
-  const [imageSource, setImageSource] = useState<ImageSource>('auto');
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // ── Template mode: 'vju' | 'custom' — mirrors SheetReviewPage's picker ────
+  const [templateMode, setTemplateMode] = useState<'vju' | 'custom'>('vju');
+  const [selectedSbd, setSelectedSbd] = useState(1); // 0=sbd4, 1=sbd8
+  const [selectedPinnedCustomId, setSelectedPinnedCustomId] = useState<number | null>(null);
+  const [customForms, setCustomForms] = useState<CustomFormMeta[]>([]);
+  const [customFormsLoading, setCustomFormsLoading] = useState(false);
+  const [selectedCustomId, setSelectedCustomId] = useState<number | null>(null);
+
+  const loadCustomForms = async () => {
+    setCustomFormsLoading(true);
+    try {
+      const data = await customFormsApi.list();
+      setCustomForms(data.forms as CustomFormMeta[]);
+      setSelectedCustomId(prev => prev ?? data.forms[0]?.id ?? null);
+    } catch { /* auth errors handled globally by apiClient */ }
+    finally { setCustomFormsLoading(false); }
+  };
+
+  useEffect(() => { void loadCustomForms(); }, []);
+
+  const templateVariant: TemplateVariant = SBD_TYPES[selectedSbd].variant;
+  // A pinned template (picked from the "vju" tab) grades through the same
+  // custom-template path as the "custom" tab — same distinction as
+  // SheetReviewPage.
+  const effectiveTemplateMode: 'vju' | 'custom' =
+    templateMode === 'custom' || selectedPinnedCustomId !== null ? 'custom' : 'vju';
+  const effectiveCustomId: number | null =
+    templateMode === 'custom' ? selectedCustomId : selectedPinnedCustomId;
+  const selectedCustomForm = customForms.find(f => f.id === effectiveCustomId) ?? null;
+  const pinnedTemplateLabel = PINNED_TEMPLATES.find(pt => pt.id === effectiveCustomId)?.label ?? null;
+  const effectiveCustomName = selectedCustomForm?.name ?? pinnedTemplateLabel;
 
   const handleFile = useCallback((f: File) => {
     setFile(f);
@@ -240,7 +318,14 @@ export default function OmrDebugPage() {
     try {
       const fd = new FormData();
       fd.append('image', file);
-      const url = `${API_BASE}?mean_mode=circle_mask&full_debug=true&template_variant=${templateVariant}&image_source=${imageSource}`;
+      // Custom/pinned template → template_id (DB lookup, takes priority on
+      // the backend); plain VJU sbd4/sbd8 → template_variant. Same priority
+      // SheetReviewPage relies on for the real grading flow.
+      const templateParam =
+        effectiveTemplateMode === 'custom' && effectiveCustomId !== null
+          ? `template_id=${effectiveCustomId}`
+          : `template_variant=${templateVariant}`;
+      const url = `${API_BASE}?mean_mode=circle_mask&full_debug=true&${templateParam}&image_source=${FIXED_IMAGE_SOURCE}`;
       const res = await fetch(url, { method: 'POST', body: fd });
       const json = await res.json();
       if (!res.ok) {
@@ -305,40 +390,114 @@ export default function OmrDebugPage() {
         )}
       </div>
 
-      {/* Template variant selector */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 16 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>Loại SBD:</span>
-        {SBD_VARIANTS.map(v => (
-          <label key={v.value} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: templateVariant === v.value ? 700 : 400, color: templateVariant === v.value ? '#C8102E' : '#374151' }}>
-            <input
-              type="radio"
-              name="templateVariant"
-              value={v.value}
-              checked={templateVariant === v.value}
-              onChange={() => setTemplateVariant(v.value as 'sbd4' | 'sbd8')}
-              style={{ accentColor: '#C8102E' }}
-            />
-            {v.label}
-          </label>
-        ))}
-      </div>
+      {/* Template picker — same "Chọn mẫu phiếu" section as Upload & Chấm,
+         so a bug reproduced here (custom/pinned template incl.) matches what
+         a teacher actually sees. */}
+      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '16px 18px', marginBottom: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#C8102E', marginBottom: 12 }}>Chọn mẫu phiếu</div>
 
-      {/* Image source selector */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 16 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>Nguồn ảnh:</span>
-        {IMAGE_SOURCES.map(s => (
-          <label key={s.value} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: imageSource === s.value ? 700 : 400, color: imageSource === s.value ? '#C8102E' : '#374151' }}>
-            <input
-              type="radio"
-              name="imageSource"
-              value={s.value}
-              checked={imageSource === s.value}
-              onChange={() => setImageSource(s.value)}
-              style={{ accentColor: '#C8102E' }}
-            />
-            {s.label}
-          </label>
-        ))}
+        {/* Mode tabs */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          {([
+            { value: 'vju', label: 'Mẫu phiếu VJU' },
+            { value: 'custom', label: 'Custom template' },
+          ] as const).map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setTemplateMode(opt.value)}
+              style={{
+                padding: '7px 16px', borderRadius: 9999, fontSize: 13, fontWeight: 600,
+                border: `1.5px solid ${templateMode === opt.value ? '#C8102E' : '#E5E7EB'}`,
+                background: templateMode === opt.value ? '#FEF2F2' : '#fff',
+                color: templateMode === opt.value ? '#C8102E' : '#374151',
+                cursor: 'pointer', fontFamily: 'inherit',
+                display: 'flex', alignItems: 'center', gap: 5,
+              }}
+            >
+              {opt.value === 'custom' && <LayoutTemplate size={13} />}
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
+        {/* VJU mode — SBD types + pinned templates */}
+        {templateMode === 'vju' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, color: '#6B7280', fontWeight: 600 }}>Loại SBD:</span>
+              {SBD_TYPES.map((s, i) => (
+                <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: selectedPinnedCustomId === null && i === selectedSbd ? 700 : 400, color: selectedPinnedCustomId === null && i === selectedSbd ? '#C8102E' : '#374151' }}>
+                  <input
+                    type="radio" name="sbd"
+                    checked={selectedPinnedCustomId === null && i === selectedSbd}
+                    onChange={() => { setSelectedSbd(i); setSelectedPinnedCustomId(null); }}
+                    style={{ accentColor: '#C8102E' }}
+                  />
+                  {s.label}
+                </label>
+              ))}
+              {PINNED_TEMPLATES.map(pt => (
+                <label key={pt.id} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, fontWeight: selectedPinnedCustomId === pt.id ? 700 : 400, color: selectedPinnedCustomId === pt.id ? '#C8102E' : '#374151' }}>
+                  <input
+                    type="radio" name="sbd"
+                    checked={selectedPinnedCustomId === pt.id}
+                    onChange={() => setSelectedPinnedCustomId(pt.id)}
+                    style={{ accentColor: '#C8102E' }}
+                  />
+                  {pt.label}
+                </label>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: '#6B7280', background: '#F9FAFB', borderRadius: 8, padding: '5px 12px', display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start' }}>
+              <CheckCircle2 size={13} color="#10B981" />
+              <strong style={{ color: '#1E1E1E' }}>
+                {selectedPinnedCustomId === null ? TEMPLATE_VARIANT_LABEL[templateVariant] : (effectiveCustomName ?? '…')}
+              </strong>
+            </div>
+          </div>
+        )}
+
+        {/* Custom template mode */}
+        {templateMode === 'custom' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {customFormsLoading ? (
+              <div style={{ fontSize: 13, color: '#9CA3AF' }}>Đang tải custom template…</div>
+            ) : customForms.length === 0 ? (
+              <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#92400E' }}>
+                Chưa có custom template nào.
+              </div>
+            ) : (
+              <>
+                <select
+                  value={selectedCustomId ?? ''}
+                  onChange={e => setSelectedCustomId(Number(e.target.value))}
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1.5px solid #E5E7EB', fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff' }}
+                >
+                  {customForms.map(f => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}{f.area_count > 0 ? ` — ${f.area_count} vùng OMR` : ''}
+                    </option>
+                  ))}
+                </select>
+                {selectedCustomForm && (
+                  <div style={{ fontSize: 12, color: '#6B7280', background: '#F9FAFB', borderRadius: 8, padding: '5px 12px', display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start' }}>
+                    <CheckCircle2 size={13} color="#10B981" />
+                    Template: <strong style={{ color: '#1E1E1E' }}>{selectedCustomForm.name}</strong>
+                    {selectedCustomForm.page_width && selectedCustomForm.page_height && (
+                      <span style={{ color: '#9CA3AF' }}>· {selectedCustomForm.page_width}×{selectedCustomForm.page_height}</span>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+            <button
+              onClick={() => loadCustomForms()}
+              style={{ border: '1.5px solid #E5E7EB', borderRadius: 9999, padding: '4px 12px', fontSize: 11, fontWeight: 600, color: '#374151', background: '#fff', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4, alignSelf: 'flex-start' }}
+            >
+              <RefreshCw size={11} /> Làm mới
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Submit button */}
@@ -483,14 +642,16 @@ export default function OmrDebugPage() {
                 </div>
               )}
 
-              {/* Overlay links */}
+              {/* Overlay images — shown inline now, click any to open full-size */}
               <div>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#374151' }}>Ảnh debug</div>
-                <OverlayLink label="Aligned image"        path={result.debug.aligned_image_path} />
-                <OverlayLink label="Overlay (tất cả)"     path={result.debug.overlay_all_path} />
-                <OverlayLink label="Overlay (đã tô)"      path={result.debug.overlay_marked_only_path} />
-                <OverlayLink label="Overlay (cảnh báo)"   path={result.debug.overlay_warnings_path} />
-                <OverlayLink label="Means JSON"            path={result.debug.means_json_path} />
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, color: '#374151' }}>Ảnh debug</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14, marginBottom: 10 }}>
+                  <OverlayImage label="Ảnh đã căn chỉnh (aligned)"  path={result.debug.aligned_image_path} />
+                  <OverlayImage label="Overlay — tất cả ô đọc được" path={result.debug.overlay_all_path} />
+                  <OverlayImage label="Overlay — chỉ ô đã tô"       path={result.debug.overlay_marked_only_path} />
+                  <OverlayImage label="Overlay — ô có cảnh báo"     path={result.debug.overlay_warnings_path} />
+                </div>
+                <OverlayLink label="Means JSON" path={result.debug.means_json_path} />
               </div>
 
               {result.debug.alignment_warnings?.length > 0 && (

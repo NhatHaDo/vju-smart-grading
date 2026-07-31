@@ -70,6 +70,7 @@ class BatchResultOut(BaseModel):
     warnings_json:           str | None
     info_field_columns_json: str | None
     debug_paths_json:        str | None
+    signatures_json:         str | None = None
     manual_corrections_json: str | None
     graded_at:               datetime
     corrected_at:            datetime | None
@@ -114,6 +115,7 @@ class ResultBatchSaveItem(BaseModel):
     warnings:           Any | None             = None
     info_field_columns: Any | None             = None
     debug_paths:        Any | None             = None
+    signatures:         Any | None             = None
 
 
 class ResultBatchSaveRequest(BaseModel):

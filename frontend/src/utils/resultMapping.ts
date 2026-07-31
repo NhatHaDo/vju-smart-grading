@@ -3,7 +3,7 @@
  * Imported by ResultsPage, ReviewErrorsPage, ExcelPreviewPage.
  */
 
-import type { OmrGradeResult, InfoFieldColumns, TemplateInfoField, OmrStudentInfo } from '../types/grading';
+import type { OmrGradeResult, InfoFieldColumns, TemplateInfoField, OmrStudentInfo, SignatureCheck } from '../types/grading';
 import type { BatchResultOut } from '../services/apiClient';
 
 // ── JSON parse helper ─────────────────────────────────────────────────────────
@@ -99,6 +99,12 @@ export function getInfoFieldValue(
 export function dbRowToOmrResult(row: BatchResultOut): OmrGradeResult & { db_id: number } {
   const debugPaths    = parseJson<Record<string, string | null>>(row.debug_paths_json, {});
   const infoFieldCols = parseJson<InfoFieldColumns | undefined>(row.info_field_columns_json, undefined);
+  // 2026-07-31: "file export kết quả cần hiện cả Giám thị coi thi đã kí tên
+  // hay chưa" — signatures now persist via signatures_json (see batch_result.py).
+  // undefined (old rows saved before this field existed) parses to null here,
+  // same "not checked" meaning giamThiLabel() in excelWorkbookBuilder.ts
+  // already treats an empty/null signatures array as.
+  const signatures = parseJson<SignatureCheck[] | null>(row.signatures_json, null);
 
   // Build a flat map of key → concatenated value from info_field_columns
   const ifcValues: Record<string, string | null> = {};
@@ -145,6 +151,7 @@ export function dbRowToOmrResult(row: BatchResultOut): OmrGradeResult & { db_id:
     answers:            parseJson<Record<string, string | null>>(row.answers_json, {}),
     warnings:           parseJson(row.warnings_json, []),
     info_field_columns: infoFieldCols ?? undefined,
+    signatures,
     score: {
       total:   row.total_score,
       max:     null,

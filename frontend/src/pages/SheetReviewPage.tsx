@@ -530,7 +530,7 @@ export default function SheetReviewPage() {
                   : templateVariant === 'sbd4' ? VJU_SBD4_PREVIEW_IMAGE
                   : VJU_SBD8_PREVIEW_IMAGE
                 }
-                height={360}
+                height={460}
               />
             </div>
           </div>

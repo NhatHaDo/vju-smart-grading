@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ZoomIn, X } from 'lucide-react';
 import type { TemplateSchema } from '../../types/grading';
 
 // 2026-07-30: "ở mục chọn template để chấm, chọn mục nào GV cần nhìn được
@@ -52,8 +53,65 @@ const TYPE_BORDER: Record<string, string> = {
   QTYPE_DECIMAL:    '#A5B4FC',
 };
 
-export default function TemplatePreviewThumb({ loading, areas, pageWidth, pageHeight, schema, height = 150, imageUrl }: Props) {
+// 2026-07-31: "mẫu xem trước cần có nút để phóng to" — the preview was a
+// fixed-size box with no way to actually inspect a real reference photo or
+// the areas diagram up close. Small round button in the corner opens the
+// exact same content (photo or SVG diagram) in a full-size lightbox.
+function ZoomButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={e => { e.stopPropagation(); onClick(); }}
+      title="Phóng to"
+      style={{
+        position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: '50%',
+        border: '1px solid #E5E7EB', background: 'rgba(255,255,255,0.92)', cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.12)', color: '#374151',
+      }}
+    >
+      <ZoomIn size={15} />
+    </button>
+  );
+}
+
+function Lightbox({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(17,17,17,0.78)', zIndex: 1000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32,
+      }}
+    >
+      <button
+        type="button"
+        onClick={onClose}
+        title="Đóng"
+        style={{
+          position: 'absolute', top: 20, right: 24, width: 38, height: 38, borderRadius: '50%',
+          border: 'none', background: 'rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}
+      >
+        <X size={20} />
+      </button>
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          maxWidth: '92vw', maxHeight: '90vh', background: '#fff', borderRadius: 12,
+          padding: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'auto',
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export default function TemplatePreviewThumb({ loading, areas, pageWidth, pageHeight, schema, height = 220, imageUrl }: Props) {
   const [imgFailed, setImgFailed] = useState(false);
+  const [zoomOpen, setZoomOpen] = useState(false);
   // 2026-07-30 fix: `imgFailed` used to get stuck permanently once one
   // imageUrl attempt failed (e.g. the initial render defaults to the sbd8
   // variant before an effect restores the actual "last used" sbd4 selection
@@ -62,6 +120,7 @@ export default function TemplatePreviewThumb({ loading, areas, pageWidth, pageHe
   // retried again even after imageUrl pointed at a real, working photo).
   // Reset the failed flag whenever the URL we're asked to show changes.
   useEffect(() => { setImgFailed(false); }, [imageUrl]);
+  useEffect(() => { setZoomOpen(false); }, [imageUrl, areas]);
   const boxStyle = {
     width: '100%', height, borderRadius: 10, border: '1.5px solid #E5E7EB',
     background: '#FAFAFB', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -85,30 +144,45 @@ export default function TemplatePreviewThumb({ loading, areas, pageWidth, pageHe
           onError={() => setImgFailed(true)}
           style={{ width: '100%', height: '100%', objectFit: 'contain' }}
         />
+        <ZoomButton onClick={() => setZoomOpen(true)} />
+        {zoomOpen && (
+          <Lightbox onClose={() => setZoomOpen(false)}>
+            <img src={imageUrl} alt="Ảnh minh họa mẫu phiếu (phóng to)" style={{ maxWidth: '100%', maxHeight: '86vh', objectFit: 'contain' }} />
+          </Lightbox>
+        )}
       </div>
     );
   }
 
   if (areas && areas.length > 0 && pageWidth && pageHeight) {
+    const diagram = (
+      <svg viewBox={`0 0 ${pageWidth} ${pageHeight}`} style={{ width: '100%', height: '100%' }} preserveAspectRatio="xMidYMid meet">
+        <rect x={0} y={0} width={pageWidth} height={pageHeight} fill="#fff" stroke="#D1D5DB" strokeWidth={Math.max(pageWidth, pageHeight) / 250} />
+        {areas.map((a, i) => {
+          if (!a.box || a.box.length !== 4) return null;
+          const [x0, y0, x1, y1] = a.box;
+          const w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+          const fill   = TYPE_COLOR[a.fieldType ?? '']  ?? '#F3F4F6';
+          const stroke = TYPE_BORDER[a.fieldType ?? ''] ?? '#D1D5DB';
+          return (
+            <rect key={i} x={Math.min(x0, x1)} y={Math.min(y0, y1)} width={w} height={h}
+              fill={fill} stroke={stroke} strokeWidth={Math.max(pageWidth, pageHeight) / 400} rx={Math.max(pageWidth, pageHeight) / 200} />
+          );
+        })}
+      </svg>
+    );
     return (
       <div style={boxStyle}>
-        <svg viewBox={`0 0 ${pageWidth} ${pageHeight}`} style={{ width: '100%', height: '100%' }} preserveAspectRatio="xMidYMid meet">
-          <rect x={0} y={0} width={pageWidth} height={pageHeight} fill="#fff" stroke="#D1D5DB" strokeWidth={Math.max(pageWidth, pageHeight) / 250} />
-          {areas.map((a, i) => {
-            if (!a.box || a.box.length !== 4) return null;
-            const [x0, y0, x1, y1] = a.box;
-            const w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
-            const fill   = TYPE_COLOR[a.fieldType ?? '']  ?? '#F3F4F6';
-            const stroke = TYPE_BORDER[a.fieldType ?? ''] ?? '#D1D5DB';
-            return (
-              <rect key={i} x={Math.min(x0, x1)} y={Math.min(y0, y1)} width={w} height={h}
-                fill={fill} stroke={stroke} strokeWidth={Math.max(pageWidth, pageHeight) / 400} rx={Math.max(pageWidth, pageHeight) / 200} />
-            );
-          })}
-        </svg>
+        {diagram}
         <span style={{ position: 'absolute', bottom: 4, right: 6, fontSize: 9.5, color: '#9CA3AF', background: 'rgba(255,255,255,0.85)', padding: '1px 5px', borderRadius: 4 }}>
           Sơ đồ vùng đọc — không phải ảnh thật của phiếu
         </span>
+        <ZoomButton onClick={() => setZoomOpen(true)} />
+        {zoomOpen && (
+          <Lightbox onClose={() => setZoomOpen(false)}>
+            <div style={{ width: '80vw', maxWidth: 700, height: '80vh', maxHeight: 900 }}>{diagram}</div>
+          </Lightbox>
+        )}
       </div>
     );
   }

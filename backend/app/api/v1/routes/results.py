@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security.permissions import require_roles
 from app.database import get_db
+from app.models.exam import Exam
 from app.models.user import User
 from app.repositories.batch_result_repository import BatchResultFilters, BatchResultRepository
 from app.schemas.result_schema import (
@@ -56,6 +57,27 @@ def _row_to_out(row) -> BatchResultOut:
 router = APIRouter(prefix="/results", tags=["results"])
 
 
+# ── Ownership scoping (2026-07-31) ─────────────────────────────────────────────
+# Mirrors exams.py's `owner_id = current_user.id if ... current_user.role ==
+# "teacher" else None` — a teacher only sees/edits/deletes results that belong
+# to an exam they own; admin (and any future non-teacher role) sees everything.
+# Root cause of the bug this fixes: these endpoints previously took
+# `current_user` only to gate on role, never to scope the query, so every
+# teacher account — including a brand-new self-registered one — saw every
+# other teacher's graded sheets.
+
+def _owner_scope(current_user: User) -> int | None:
+    return current_user.id if current_user.role == "teacher" else None
+
+
+def _assert_visible(repo: BatchResultRepository, row, current_user: User) -> None:
+    """Raise 404 (not 403, to avoid revealing the row exists) if `row` isn't
+    visible to `current_user`."""
+    owner_id = _owner_scope(current_user)
+    if owner_id is not None and not repo.is_owned_by(row, owner_id):
+        raise HTTPException(status_code=404, detail=f"Result {row.id} not found")
+
+
 # ── GET /results ──────────────────────────────────────────────────────────────
 
 @router.get(
@@ -81,6 +103,7 @@ def list_results(
         needs_review=needs_review,
         limit=limit,
         offset=offset,
+        owner_id=_owner_scope(current_user),
     )
     items, total = repo.list_all(filters)
     return ResultListOut(total=total, items=[_row_to_out(r) for r in items])
@@ -114,6 +137,11 @@ def save_batch(
             detail="items list is empty",
         )
 
+    if payload.exam_id is not None and current_user.role == "teacher":
+        exam = db.query(Exam).filter(Exam.id == payload.exam_id).first()
+        if exam is None or exam.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail=f"Exam {payload.exam_id} not found")
+
     repo = BatchResultRepository(db)
     rows = repo.create_batch(
         payload.items,
@@ -141,6 +169,7 @@ def get_result(
     row  = repo.get_by_id(result_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"Result {result_id} not found")
+    _assert_visible(repo, row, current_user)
     return _row_to_out(row)
 
 
@@ -156,9 +185,11 @@ def delete_result(
     current_user: User    = Depends(require_roles("admin", "teacher")),
 ) -> dict:
     repo = BatchResultRepository(db)
-    deleted = repo.delete(result_id)
-    if not deleted:
+    row  = repo.get_by_id(result_id)
+    if row is None:
         raise HTTPException(status_code=404, detail=f"Result {result_id} not found")
+    _assert_visible(repo, row, current_user)
+    repo.delete(result_id)
     return {"ok": True, "deleted_id": result_id}
 
 
@@ -175,7 +206,11 @@ def delete_all_results(
     current_user:  User       = Depends(require_roles("admin", "teacher")),
 ) -> dict:
     repo = BatchResultRepository(db)
-    filters = BatchResultFilters(exam_id=exam_id, template_type=template_type)
+    filters = BatchResultFilters(
+        exam_id=exam_id,
+        template_type=template_type,
+        owner_id=_owner_scope(current_user),
+    )
     count = repo.delete_all(filters)
     return {"deleted": count}
 
@@ -201,7 +236,9 @@ def save_correction(
     - Does NOT re-run OMR scoring
     """
     repo = BatchResultRepository(db)
-    row  = repo.save_correction(result_id, payload)
-    if row is None:
+    existing = repo.get_by_id(result_id)
+    if existing is None:
         raise HTTPException(status_code=404, detail=f"Result {result_id} not found")
+    _assert_visible(repo, existing, current_user)
+    row = repo.save_correction(result_id, payload)
     return _row_to_out(row)

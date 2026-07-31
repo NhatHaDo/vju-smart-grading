@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.batch_result import BatchResult
+from app.models.exam import Exam
 from app.schemas.result_schema import ResultBatchSaveItem, ResultCorrectionRequest
 
 
@@ -29,6 +30,13 @@ class BatchResultFilters:
     needs_review:     bool | None = None
     limit:            int         = 200
     offset:           int         = 0
+    # 2026-07-31: "sao t đăng kí đk tk mới mà n đã có sẵn dữ liệu r vậy?" — a
+    # freshly-registered teacher saw every other teacher's graded sheets on
+    # the Dashboard, because this repository never scoped by owner even
+    # though Exam already does (see exams.py's `owner_id = current_user.id
+    # if ... current_user.role == "teacher"`). None = no ownership filter
+    # (admin / internal use); set by the route layer from current_user.
+    owner_id:         int | None  = None
 
 
 class BatchResultRepository:
@@ -40,6 +48,24 @@ class BatchResultRepository:
     def get_by_id(self, result_id: int) -> BatchResult | None:
         return self.db.query(BatchResult).filter(BatchResult.id == result_id).first()
 
+    def is_owned_by(self, row: BatchResult, owner_id: int) -> bool:
+        """
+        True if `row` belongs to an exam owned by `owner_id`.
+        A row with no exam_id (e.g. saved from the /omr-debug playground,
+        which never attaches an exam) can't be attributed to anyone, so it
+        is treated as NOT owned by any teacher — only admin (owner_id=None
+        at the route layer, i.e. no filtering) can see/touch it.
+        """
+        if row.exam_id is None:
+            return False
+        exam = self.db.query(Exam).filter(Exam.id == row.exam_id).first()
+        return exam is not None and exam.owner_id == owner_id
+
+    def _scope_owner(self, q, owner_id: int | None):
+        if owner_id is None:
+            return q
+        return q.join(Exam, Exam.id == BatchResult.exam_id).filter(Exam.owner_id == owner_id)
+
     def list_all(self, filters: BatchResultFilters | None = None) -> tuple[list[BatchResult], int]:
         """
         Returns (items, total_count).
@@ -47,6 +73,7 @@ class BatchResultRepository:
         """
         f = filters or BatchResultFilters()
         q = self.db.query(BatchResult)
+        q = self._scope_owner(q, f.owner_id)
 
         if f.exam_id is not None:
             q = q.filter(BatchResult.exam_id == f.exam_id)
@@ -110,6 +137,7 @@ class BatchResultRepository:
             warnings_json           = _j(item.warnings)           if item.warnings           is not None else None,
             info_field_columns_json = _j(item.info_field_columns) if item.info_field_columns is not None else None,
             debug_paths_json        = _j(item.debug_paths)        if item.debug_paths        is not None else None,
+            signatures_json         = _j(item.signatures)         if item.signatures         is not None else None,
         )
         self.db.add(row)
         self.db.flush()   # get id without committing yet
@@ -218,6 +246,12 @@ class BatchResultRepository:
         """
         f = filters or BatchResultFilters(limit=10_000)
         q = self.db.query(BatchResult)
+        if f.owner_id is not None:
+            # bulk DELETE can't run against a query with a JOIN in most
+            # SQL dialects (incl. SQLite) — filter by an exam_id subquery
+            # instead of the join used in list_all().
+            owned_exam_ids = self.db.query(Exam.id).filter(Exam.owner_id == f.owner_id).scalar_subquery()
+            q = q.filter(BatchResult.exam_id.in_(owned_exam_ids))
         if f.exam_id is not None:
             q = q.filter(BatchResult.exam_id == f.exam_id)
         if f.template_type is not None:
