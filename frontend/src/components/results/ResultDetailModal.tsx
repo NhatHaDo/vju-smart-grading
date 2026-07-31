@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, AlertTriangle, CheckCircle2, Pencil, Save, RotateCcw } from 'lucide-react';
 import type { OmrGradeResult, AnswerKeyStore, ManualCorrection, InfoFieldColumn, TemplateSchema, TemplateAnswerSection, TemplateInfoField, OmrWarning } from '../../types/grading';
 import { VJU_PRESET_SCHEMA, computeScore, resolveAnswerKeyForMaDe, getMaDeValue } from '../../types/grading';
@@ -16,11 +16,12 @@ interface Props {
   onClose: () => void;
   /** Dynamic schema — drives info header + answer grid. Falls back to VJU preset. */
   templateSchema?: TemplateSchema | null;
-  /** 2026-07-30: "check lỗi cần cho GV sửa trực tiếp ở màn view, hiện tại tách
-   *  màn chỉnh sửa ở 1 page khác" — when both are provided, an "Sửa đáp án"
-   *  toggle appears so corrections can be made right here instead of only on
-   *  the separate "Kiểm tra lỗi" page. Omit both to keep this modal read-only
-   *  (e.g. if reused somewhere that shouldn't allow edits). */
+  /** 2026-07-30/31: "check lỗi cần cho GV sửa trực tiếp ở màn view" — when
+   *  both are provided, every answer cell becomes directly clickable to edit
+   *  right here (no separate "edit mode" toggle — 2026-07-31: "t cần sửa đáp
+   *  án ngay trong đây... ấn sửa luôn chứ ko phải ấn vào chỉnh sửa nữa").
+   *  Omit both to keep this modal read-only (e.g. if reused somewhere that
+   *  shouldn't allow edits). */
   onSaveCorrection?: (filename: string, c: ManualCorrection) => void;
   onResetCorrection?: (filename: string) => void;
 }
@@ -79,7 +80,6 @@ function InfoFieldValue({ label, raw, columns }: InfoFieldValueProps) {
 // ── Main component ────────────────────────────────────────────────────────────
 export default function ResultDetailModal({ r, correction, answerKey, onClose, templateSchema, onSaveCorrection, onResetCorrection }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
-  const [editMode, setEditMode] = useState(false);
   const [editInfo, setEditInfo] = useState<Record<string, string>>({});
   const [editAnswers, setEditAnswers] = useState<Record<string, string>>({});
   const canEdit = !!onSaveCorrection;
@@ -119,15 +119,25 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
     );
   }
 
-  function enterEditMode() {
+  // 2026-07-31: "t cần sửa đáp án ngay trong đây, ko phải ấn vào chỉnh sửa
+  // nữa" — this modal used to gate all editing behind a separate "editMode"
+  // toggle (click "Sửa đáp án" first, THEN cells become clickable). Now every
+  // cell is always directly clickable — there's no more separate mode, so
+  // editAnswers/editInfo are seeded once on mount instead of only when a
+  // button was pressed. Saving still requires an explicit "Lưu sửa" click
+  // (confirmed with the user) — only the "enter edit mode" step is gone.
+  function seedEditsFromCurrent() {
     const info: Record<string, string> = {};
     for (const field of schema.infoFields) info[field.key] = startingInfoValue(field);
     const ans: Record<string, string> = {};
     for (const lbl of allAnswerLabels) ans[lbl] = String(answers[lbl] ?? '');
     setEditInfo(info);
     setEditAnswers(ans);
-    setEditMode(true);
   }
+  useEffect(() => {
+    seedEditsFromCurrent();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const setEditAns = (lbl: string, val: string) =>
     setEditAnswers(prev => ({ ...prev, [lbl]: val === '—' ? '' : val }));
   function handleSaveEdit() {
@@ -158,11 +168,25 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
       corrected_answers:      { ...(correction?.corrected_answers ?? {}),      ...changedAnswers },
       updatedAt:               new Date().toISOString(),
     });
-    setEditMode(false);
   }
   function handleResetEdit() {
     if (onResetCorrection) onResetCorrection(r.input?.filename ?? '');
-    setEditMode(false);
+    // Correction is now cleared — reseed the editable fields from the raw,
+    // never-corrected OMR read (not from `answers`/`student_info`, which
+    // still reflect the about-to-be-cleared correction until the parent
+    // re-renders with the updated prop).
+    const info: Record<string, string> = {};
+    for (const field of schema.infoFields) {
+      info[field.key] = String(
+        getInfoFieldValue(r.student_info ?? {}, r.info_field_columns, field)
+        ?? (r.student_info?.[field.key] ?? '')
+        ?? ''
+      );
+    }
+    const ans: Record<string, string> = {};
+    for (const lbl of allAnswerLabels) ans[lbl] = String(r.answers?.[lbl] ?? '');
+    setEditInfo(info);
+    setEditAnswers(ans);
   }
 
   const corrected  = !!correction;
@@ -346,14 +370,6 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                 );
               })()}
             </div>
-            {canEdit && !editMode && (
-              <button
-                onClick={enterEditMode}
-                style={{ border: 'none', background: 'rgba(255,255,255,0.15)', borderRadius: 8, cursor: 'pointer', color: '#fff', padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit' }}
-              >
-                <Pencil size={14} /> Sửa đáp án
-              </button>
-            )}
             <button
               onClick={onClose}
               style={{ border: 'none', background: 'rgba(255,255,255,0.15)', borderRadius: 8, cursor: 'pointer', color: '#fff', padding: 7, display: 'flex', flexShrink: 0 }}
@@ -363,11 +379,14 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
           </div>
         </div>
 
-        {/* ── Edit-mode sticky action bar ── */}
-        {editMode && (
+        {/* ── Sticky action bar — 2026-07-31: always visible when this row is
+           editable (no more separate "edit mode" to enter first). Every cell
+           below is directly clickable; this bar is just where you commit
+           ("Lưu sửa") or discard ("Hủy") whatever you've changed. ── */}
+        {canEdit && (
           <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', background: '#FFF9F9', borderBottom: '1px solid #FECACA' }}>
             <span style={{ fontSize: 12, fontWeight: 700, color: '#C8102E', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Pencil size={13} /> Đang sửa đáp án — sửa trực tiếp bên trái, đối chiếu ảnh gốc bên phải
+              <Pencil size={13} /> Bấm trực tiếp vào ô câu nào cần sửa bên trái — nhớ bấm "Lưu sửa" sau khi xong
             </span>
             <div style={{ flex: 1 }} />
             <button onClick={handleSaveEdit} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#C8102E', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
@@ -378,8 +397,8 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                 <RotateCcw size={13} /> Reset về gốc
               </button>
             )}
-            <button onClick={() => setEditMode(false)} style={{ background: '#fff', color: '#6B7280', border: '1.5px solid #E5E7EB', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
-              Hủy
+            <button onClick={seedEditsFromCurrent} title="Bỏ các thay đổi chưa lưu, quay về đáp án hiện tại" style={{ background: '#fff', color: '#6B7280', border: '1.5px solid #E5E7EB', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+              Hủy sửa
             </button>
           </div>
         )}
@@ -425,8 +444,8 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
               </div>
             )}
 
-            {/* Editable student-info block — edit mode only */}
-            {editMode && schema.infoFields.length > 0 && (
+            {/* Editable student-info block — shown whenever this row is editable */}
+            {canEdit && schema.infoFields.length > 0 && (
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Thông tin sinh viên</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
@@ -444,22 +463,23 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
               </div>
             )}
 
-            {/* Filter + answer grid (read-only) — or editable inputs in edit mode */}
+            {/* Filter + answer grid — every cell is directly clickable to
+               edit when canEdit (2026-07-31: no more separate "edit mode"
+               gate); falls back to plain read-only colored boxes when this
+               modal is reused somewhere without onSaveCorrection. */}
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Chi tiết câu hỏi</div>
-              {!editMode && (
-                <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 10 }}>
-                  {filterButtons.map(f => (
-                    <button key={f.key} onClick={() => setFilter(f.key)} style={{
-                      padding: '3px 10px', borderRadius: 9999, border: '1.5px solid',
-                      borderColor: filter === f.key ? f.color : '#E5E7EB',
-                      background: filter === f.key ? '#F9FAFB' : '#fff',
-                      color: filter === f.key ? f.color : '#9CA3AF',
-                      fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-                    }}>{f.label}</button>
-                  ))}
-                </div>
-              )}
+              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 10 }}>
+                {filterButtons.map(f => (
+                  <button key={f.key} onClick={() => setFilter(f.key)} style={{
+                    padding: '3px 10px', borderRadius: 9999, border: '1.5px solid',
+                    borderColor: filter === f.key ? f.color : '#E5E7EB',
+                    background: filter === f.key ? '#F9FAFB' : '#fff',
+                    color: filter === f.key ? f.color : '#9CA3AF',
+                    fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+                  }}>{f.label}</button>
+                ))}
+              </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {effectiveAnswerSections.length === 0 && (
                   <div style={{ fontSize: 12, color: '#9CA3AF', textAlign: 'center', padding: '12px 0' }}>
@@ -473,105 +493,86 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                   </div>
                 )}
                 {effectiveAnswerSections.map(({ name: section, labels, inputType, options }) => {
-                  if (editMode) {
-                    const isText = inputType === 'text';
-                    const choices = ['—', ...(options && options.length > 0 ? options : CHOICES.slice(1))];
-                    return (
-                      <div key={section}>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: '#6B7280', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{section}</div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                          {labels.map((lbl, idx) => {
-                            const val = editAnswers[lbl] || '';
-                            const original = String(answers[lbl] ?? '');
-                            // 2026-07-31: "khi ấn sửa câu nào đó thì n hiện màu
-                            // vàng cả ô đấy (trong trường hợp bỏ ra thì n lại
-                            // về như cũ)" — purely session-local: turns pastel
-                            // yellow the moment you change a value away from
-                            // what it was when this edit session started, and
-                            // reverts the instant you change it back. No ring,
-                            // no badge, no separate "was corrected before"
-                            // signal here — that only shows up after Lưu, in
-                            // the read-only view below.
-                            const isChanged = val !== original;
-                            const warnQ = warnList.find(w => w.field === lbl);
-                            const isWarned = !!warnQ;
-                            const tip = isChanged
-                              ? `Đã sửa (gốc: ${original || '—'})`
-                              : warnQ ? describeWarning(warnQ) : undefined;
-                            const borderColor = isChanged ? '#FBBF24' : isWarned ? '#C4B5FD' : '#E5E7EB';
-                            const textColor   = isChanged ? '#92400E' : isWarned ? '#6D28D9' : '#1F2937';
-                            const bgColor     = isChanged ? '#FEF9C3' : isWarned ? '#F5F3FF' : '#fff';
-                            if (isText) {
-                              return (
-                                <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                                  <span style={{ fontSize: 9, color: '#9CA3AF' }}>{idx + 1}</span>
-                                  <input
-                                    type="text" value={val} onChange={e => setEditAns(lbl, e.target.value)}
-                                    placeholder="-12.34" title={tip}
-                                    style={{
-                                      padding: '4px 6px', borderRadius: 6, width: 74,
-                                      border: `1.5px solid ${borderColor}`,
-                                      fontSize: 12, fontWeight: 700, color: textColor,
-                                      background: bgColor,
-                                      fontFamily: 'monospace', cursor: 'text', outline: 'none', textAlign: 'center',
-                                    }}
-                                  />
-                                </div>
-                              );
-                            }
-                            return (
-                              <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                                <span style={{ fontSize: 9, color: '#9CA3AF' }}>{idx + 1}</span>
-                                <select
-                                  value={val || '—'} onChange={e => setEditAns(lbl, e.target.value)}
-                                  title={tip}
-                                  style={{
-                                    padding: '4px 2px', borderRadius: 6, width: 42,
-                                    border: `1.5px solid ${borderColor}`,
-                                    fontSize: 12, fontWeight: 700, color: textColor,
-                                    background: bgColor,
-                                    fontFamily: 'inherit', cursor: 'pointer', outline: 'none', textAlign: 'center',
-                                  }}
-                                >
-                                  {choices.map(c => <option key={c} value={c}>{c}</option>)}
-                                </select>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  }
                   const visible = labels.filter(lbl => filter === 'all' || qStatus(lbl) === filter);
                   if (visible.length === 0) return null;
                   const isText = inputType === 'text';
+                  const choices = ['—', ...(options && options.length > 0 ? options : CHOICES.slice(1))];
                   return (
                     <div key={section}>
                       <div style={{ fontSize: 10, fontWeight: 700, color: '#6B7280', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{section}</div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                         {visible.map(lbl => {
                           const st  = qStatus(lbl);
-                          const ans = answers[lbl];
                           const gi  = allAnswerLabels.indexOf(lbl) + 1;
-                          // 2026-07-31: "khi ấn lưu thì câu nào đổi đáp án thì
-                          // n cũng hiện vàng trong kết quả" — same pastel
-                          // yellow as the live edit-mode highlight, filling
-                          // the whole cell (no ring, no badge icon), replacing
-                          // the correct/wrong/blank color for that cell since
-                          // "manually corrected" is the more useful signal
-                          // once it's been reviewed by a human.
-                          const wasCorr = wasCorrected(lbl);
-                          const bg     = wasCorr ? '#FEF9C3' : STATUS_COLOR[st];
-                          const border = wasCorr ? '#FDE68A' : STATUS_BORDER[st];
-                          const textCl = wasCorr ? '#92400E' : STATUS_TEXT[st];
+
+                          if (!canEdit) {
+                            // Plain read-only box (modal reused without edit capability).
+                            const ans = answers[lbl];
+                            const wasCorr = wasCorrected(lbl);
+                            const bg     = wasCorr ? '#FEF9C3' : STATUS_COLOR[st];
+                            const border = wasCorr ? '#FDE68A' : STATUS_BORDER[st];
+                            const textCl = wasCorr ? '#92400E' : STATUS_TEXT[st];
+                            return (
+                              <div key={lbl} title={wasCorr ? 'Đã sửa tay' : undefined} style={{
+                                minWidth: isText ? 74 : 42, height: 42, borderRadius: 8, padding: isText ? '0 6px' : 0,
+                                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1,
+                                background: bg, border: `1.5px solid ${border}`,
+                              }}>
+                                <span style={{ fontSize: 9, color: textCl, fontWeight: 500 }}>C{gi}</span>
+                                <span style={{ fontSize: isText ? 12 : 13, fontWeight: 800, color: textCl, fontFamily: isText ? 'monospace' : 'inherit', whiteSpace: 'nowrap' }}>{ans || '—'}</span>
+                              </div>
+                            );
+                          }
+
+                          // 2026-07-31: "bấm vào ô đỏ là sửa luôn, ko cần ấn
+                          // sửa nữa" — every cell (đúng/sai/trống/cảnh báo) is
+                          // a live dropdown/input at all times. Base color =
+                          // correct/wrong/blank/warn status (same palette as
+                          // the read-only view above), overridden by pastel
+                          // yellow the moment the value differs from the
+                          // saved answer — whether that's a fresh change made
+                          // just now in this session, or a correction already
+                          // saved from a previous session (wasCorrected).
+                          const val = editAnswers[lbl] ?? '';
+                          const original = String(answers[lbl] ?? '');
+                          const isChanged  = val !== original;
+                          const highlight  = isChanged || wasCorrected(lbl);
+                          const warnQ = warnList.find(w => w.field === lbl);
+                          const tip = isChanged
+                            ? `Đã sửa (gốc: ${original || '—'})`
+                            : highlight ? 'Đã sửa tay'
+                            : warnQ ? describeWarning(warnQ) : undefined;
+                          const borderColor = highlight ? '#FDE68A' : STATUS_BORDER[st];
+                          const textColor   = highlight ? '#92400E' : STATUS_TEXT[st];
+                          const bgColor     = highlight ? '#FEF9C3' : STATUS_COLOR[st];
+                          const commonStyle = {
+                            border: `1.5px solid ${borderColor}`,
+                            fontSize: 12, fontWeight: 700, color: textColor,
+                            background: bgColor,
+                            cursor: isText ? 'text' as const : 'pointer' as const, outline: 'none', textAlign: 'center' as const,
+                          };
+                          if (isText) {
+                            return (
+                              <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                                <span style={{ fontSize: 9, color: '#9CA3AF' }}>C{gi}</span>
+                                <input
+                                  type="text" value={val} onChange={e => setEditAns(lbl, e.target.value)}
+                                  placeholder="-12.34" title={tip}
+                                  style={{ ...commonStyle, padding: '4px 6px', borderRadius: 6, width: 74, fontFamily: 'monospace' }}
+                                />
+                              </div>
+                            );
+                          }
                           return (
-                            <div key={lbl} title={wasCorr ? 'Đã sửa tay' : undefined} style={{
-                              minWidth: isText ? 74 : 42, height: 42, borderRadius: 8, padding: isText ? '0 6px' : 0,
-                              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1,
-                              background: bg, border: `1.5px solid ${border}`,
-                            }}>
-                              <span style={{ fontSize: 9, color: textCl, fontWeight: 500 }}>C{gi}</span>
-                              <span style={{ fontSize: isText ? 12 : 13, fontWeight: 800, color: textCl, fontFamily: isText ? 'monospace' : 'inherit', whiteSpace: 'nowrap' }}>{ans || '—'}</span>
+                            <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                              <span style={{ fontSize: 9, color: '#9CA3AF' }}>C{gi}</span>
+                              <select
+                                value={val || '—'} onChange={e => setEditAns(lbl, e.target.value)}
+                                title={tip}
+                                style={{ ...commonStyle, padding: '4px 2px', borderRadius: 6, width: 42, fontFamily: 'inherit' }}
+                              >
+                                {choices.map(c => <option key={c} value={c}>{c}</option>)}
+                              </select>
                             </div>
                           );
                         })}
