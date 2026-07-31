@@ -1,0 +1,19 @@
+# SPA routing for React Router — without this, any deep link (e.g. /app/results,
+# /app/excel-preview) returns Apache's "Not Found" because those paths don't
+# exist as real files on disk; everything must fall through to index.html so
+# React Router can handle the route client-side.
+#
+# 2026-07-31: this file used to live only directly in ~/public_html on the
+# server (never committed to git), so `rsync -av --delete dist/ ~/public_html/`
+# deleted it on every deploy since it doesn't exist in the build output —
+# reintroducing the exact "Not Found" bug it was written to fix. Now lives in
+# frontend/public/, which Vite copies into dist/ on every build, so it always
+# survives `rsync --delete` from here on.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>
