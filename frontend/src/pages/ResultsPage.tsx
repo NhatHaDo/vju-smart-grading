@@ -820,13 +820,14 @@ export default function ResultsPage() {
     ? templateFilteredRows.filter(({ r, missingKeyForMaDe }) => hasWarnings(r) || !!missingKeyForMaDe)
     : templateFilteredRows;
 
-  // Jump straight into "review mode": filter the table to flagged rows and
-  // open the first one so a teacher can start correcting immediately,
-  // without ever leaving this page.
+  // 2026-07-31: "sao ấn kiểm tra ngay thì n đưa vào màn hình này, show cái
+  // list cần ktra là được rồi" — this used to also auto-open the first
+  // flagged row's detail modal, skipping straight past the filtered list.
+  // Just filter the table now; the teacher picks which row to open, and can
+  // get back to the full list via the "Xem tất cả" button that replaces
+  // "Kiểm tra lỗi" in the header while reviewOnly is active.
   const startReview = () => {
-    const flagged = templateFilteredRows.filter(({ r, missingKeyForMaDe }) => hasWarnings(r) || !!missingKeyForMaDe);
     setReviewOnly(true);
-    if (flagged.length > 0) setModalRow(flagged[0].r);
   };
 
   const scores      = visibleScoredRows.map(x => x.sc?.total ?? null).filter((s): s is number => s !== null);
@@ -1062,14 +1063,17 @@ export default function ResultsPage() {
 
         {/* Review-only filter indicator — 2026-07-31: replaces the old
            "Kiểm tra lỗi" separate page; sửa trực tiếp ngay trong bảng này.
-           2026-07-31: bỏ nút "Xem tất cả" ở đây — dùng nút "Xem tất cả" ở
-           header (thay chỗ nút "Kiểm tra lỗi") để thoát chế độ lọc. */}
+           2026-07-31: nút "Xem tất cả" ở header (thay chỗ "Kiểm tra lỗi")
+           không đủ nổi bật — "để ở trên cùng thì ai mà thấy" — nên thêm lại
+           nút ngay trong dải cảnh báo đỏ này, đúng chỗ mắt đang nhìn vào lúc
+           đang lọc. Header vẫn giữ nút toggle làm lối thoát dự phòng. */}
         {reviewOnly && (
-          <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
-            <AlertTriangle size={16} />
-            <div style={{ fontSize: 13 }}>
+          <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
+              <AlertTriangle size={16} />
               Đang chỉ hiện <strong>{warnCount} phiếu cần xem lại</strong> — click hàng để sửa trực tiếp.
             </div>
+            <Button size="sm" variant="outline" icon={<X size={13} />} onClick={() => setReviewOnly(false)}>Xem tất cả</Button>
           </div>
         )}
 
@@ -1106,7 +1110,7 @@ export default function ResultsPage() {
               <div style={{ padding: '48px 24px', textAlign: 'center' }}>
                 <div style={{ fontSize: 32, marginBottom: 10 }}>✅</div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: '#065F46', marginBottom: 4 }}>Không còn phiếu nào cần xem lại</div>
-                <div style={{ fontSize: 12, color: '#6B7280', marginTop: 6 }}>Bấm "Xem tất cả" ở góc trên để quay lại toàn bộ danh sách.</div>
+                <Button size="sm" variant="outline" icon={<X size={13} />} onClick={() => setReviewOnly(false)} style={{ marginTop: 10 }}>Xem tất cả</Button>
               </div>
             ) : (
             <div style={{ overflowX: 'auto' }}>
