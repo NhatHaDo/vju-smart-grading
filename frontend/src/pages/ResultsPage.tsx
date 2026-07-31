@@ -4,8 +4,8 @@ import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import Badge from '../components/common/Badge';
 import PageHeader from '../components/layout/PageHeader';
-import { Download, Eye, AlertTriangle, CheckCircle2, Trash2, ArrowLeft, Key, Database, WifiOff, TableProperties, ChevronDown } from 'lucide-react';
-import type { BatchGradeState, OmrGradeResult, AnswerKeyStore, CorrectionsStore, InfoFieldColumns, TemplateSchema, ManualCorrection } from '../types/grading';
+import { Download, Eye, AlertTriangle, CheckCircle2, Trash2, ArrowLeft, Key, Database, WifiOff, TableProperties, ChevronDown, X } from 'lucide-react';
+import type { BatchGradeState, OmrGradeResult, AnswerKeyStore, CorrectionsStore, InfoFieldColumns, TemplateSchema, ManualCorrection, ProctorInfo } from '../types/grading';
 import { TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, loadAnswerKey, loadCorrections, saveCorrections, clearCorrections, computeScore, applyCorrection, resolveAnswerKeyForMaDe, isMultiMaDe, correctionKey, getMaDeValue } from '../types/grading';
 import ResultDetailModal from '../components/results/ResultDetailModal';
 import ExcelPreviewModal from '../components/results/ExcelPreviewModal';
@@ -134,9 +134,20 @@ function hasInfoMultiMark(r: OmrGradeResult): boolean {
 
 /** OMR-detected missing signatures ("CÁN BỘ COI THI/CHẤM THI" boxes left
  *  blank) — null/undefined `signatures` means "not checked" (custom
- *  template), not "all missing", so that case returns []. */
-function missingSignatures(r: OmrGradeResult): string[] {
-  return (r.signatures ?? []).filter(s => !s.present).map(s => s.label);
+ *  template), not "all missing", so that case returns [].
+ *
+ * 2026-07-31: "thế thì cần tick làm gì? phải là nếu ko tick thì ko phát hiện
+ * chứ nhỉ" — this used to flag every unsigned box regardless of the "Có cán
+ * bộ coi thi / chấm thi" checkboxes on Answer Key, making those checkboxes
+ * decorative. Now gated: a missing coi_thi_* box only becomes a warning if
+ * "Có cán bộ coi thi" is ticked for this row's mã đề (same for cham_thi) —
+ * unticked = that role isn't expected on this đề, so an empty box isn't
+ * a problem worth flagging. */
+function missingSignatures(r: OmrGradeResult, proctors: ProctorInfo | null | undefined): string[] {
+  return (r.signatures ?? [])
+    .filter(s => !s.present)
+    .filter(s => !!proctors?.[s.key.startsWith('coi_thi') ? 'coi_thi' : 'cham_thi'])
+    .map(s => s.label);
 }
 
 function infoFieldMultiMarkTooltip(
@@ -223,7 +234,7 @@ function fmtDate(iso: string) {
 
 // ── RealRow ────────────────────────────────────────────────────────────────
 
-function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, onOpen, onDelete, infoFields, showTemplateCol, templateLabel, selected, onToggleSelect }: {
+function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, onOpen, onDelete, infoFields, showTemplateCol, templateLabel, selected, onToggleSelect, proctors }: {
   idx:             number;
   r:               OmrGradeResult;
   merged:          { student_info: OmrGradeResult['student_info']; answers: Record<string, string | null> };
@@ -240,10 +251,12 @@ function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, 
   templateLabel?:  string;
   selected:        boolean;
   onToggleSelect:  () => void;
+  /** "Có cán bộ coi thi/chấm thi" checkboxes for this row's mã đề — gates missingSignatures(). */
+  proctors:        ProctorInfo | null;
 }) {
   const warn      = hasWarnings(r) || !!missingKeyForMaDe;
   const hasIMM    = hasInfoMultiMark(r);
-  const missingSigs = missingSignatures(r);
+  const missingSigs = missingSignatures(r, proctors);
   const info   = merged.student_info;
   const ifc    = r.info_field_columns;
 
@@ -772,7 +785,7 @@ export default function ResultsPage() {
     const { key, missingKeyForMaDe } = hasKey
       ? resolveAnswerKeyForMaDe(answerKey, maDeValue)
       : { key: null, missingKeyForMaDe: false };
-    return { r, merged, corr, sc: key ? computeScore(merged.answers ?? {}, key) : null, missingKeyForMaDe, maDeValue };
+    return { r, merged, corr, sc: key ? computeScore(merged.answers ?? {}, key) : null, missingKeyForMaDe, maDeValue, proctors: key?.proctors ?? null };
   });
 
   // 2026-07-30: "check lỗi cần cho GV sửa trực tiếp ở màn view, hiện tại đang
@@ -834,9 +847,15 @@ export default function ResultsPage() {
         actions={<>
           <Button variant="secondary" size="sm" icon={<ArrowLeft size={14} />} onClick={() => navigate('/app/upload')}>Quay lại Upload</Button>
           {hasBatch && (
-            <Button variant="secondary" size="sm" icon={<AlertTriangle size={14} />} onClick={startReview}>
-              Kiểm tra lỗi
-            </Button>
+            reviewOnly ? (
+              <Button variant="secondary" size="sm" icon={<X size={14} />} onClick={() => setReviewOnly(false)}>
+                Xem tất cả
+              </Button>
+            ) : (
+              <Button variant="secondary" size="sm" icon={<AlertTriangle size={14} />} onClick={startReview}>
+                Kiểm tra lỗi
+              </Button>
+            )
           )}
           {hasBatch && (
             <Button variant="secondary" size="sm" icon={<TableProperties size={14} />}
@@ -1042,14 +1061,15 @@ export default function ResultsPage() {
         )}
 
         {/* Review-only filter indicator — 2026-07-31: replaces the old
-           "Kiểm tra lỗi" separate page; sửa trực tiếp ngay trong bảng này. */}
+           "Kiểm tra lỗi" separate page; sửa trực tiếp ngay trong bảng này.
+           2026-07-31: bỏ nút "Xem tất cả" ở đây — dùng nút "Xem tất cả" ở
+           header (thay chỗ nút "Kiểm tra lỗi") để thoát chế độ lọc. */}
         {reviewOnly && (
-          <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-              <AlertTriangle size={16} />
+          <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <AlertTriangle size={16} />
+            <div style={{ fontSize: 13 }}>
               Đang chỉ hiện <strong>{warnCount} phiếu cần xem lại</strong> — click hàng để sửa trực tiếp.
             </div>
-            <Button size="sm" variant="outline" onClick={() => setReviewOnly(false)}>Xem tất cả →</Button>
           </div>
         )}
 
@@ -1086,7 +1106,7 @@ export default function ResultsPage() {
               <div style={{ padding: '48px 24px', textAlign: 'center' }}>
                 <div style={{ fontSize: 32, marginBottom: 10 }}>✅</div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: '#065F46', marginBottom: 4 }}>Không còn phiếu nào cần xem lại</div>
-                <Button size="sm" variant="outline" onClick={() => setReviewOnly(false)} style={{ marginTop: 8 }}>Xem tất cả →</Button>
+                <div style={{ fontSize: 12, color: '#6B7280', marginTop: 6 }}>Bấm "Xem tất cả" ở góc trên để quay lại toàn bộ danh sách.</div>
               </div>
             ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -1112,12 +1132,13 @@ export default function ResultsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleScoredRows.map(({ r, merged, corr, sc, missingKeyForMaDe, maDeValue }, i) => (
+                  {visibleScoredRows.map(({ r, merged, corr, sc, missingKeyForMaDe, maDeValue, proctors }, i) => (
                     <RealRow
                       key={r.db_id ?? r.input?.filename ?? i}
                       idx={i + 1} r={r} merged={merged} corrected={!!corr} sc={sc}
                       missingKeyForMaDe={missingKeyForMaDe}
                       maDeValue={maDeValue}
+                      proctors={proctors}
                       onOpen={() => setModalRow(r)}
                       onDelete={() => handleDeleteRow(r.input?.filename ?? '', r.db_id)}
                       infoFields={activeInfoFields}

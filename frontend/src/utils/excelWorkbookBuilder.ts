@@ -20,6 +20,7 @@ import type {
   BatchGradeState,
   TemplateSchema,
   TemplateInfoField,
+  ProctorInfo,
 } from '../types/grading';
 import { computeScore, computeSectionScores, formatScoring, activeQuestionPoints, applyCorrection, TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, resolveAnswerKeyForMaDe, correctionKey, getMaDeValue, isMultiMaDe } from '../types/grading';
 
@@ -182,8 +183,15 @@ function statusLabel(r: OmrGradeResult, corrected: boolean): string {
 // coi thi, not người chấm thi. null/empty signatures = not checked (custom
 // template with no calibrated boxes, or backend too old) → '—', not "chưa
 // ký", so this doesn't falsely flag templates that were never checked.
-function giamThiLabel(r: OmrGradeResult): string {
-  const sigs = (r.signatures ?? []).filter(s => s.key === 'coi_thi_1' || s.key === 'coi_thi_2');
+// 2026-07-31 (same day): "thế thì cần tick làm gì? nếu ko tick thì ko phát
+// hiện chứ nhỉ" — a missing ("✗") box only counts if "Có cán bộ coi thi" is
+// ticked for this row's mã đề on Answer Key, same gating as the Results
+// table / detail modal. Present ("✓") boxes still show regardless.
+function giamThiLabel(r: OmrGradeResult, proctors: ProctorInfo | null | undefined): string {
+  const required = !!proctors?.coi_thi;
+  const sigs = (r.signatures ?? [])
+    .filter(s => s.key === 'coi_thi_1' || s.key === 'coi_thi_2')
+    .filter(s => s.present || required);
   if (sigs.length === 0) return '—';
   return sigs.map(s => `${s.present ? '✓' : '✗'} ${s.label}`).join(' · ');
 }
@@ -517,7 +525,7 @@ function buildBangDiem(
     row.getCell(sc0 + 4).value = scoringText;
     row.getCell(sc0 + 5).value = statusLabel(r, isCorrected);
     row.getCell(sc0 + 6).value = review ? 'Có' : 'Không';
-    row.getCell(sc0 + 7).value = giamThiLabel(r);
+    row.getCell(sc0 + 7).value = giamThiLabel(r, akForRow?.proctors);
 
     styleDataRow(row, NCOLS, isAlt);
     aln(row.getCell(sc0 + 3), 'center');

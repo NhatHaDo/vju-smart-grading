@@ -568,7 +568,11 @@ export function resolveAnswerKeyForMaDe(
 ): { key: AnswerKeySet | null; missingKeyForMaDe: boolean } {
   if (!store) return { key: null, missingKeyForMaDe: false };
   if (!isMultiMaDe(store)) {
-    return { key: { answers: store.answers, scoring: store.scoring, updatedAt: store.updatedAt }, missingKeyForMaDe: false };
+    // 2026-07-31: "thế thì cần tick làm gì? phải là nếu ko tick thì ko phát
+    // hiện chứ nhỉ" — `proctors` used to be dropped here in single-đề mode,
+    // so nothing downstream (the "Thiếu chữ ký" warning) could ever gate on
+    // it. Carrying it through is what makes that gating possible.
+    return { key: { answers: store.answers, scoring: store.scoring, updatedAt: store.updatedAt, proctors: store.proctors }, missingKeyForMaDe: false };
   }
   const trimmed = (maDe ?? '').trim();
   const set = trimmed ? store.byMaDe![trimmed] : undefined;

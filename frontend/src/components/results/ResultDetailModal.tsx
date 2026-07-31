@@ -314,24 +314,37 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
               {/* "ở góc trên bên trái: có 2 chữ kí, cần xác định được điều
                  này ở mỗi bài với OMR" — mean-pixel ink check in the 4
                  CÁN BỘ COI THI/CHẤM THI boxes. null/undefined = not
-                 checked (custom template), not "all missing". */}
-              {r.signatures && r.signatures.length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                  {r.signatures.map(s => (
-                    <span
-                      key={s.key}
-                      title={s.present ? undefined : `Ô "${s.label}" có vẻ chưa được ký (mean=${s.mean_gray})`}
-                      style={{
-                        fontSize: 10.5, fontWeight: 700, borderRadius: 9999, padding: '2px 8px',
-                        background: s.present ? 'rgba(255,255,255,0.15)' : '#FCD34D',
-                        color: s.present ? 'rgba(255,255,255,0.85)' : '#78350F',
-                      }}
-                    >
-                      {s.present ? '✓' : '✗'} {s.label}
-                    </span>
-                  ))}
-                </div>
-              )}
+                 checked (custom template), not "all missing".
+                 2026-07-31: "thế thì cần tick làm gì? nếu ko tick thì ko
+                 phát hiện chứ nhỉ" — a missing box only gets the alarming
+                 "✗ chưa ký" treatment if "Có cán bộ coi thi/chấm thi" is
+                 ticked for this row's mã đề on Answer Key; an unticked role
+                 isn't expected here at all, so its empty box isn't shown as
+                 a problem. Present (✓) boxes still show regardless — that's
+                 just good news, never confusing. */}
+              {(() => {
+                const isRoleRequired = (key: string) =>
+                  !!rowAnswerKey?.proctors?.[key.startsWith('coi_thi') ? 'coi_thi' : 'cham_thi'];
+                const visibleSigs = (r.signatures ?? []).filter(s => s.present || isRoleRequired(s.key));
+                if (visibleSigs.length === 0) return null;
+                return (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                    {visibleSigs.map(s => (
+                      <span
+                        key={s.key}
+                        title={s.present ? undefined : `Ô "${s.label}" có vẻ chưa được ký (mean=${s.mean_gray})`}
+                        style={{
+                          fontSize: 10.5, fontWeight: 700, borderRadius: 9999, padding: '2px 8px',
+                          background: s.present ? 'rgba(255,255,255,0.15)' : '#FCD34D',
+                          color: s.present ? 'rgba(255,255,255,0.85)' : '#78350F',
+                        }}
+                      >
+                        {s.present ? '✓' : '✗'} {s.label}
+                      </span>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
             {canEdit && !editMode && (
               <button
