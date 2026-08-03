@@ -8,6 +8,7 @@
 
 import type { OmrGradeResult, AnswerKeyStore, CorrectionsStore, BatchGradeState } from '../../types/grading';
 import { TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, computeScore, applyCorrection, resolveAnswerKeyForMaDe, isMultiMaDe, correctionKey, getMaDeValue } from '../../types/grading';
+import { correctionHasChanges } from '../../utils/resultMapping';
 
 // ── VJU palette ───────────────────────────────────────────────────────────────
 
@@ -259,7 +260,9 @@ export default function ExcelLikePreview({
           {/* ── Data rows ─────────────────────────────────────────────────── */}
           {scored.map(({ r, merged, corr, sc }, i) => {
             const info      = merged.student_info ?? r.student_info ?? {};
-            const corrected = !!corr;
+            // 2026-08-04: "t ko sửa gì mà ấn lưu sửa thì n hiện đã sửa tay
+            // ngay?" — see correctionHasChanges() doc-comment (resultMapping.ts).
+            const corrected = correctionHasChanges(corr, r, schema.infoFields);
             const review    = needsReview(r);
             const isAlt     = i % 2 === 1;
             const rowBg     = r._error ? P.errBg : corrected ? '#F8FFF8' : isAlt ? P.rowAlt : P.rowNorm;

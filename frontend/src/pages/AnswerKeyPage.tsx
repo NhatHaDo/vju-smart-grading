@@ -801,6 +801,25 @@ export default function AnswerKeyPage() {
     setDoneCount(0);
     setGradingError(null);
 
+    // 2026-08-03: "để câu đúng xanh câu sai đỏ câu lỗi vàng" — the backend
+    // now colors the "Ảnh detect" overlay by correctness when an answer key
+    // is sent with the grading request (see omr.py's debug-grade route +
+    // engine.py). Multi-mã-đề exams can't resolve which flat key applies
+    // until the sheet's mã đề is detected server-side, so send a wrapper
+    // instead of a flat key in that case — engine.py resolves it after
+    // reading the mã đề (see engine.py _execute() Step 8).
+    const answerKeyPayload = isMultiMaDe(store)
+      ? {
+          byMaDe: Object.fromEntries(
+            Object.entries(store.byMaDe ?? {}).map(([maDe, set]) => [maDe, set.answers]),
+          ),
+          default: store.answers,
+        }
+      : (store.answers && Object.keys(store.answers).length > 0 ? store.answers : null);
+    const answerKeyParam = answerKeyPayload
+      ? `&answer_key_json=${encodeURIComponent(JSON.stringify(answerKeyPayload))}`
+      : '';
+
     const results: OmrGradeResult[] = [];
 
     for (const rawFile of gradingFiles) {
@@ -826,8 +845,8 @@ export default function AnswerKeyPage() {
       formData.append('image', uploadFile);
       try {
         const url = templateMode === 'custom' && customTemplateId != null
-          ? `${API_BASE}?mean_mode=circle_mask&full_debug=true&template_id=${customTemplateId}&image_source=${imageSource}`
-          : `${API_BASE}?mean_mode=circle_mask&full_debug=true&template_variant=${templateVariant}&image_source=${imageSource}`;
+          ? `${API_BASE}?mean_mode=circle_mask&full_debug=true&template_id=${customTemplateId}&image_source=${imageSource}${answerKeyParam}`
+          : `${API_BASE}?mean_mode=circle_mask&full_debug=true&template_variant=${templateVariant}&image_source=${imageSource}${answerKeyParam}`;
         const res = await fetch(url, { method: 'POST', body: formData });
         if (!res.ok) {
           const errText = await res.text();

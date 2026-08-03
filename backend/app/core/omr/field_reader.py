@@ -172,10 +172,21 @@ def _read_row_field(
         )
 
     if len(marked) > 1:
+        # 2026-08-04: "kiểu câu này multi 2 đáp án A và C thì phải ghi cả
+        # 'AC' như này chứ" — used to leave selected_value=None here (an MCQ
+        # multi-mark was "an error, no answer" by design — see this
+        # function's docstring), showing blank/"—" even though the sheet
+        # clearly has 2+ bubbles filled in. Now concatenates the marked
+        # values in template/bubble order (readings is guaranteed to be in
+        # bubble_value order — see read_field()'s docstring), same
+        # convention _read_column_int_field() already uses for INT columns.
+        # Status stays MULTI_MARK (still flagged "cần xem lại phiếu gốc" —
+        # scorer.py only awards credit when status == ANSWERED, so this never
+        # silently counts as correct just because it now has a display value).
         return FieldResult(
             field_label=field_label,
             field_type=field_type,
-            selected_value=None,
+            selected_value="".join(selected_values),
             selected_values=selected_values,
             status=FieldStatus.MULTI_MARK,
             fill_ratios=fill_ratios,

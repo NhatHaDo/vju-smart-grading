@@ -3,7 +3,7 @@
  * Imported by ResultsPage, ReviewErrorsPage, ExcelPreviewPage.
  */
 
-import type { OmrGradeResult, InfoFieldColumns, TemplateInfoField, OmrStudentInfo, SignatureCheck } from '../types/grading';
+import type { OmrGradeResult, InfoFieldColumns, TemplateInfoField, OmrStudentInfo, SignatureCheck, ManualCorrection } from '../types/grading';
 import type { BatchResultOut } from '../services/apiClient';
 
 // ── JSON parse helper ─────────────────────────────────────────────────────────
@@ -146,6 +146,10 @@ export function dbRowToOmrResult(row: BatchResultOut): OmrGradeResult & { db_id:
     template_type:        row.template_type,
     template_id:          row.template_id,
     template_variant_row: row.template_variant,
+    // 2026-08-03: "lượt chấm" filter on ResultsPage/Excel export needs each
+    // row's own grading timestamp — previously silently dropped here even
+    // though BatchResultOut always carries it.
+    graded_at:            row.graded_at ?? null,
     input:   { filename: row.file_name ?? '(unknown)', saved_as: '' },
     student_info,
     answers:            parseJson<Record<string, string | null>>(row.answers_json, {}),
@@ -174,4 +178,42 @@ export function dbRowToOmrResult(row: BatchResultOut): OmrGradeResult & { db_id:
       means_json_path:           null,
     },
   };
+}
+
+// ── correctionHasChanges ──────────────────────────────────────────────────────
+
+/**
+ * True only if `correction` actually differs from the row's raw OMR read —
+ * not merely "a correction record exists".
+ *
+ * 2026-08-04: "t ko sửa gì mà ấn lưu sửa thì n hiện đã sửa tay ngay?" —
+ * ResultDetailModal's "Lưu sửa" always creates/updates a correction record
+ * the instant it's clicked, even with zero actual edits (first save on a
+ * never-corrected row → `{ corrected_answers: {}, corrected_student_info: {} }`,
+ * a non-null but content-free correction). Both the modal's header badge and
+ * ResultsPage's table-row badge used to treat "correction exists" as "was
+ * manually corrected" — this instead compares every key IN the correction
+ * against the raw, never-mutated OMR value, same self-healing pattern
+ * ResultDetailModal's wasCorrected() already uses per-question.
+ */
+export function correctionHasChanges(
+  correction: ManualCorrection | undefined,
+  r: OmrGradeResult,
+  infoFields: TemplateInfoField[],
+): boolean {
+  if (!correction) return false;
+
+  const answersChanged = !!correction.corrected_answers && Object.entries(correction.corrected_answers).some(
+    ([lbl, v]) => String(v ?? '') !== String(r.answers?.[lbl] ?? ''),
+  );
+  if (answersChanged) return true;
+
+  if (!correction.corrected_student_info) return false;
+  return Object.entries(correction.corrected_student_info).some(([key, v]) => {
+    const field = infoFields.find(f => f.key === key);
+    const rawVal = field
+      ? String(getInfoFieldValue(r.student_info ?? {}, r.info_field_columns, field) ?? (r.student_info?.[key] ?? '') ?? '')
+      : String(r.student_info?.[key] ?? '');
+    return String(v ?? '') !== rawVal;
+  });
 }

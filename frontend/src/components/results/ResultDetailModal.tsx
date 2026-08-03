@@ -3,7 +3,7 @@ import { X, AlertTriangle, CheckCircle2, Pencil, Save, RotateCcw } from 'lucide-
 import type { OmrGradeResult, AnswerKeyStore, ManualCorrection, InfoFieldColumn, TemplateSchema, TemplateAnswerSection, TemplateInfoField, OmrWarning } from '../../types/grading';
 import { VJU_PRESET_SCHEMA, computeScore, resolveAnswerKeyForMaDe, getMaDeValue } from '../../types/grading';
 import { buildSchemaFromAnswerKeys } from '../../utils/templateSchema';
-import { getInfoFieldValue } from '../../utils/resultMapping';
+import { getInfoFieldValue, correctionHasChanges } from '../../utils/resultMapping';
 import SheetImageViewer from './SheetImageViewer';
 
 type Filter = 'all' | 'correct' | 'wrong' | 'blank' | 'warn';
@@ -26,9 +26,22 @@ interface Props {
   onResetCorrection?: (filename: string) => void;
 }
 
-const STATUS_COLOR:  Record<string, string> = { correct:'#D1FAE5', wrong:'#FEE2E2', blank:'#fff',     warn:'#EDE9FE', 'no-key':'#F3F4F6' };
-const STATUS_TEXT:   Record<string, string> = { correct:'#065F46', wrong:'#991B1B', blank:'#9CA3AF', warn:'#5B21B6', 'no-key':'#6B7280' };
-const STATUS_BORDER: Record<string, string> = { correct:'#6EE7B7', wrong:'#FCA5A5', blank:'#E5E7EB', warn:'#C4B5FD', 'no-key':'#E5E7EB' };
+// 2026-08-03: "màu match với ảnh detect thì mới dễ nhìn chứ" — "warn" (Cần
+// xem — multi-mark/too-light/needs-review) used to be purple here, but the
+// "Ảnh detect" overlay colors the exact same thing ("câu lỗi") yellow. Recolor
+// warn to a golden yellow to match. correct/wrong were already green/red,
+// matching the overlay as-is — no change needed there.
+// 2026-08-04: "đã sửa thì đổi thành tím đi, để vàng như kia sao phân biệt" —
+// "manually corrected" no longer reuses any shade of yellow (it used to
+// flatten the cell to pale yellow #FEF9C3/#FDE68A, which — after the warn
+// recolor above — looked confusingly similar to "cần xem"). Tried a border-
+// only purple first, but "t muốn nó tô full ô" — now a full light-purple
+// fill (bg #EDE9FE / border #C4B5FD / text #5B21B6) instead, same full-cell
+// treatment as before, just purple instead of yellow — see the answer grid
+// rendering below.
+const STATUS_COLOR:  Record<string, string> = { correct:'#D1FAE5', wrong:'#FEE2E2', blank:'#fff',     warn:'#FEF3C7', 'no-key':'#F3F4F6' };
+const STATUS_TEXT:   Record<string, string> = { correct:'#065F46', wrong:'#991B1B', blank:'#9CA3AF', warn:'#78350F', 'no-key':'#6B7280' };
+const STATUS_BORDER: Record<string, string> = { correct:'#6EE7B7', wrong:'#FCA5A5', blank:'#E5E7EB', warn:'#F5C518', 'no-key':'#E5E7EB' };
 
 // ── InfoFieldValue ────────────────────────────────────────────────────────────
 interface InfoFieldValueProps {
@@ -189,7 +202,10 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
     setEditAnswers(ans);
   }
 
-  const corrected  = !!correction;
+  // 2026-08-04: "t ko sửa gì mà ấn lưu sửa thì n hiện đã sửa tay ngay?" — see
+  // correctionHasChanges() doc-comment. A correction record existing is not
+  // the same as it holding any real difference from the raw OMR read.
+  const corrected  = correctionHasChanges(correction, r, schema.infoFields);
   const warnList   = r.warnings ?? [];
   const hasWarning = warnList.length > 0;
   const debug      = r.debug ?? {};
@@ -267,6 +283,17 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
     if (!ans) return 'blank';
     return ans === key ? 'correct' : 'wrong';
   }
+
+  // 2026-08-04: "cái nút huỷ sửa đang ko hoạt động? t cx ko hiểu chức năng
+  // của nút đấy?" — "Hủy sửa" discards unsaved edits made THIS session (goes
+  // back to the last-saved answer), separate from "Reset về kết quả gốc"
+  // (wipes any correction entirely, back to the raw OMR read). When nothing
+  // is actually unsaved, clicking it visibly does nothing — which looked
+  // broken. Disabling it in that state makes "nothing to undo" obvious
+  // instead of looking like a dead button.
+  const hasUnsavedChanges =
+    allAnswerLabels.some(lbl => (editAnswers[lbl] ?? '') !== String(answers[lbl] ?? '')) ||
+    schema.infoFields.some(field => (editInfo[field.key] ?? '') !== startingInfoValue(field));
 
   const filterButtons: { key: Filter; label: string; color: string }[] = [
     { key: 'all',     label: 'Tất cả',   color: '#374151' },
@@ -397,7 +424,19 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                 <RotateCcw size={13} /> Reset về kết quả gốc
               </button>
             )}
-            <button onClick={seedEditsFromCurrent} title="Bỏ các thay đổi chưa lưu, quay về đáp án hiện tại" style={{ background: '#fff', color: '#6B7280', border: '1.5px solid #E5E7EB', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+            <button
+              onClick={seedEditsFromCurrent}
+              disabled={!hasUnsavedChanges}
+              title={hasUnsavedChanges ? 'Bỏ các thay đổi chưa lưu (chưa bấm "Lưu sửa"), quay về đáp án đang lưu' : 'Chưa có thay đổi nào để huỷ'}
+              style={{
+                background: '#fff',
+                color: hasUnsavedChanges ? '#6B7280' : '#D1D5DB',
+                border: `1.5px solid ${hasUnsavedChanges ? '#E5E7EB' : '#F3F4F6'}`,
+                borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600,
+                cursor: hasUnsavedChanges ? 'pointer' : 'not-allowed',
+                fontFamily: 'inherit',
+              }}
+            >
               Hủy sửa
             </button>
           </div>
@@ -507,11 +546,21 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
 
                           if (!canEdit) {
                             // Plain read-only box (modal reused without edit capability).
+                            // 2026-08-04: "lúc sửa thì n là tím nma lưu sửa
+                            // r thì nó sẽ nhảy màu theo cái so sánh với kết
+                            // quả. đúng thì xanh, sai thì đỏ" — purple is only
+                            // for a LIVE, unsaved in-progress edit (see the
+                            // editable branch below); this read-only view has
+                            // no such draft state (it only ever shows already-
+                            // saved data), so it always shows the real
+                            // correct/wrong/blank/warn status — no purple
+                            // here. `wasCorrected` is kept only as a hover
+                            // tooltip, not a color override.
                             const ans = answers[lbl];
                             const wasCorr = wasCorrected(lbl);
-                            const bg     = wasCorr ? '#FEF9C3' : STATUS_COLOR[st];
-                            const border = wasCorr ? '#FDE68A' : STATUS_BORDER[st];
-                            const textCl = wasCorr ? '#92400E' : STATUS_TEXT[st];
+                            const bg     = STATUS_COLOR[st];
+                            const border = STATUS_BORDER[st];
+                            const textCl = STATUS_TEXT[st];
                             return (
                               <div key={lbl} title={wasCorr ? 'Đã sửa tay' : undefined} style={{
                                 minWidth: isText ? 74 : 42, height: 42, borderRadius: 8, padding: isText ? '0 6px' : 0,
@@ -526,25 +575,32 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
 
                           // 2026-07-31: "bấm vào ô đỏ là sửa luôn, ko cần ấn
                           // sửa nữa" — every cell (đúng/sai/trống/cảnh báo) is
-                          // a live dropdown/input at all times. Base color =
-                          // correct/wrong/blank/warn status (same palette as
-                          // the read-only view above), overridden by pastel
-                          // yellow the moment the value differs from the
-                          // saved answer — whether that's a fresh change made
-                          // just now in this session, or a correction already
-                          // saved from a previous session (wasCorrected).
+                          // a live dropdown/input at all times.
+                          // 2026-08-04: "lúc sửa thì n là tím nma lưu sửa r
+                          // thì nó sẽ nhảy màu theo cái so sánh với kết quả.
+                          // đúng thì xanh, sai thì đỏ" — purple (full-cell
+                          // fill) is ONLY for a live, unsaved in-progress edit
+                          // (isChanged — val differs from the last-SAVED
+                          // answer, right now, this session). The instant
+                          // it's saved, `original` catches up to the new
+                          // value and isChanged goes back to false, so the
+                          // cell "jumps" to its real correct/wrong/blank/warn
+                          // colour — a correction that was already saved in
+                          // an earlier session (wasCorrected) no longer gets
+                          // any special colour on its own, just an
+                          // informational tooltip.
                           const val = editAnswers[lbl] ?? '';
                           const original = String(answers[lbl] ?? '');
                           const isChanged  = val !== original;
-                          const highlight  = isChanged || wasCorrected(lbl);
+                          const highlight  = isChanged;
                           const warnQ = warnList.find(w => w.field === lbl);
                           const tip = isChanged
                             ? `Đã sửa (gốc: ${original || '—'})`
-                            : highlight ? 'Đã sửa tay'
+                            : wasCorrected(lbl) ? 'Đã sửa tay'
                             : warnQ ? describeWarning(warnQ) : undefined;
-                          const borderColor = highlight ? '#FDE68A' : STATUS_BORDER[st];
-                          const textColor   = highlight ? '#92400E' : STATUS_TEXT[st];
-                          const bgColor     = highlight ? '#FEF9C3' : STATUS_COLOR[st];
+                          const borderColor = highlight ? '#C4B5FD' : STATUS_BORDER[st];
+                          const textColor   = highlight ? '#5B21B6' : STATUS_TEXT[st];
+                          const bgColor     = highlight ? '#EDE9FE' : STATUS_COLOR[st];
                           const commonStyle = {
                             border: `1.5px solid ${borderColor}`,
                             fontSize: 12, fontWeight: 700, color: textColor,
@@ -563,6 +619,19 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                               </div>
                             );
                           }
+                          // 2026-08-04: "kiểu câu này multi 2 đáp án A và C
+                          // thì phải ghi cả 'AC' như này chứ" — a multi-marked
+                          // MCQ question now arrives as a combined value like
+                          // "AC" (see field_reader.py's _read_row_field), not
+                          // blank. A native <select> can only show a value
+                          // that's one of its own <option>s, so without this
+                          // it would silently fail to display "AC" at all —
+                          // add it as an extra option on top of the normal
+                          // A/B/C/D choices whenever the current value isn't
+                          // already one of them.
+                          const selectChoices = choices.includes(val) || !val
+                            ? choices
+                            : [val, ...choices];
                           return (
                             <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
                               <span style={{ fontSize: 9, color: '#9CA3AF' }}>C{gi}</span>
@@ -571,7 +640,7 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                                 title={tip}
                                 style={{ ...commonStyle, padding: '4px 2px', borderRadius: 6, width: 42, fontFamily: 'inherit' }}
                               >
-                                {choices.map(c => <option key={c} value={c}>{c}</option>)}
+                                {selectChoices.map(c => <option key={c} value={c}>{c}</option>)}
                               </select>
                             </div>
                           );

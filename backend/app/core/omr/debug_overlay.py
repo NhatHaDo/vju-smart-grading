@@ -36,12 +36,23 @@ from app.core.templates.template_loader import BubbleSpec, VJUTemplate
 # ── Colour palette (BGR) ──────────────────────────────────────────────────
 
 CLR_BUBBLE_DEFAULT = (150, 150, 150)   # gray        — no results / unread
-CLR_BUBBLE_MARKED  = (0,   200, 0)     # green       — MARKED / ANSWERED
+CLR_BUBBLE_MARKED  = (0,   200, 0)     # green       — MARKED / ANSWERED (also "đúng" when answer-key correctness is known)
 CLR_BUBBLE_BLANK   = (130, 130, 130)   # gray        — BLANK
 CLR_BUBBLE_LIGHT   = (0,   140, 255)   # orange      — TOO_LIGHT
-CLR_BUBBLE_MULTI   = (0,   0,   210)   # red         — MULTI_MARK
+CLR_BUBBLE_MULTI   = (0,   0,   210)   # red         — MULTI_MARK (also "sai" when answer-key correctness is known)
 CLR_BUBBLE_REVIEW  = (0,   180, 230)   # yellow-ish  — NEEDS_REVIEW
 CLR_BUBBLE_INVALID = (60,  60,  60)    # dark gray   — INVALID
+
+# 2026-08-03: "để câu đúng xanh câu sai đỏ câu lỗi vàng nhé" — when an answer
+# key was supplied to the grading request, a clean ANSWERED bubble is now
+# coloured by correctness instead of always green; TOO_LIGHT / MULTI_MARK /
+# NEEDS_REVIEW ("câu bị hệ thống cảnh báo") are consolidated into ONE "lỗi"
+# colour regardless of correctness (previously 3 different shades). Reusing
+# the existing green/red/yellow-ish tones above keeps this a pure remap, not
+# a new palette — CLR_BUBBLE_WRONG is the one genuinely new colour needed.
+CLR_BUBBLE_CORRECT = CLR_BUBBLE_MARKED   # green — "câu đúng"
+CLR_BUBBLE_WRONG    = (0,   0,   220)    # red   — "câu sai"
+CLR_BUBBLE_FLAGGED  = CLR_BUBBLE_REVIEW  # yellow-ish — "câu lỗi" (multi/too-light/needs-review, any correctness)
 CLR_BLOCK_OUTLINE  = (180, 0,   180)   # purple      — block bounding box
 CLR_BLOCK_LABEL    = (180, 0,   180)
 CLR_MEAN_TEXT      = (0,   0,   170)   # dark red    — mean intensity text
@@ -84,12 +95,18 @@ SELECTED_BOX_ALPHA             = 0.42  # 0 = invisible, 1 = fully opaque fill
 SELECTED_BOX_PADDING           = 3     # extra px around bubble for the box
 
 # Box fill colours (BGR) per status
-_BOX_ANSWERED   = (155, 155, 155)      # gray        — clean single answer
+_BOX_ANSWERED   = (155, 155, 155)      # gray        — clean single answer (no answer-key correctness known)
 _BOX_MULTI_MCQ  = (60,   60, 215)      # red         — unexpected MCQ multi-mark
 _BOX_MULTI_INT  = (30,  150, 230)      # orange      — INT multi-digit (normal)
 _BOX_LIGHT      = (30,  150, 230)      # orange      — too-light mark
 _BOX_REVIEW     = (30,  200, 230)      # yellow      — needs review
 _BOX_DEFAULT    = (155, 155, 155)      # gray        — fallback
+
+# 2026-08-03: correctness-aware box fills, used instead of _BOX_ANSWERED when
+# an answer key resolved this label's correctness — see _draw_selected_bubble_highlight.
+_BOX_CORRECT = (30,  160, 30)          # green — "câu đúng"
+_BOX_WRONG   = (40,   40, 205)         # red   — "câu sai"
+_BOX_FLAGGED = _BOX_REVIEW             # yellow — "câu lỗi" (multi/too-light/needs-review, any correctness)
 
 # Text colours (BGR) for the big labels
 _TXT_ON_GRAY    = (20,  20,  20)       # near-black on gray
@@ -109,6 +126,7 @@ def draw_template_overlay(
     draw_mean_values: bool = False,
     draw_mode: str = "both",
     block_expand_px: dict[str, int] | None = None,
+    correctness: dict[str, bool] | None = None,
 ) -> np.ndarray:
     """
     Draw all bubble ROIs on the pageDimensions image.
@@ -131,6 +149,9 @@ def draw_template_overlay(
         block_expand_px:  Optional {block_name: expand_px} — when set, draws the
                           actual expanded ROI used for measurement (not the nominal
                           bubble box). Green = detected, red = not detected.
+        correctness:      Optional {field_label: is_correct} from the resolved
+                          answer key — colors a clean ANSWERED bubble green/red
+                          by correctness instead of always green (2026-08-03).
 
     Returns:
         BGR image with overlay.
@@ -168,7 +189,7 @@ def draw_template_overlay(
         for bubble in block.bubbles:
             mean_key = f"{bubble.field_label}:{bubble.bubble_value}"
             mean_val = bubble_means.get(mean_key) if bubble_means else None
-            color = _bubble_color(bubble, field_results)
+            color = _bubble_color(bubble, field_results, correctness)
             _draw_bubble(
                 overlay, bubble, color,
                 draw_bubble_values, draw_mean_values, mean_val,
@@ -213,6 +234,7 @@ def draw_template_overlay(
                         status=result.status,
                         is_int=is_int,
                         expand_px=expand_px,
+                        correctness=correctness,
                     )
 
     return canvas
@@ -227,7 +249,18 @@ _INT_FIELD_TYPES = {"QTYPE_INT_FROM_1", "QTYPE_INT"}
 def _bubble_color(
     bubble: BubbleSpec,
     field_results: dict[str, FieldResult] | None,
+    correctness: dict[str, bool] | None = None,
 ) -> tuple[int, int, int]:
+    """
+    Args:
+        correctness: Optional {field_label: is_correct}, built from the
+            grading_report once an answer key resolved this sheet's mã đề
+            (see engine.py's run_full_debug). Only affects a clean ANSWERED
+            bubble's colour (green=đúng / red=sai); labels with no entry here
+            (no key supplied, or a non-scored label like CCCD/SBD) keep the
+            original green. TOO_LIGHT/MULTI_MARK/NEEDS_REVIEW always render as
+            the single "câu lỗi" yellow regardless of correctness.
+    """
     if field_results is None:
         return CLR_BUBBLE_DEFAULT
 
@@ -239,15 +272,13 @@ def _bubble_color(
 
     if bubble.bubble_value in result.selected_values:
         if result.status == FieldStatus.ANSWERED:
-            return CLR_BUBBLE_MARKED       # green  — clean single hit
-        elif result.status == FieldStatus.TOO_LIGHT:
-            return CLR_BUBBLE_LIGHT        # orange — ambiguous mark
-        elif result.status == FieldStatus.MULTI_MARK:
-            # INT multi-mark: selected digits are shown orange (expected/handled).
-            # MCQ multi-mark: red (unexpected error).
-            return CLR_BUBBLE_LIGHT if is_int else CLR_BUBBLE_MULTI
-        elif result.status == FieldStatus.NEEDS_REVIEW:
-            return CLR_BUBBLE_REVIEW       # yellow-ish
+            if correctness is not None and bubble.field_label in correctness:
+                return CLR_BUBBLE_CORRECT if correctness[bubble.field_label] else CLR_BUBBLE_WRONG
+            return CLR_BUBBLE_MARKED       # green  — clean single hit, no key
+        elif result.status in (FieldStatus.TOO_LIGHT, FieldStatus.MULTI_MARK, FieldStatus.NEEDS_REVIEW):
+            # Consolidated "câu lỗi" — flagged for manual review, regardless
+            # of correctness (previously 3 distinct colours per sub-status).
+            return CLR_BUBBLE_FLAGGED
         else:
             return CLR_BUBBLE_MARKED
 
@@ -637,6 +668,7 @@ def _draw_selected_bubble_highlight(
     expand_px: int = 0,
     pad: int = SELECTED_BOX_PADDING,
     box_alpha: float = SELECTED_BOX_ALPHA,
+    correctness: dict[str, bool] | None = None,
 ) -> None:
     """
     New-style selected-bubble rendering:
@@ -646,11 +678,14 @@ def _draw_selected_bubble_highlight(
     3. Big centered label (A/B/C/D or digit) — font scales with bubble width.
 
     Status → fill colour mapping:
-      ANSWERED        → gray
-      MULTI_MARK MCQ  → red
-      MULTI_MARK INT  → orange
-      TOO_LIGHT       → orange
-      NEEDS_REVIEW    → yellow
+      ANSWERED        → green/red by correctness (if `correctness` has this
+                         label), else gray (no answer key supplied)
+      MULTI_MARK / TOO_LIGHT / NEEDS_REVIEW → single "câu lỗi" yellow,
+                         regardless of correctness (2026-08-03; previously 3
+                         different colours per sub-status)
+
+    Args:
+        correctness: Optional {field_label: is_correct} — see _bubble_color.
     """
     x, y, w, h = bubble.x, bubble.y, bubble.w, bubble.h
     cx = x + w // 2
@@ -658,16 +693,14 @@ def _draw_selected_bubble_highlight(
 
     # ── Box colour ────────────────────────────────────────────────────────
     if status == FieldStatus.ANSWERED:
-        box_clr = _BOX_ANSWERED
-        txt_clr = _TXT_ON_GRAY
-    elif status == FieldStatus.MULTI_MARK:
-        box_clr = _BOX_MULTI_INT if is_int else _BOX_MULTI_MCQ
-        txt_clr = _TXT_ON_COLORED
-    elif status == FieldStatus.TOO_LIGHT:
-        box_clr = _BOX_LIGHT
-        txt_clr = _TXT_ON_COLORED
-    elif status == FieldStatus.NEEDS_REVIEW:
-        box_clr = _BOX_REVIEW
+        if correctness is not None and bubble.field_label in correctness:
+            box_clr = _BOX_CORRECT if correctness[bubble.field_label] else _BOX_WRONG
+            txt_clr = _TXT_ON_COLORED
+        else:
+            box_clr = _BOX_ANSWERED
+            txt_clr = _TXT_ON_GRAY
+    elif status in (FieldStatus.MULTI_MARK, FieldStatus.TOO_LIGHT, FieldStatus.NEEDS_REVIEW):
+        box_clr = _BOX_FLAGGED
         txt_clr = _TXT_ON_COLORED
     else:
         box_clr = _BOX_DEFAULT
@@ -742,6 +775,7 @@ def draw_overlay_projected(
     draw_block_outlines: bool = True,
     draw_mean_values: bool = False,
     block_expand_px: dict[str, int] | None = None,
+    correctness: dict[str, bool] | None = None,
 ) -> np.ndarray:
     """
     Draw bubble ROI overlays on the *original* (non-warped) image by projecting
@@ -807,7 +841,7 @@ def draw_overlay_projected(
             edge_img = _proj(edge_tpl)[0]
             r_img = max(2, int(np.linalg.norm(edge_img - center_img)))
 
-            color = _bubble_color(bubble, field_results)
+            color = _bubble_color(bubble, field_results, correctness)
             cx_i, cy_i = int(center_img[0]), int(center_img[1])
 
             # Draw projected circle

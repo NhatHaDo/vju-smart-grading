@@ -262,7 +262,11 @@ class OMREngine:
     def run(
         self,
         image_input: Union[str, Path, np.ndarray],
-        answer_key: dict[str, str] | None = None,
+        # dict[str, str] for single-đề exams (flat {label: letter}), or
+        # {"byMaDe": {ma_de: {label: letter}}, "default": {...}} for
+        # multi-mã-đề exams — resolved against the detected mã đề in Step 8
+        # of _execute() before scoring (2026-08-03).
+        answer_key: dict | None = None,
         section_labels: dict[str, list[str]] | None = None,
         debug_filename: str | None = None,
         image_source: str = "auto",
@@ -289,7 +293,11 @@ class OMREngine:
         image_input: Union[str, Path, np.ndarray],
         output_dir: str | Path,
         prefix: str = "debug",
-        answer_key: dict[str, str] | None = None,
+        # dict[str, str] for single-đề exams (flat {label: letter}), or
+        # {"byMaDe": {ma_de: {label: letter}}, "default": {...}} for
+        # multi-mã-đề exams — resolved against the detected mã đề in Step 8
+        # of _execute() before scoring (2026-08-03).
+        answer_key: dict | None = None,
         section_labels: dict[str, list[str]] | None = None,
         block_filter: str | None = None,
         image_source: str = "auto",
@@ -333,6 +341,18 @@ class OMREngine:
         if aligned_image is None:
             logger.error("run_full_debug: aligned_image is None — cannot save debug outputs")
             return omr_result, vis
+
+        # 2026-08-03: per-question correctness for the "Ảnh detect" overlay
+        # (green=đúng / red=sai / yellow=câu lỗi) — only populated when an
+        # answer key was supplied and successfully resolved (see Step 8 in
+        # _execute()); otherwise None, and the overlay keeps its original
+        # always-green appearance for a clean answer.
+        correctness: dict[str, bool] | None = None
+        if omr_result.grading_report is not None:
+            correctness = {
+                q.field_label: q.is_correct
+                for q in omr_result.grading_report.questions
+            }
 
         # ── 1. Aligned image ──────────────────────────────────────────────
         # Phase 1: when visual_image is set (scan_app + high h_stretch), save the
@@ -399,6 +419,7 @@ class OMREngine:
                     field_results=omr_result.field_results,
                     bubble_means=bubble_means,
                     block_expand_px=block_expand_px or None,
+                    correctness=correctness,
                 )
             else:
                 img_all = draw_template_overlay(
@@ -407,6 +428,7 @@ class OMREngine:
                     bubble_means=bubble_means,
                     draw_mode="both",
                     block_expand_px=block_expand_px or None,
+                    correctness=correctness,
                 )
             p = save_overlay(img_all, out / f"{prefix}_overlay_all.jpg")
             vis.overlay_all_path = str(p)
@@ -512,7 +534,11 @@ class OMREngine:
     def _execute(
         self,
         image_input: Union[str, Path, np.ndarray],
-        answer_key: dict[str, str] | None = None,
+        # dict[str, str] for single-đề exams (flat {label: letter}), or
+        # {"byMaDe": {ma_de: {label: letter}}, "default": {...}} for
+        # multi-mã-đề exams — resolved against the detected mã đề in Step 8
+        # of _execute() before scoring (2026-08-03).
+        answer_key: dict | None = None,
         section_labels: dict[str, list[str]] | None = None,
         image_source: str = "auto",
     ) -> tuple[OMRResult, np.ndarray | None, dict[str, float] | None, np.ndarray | None]:
@@ -805,12 +831,44 @@ class OMREngine:
         grading_report = None
         if answer_key:
             skip = set(self.template.custom_labels.keys()) | self.template.composite_sub_labels
-            grading_report = score(
-                field_results=field_results,
-                answer_key=answer_key,
-                section_labels=section_labels,
-                skip_labels=skip,
-            )
+            # 2026-08-03: "để câu đúng xanh câu sai đỏ" (correctness-colored
+            # "Ảnh detect" overlay) needs per-question correctness even for
+            # multi-mã-đề exams, where the flat {label: letter} shape this
+            # function expects isn't known until AFTER mã đề is detected —
+            # which just happened above in Step 7 (`custom_values`). The
+            # frontend (AnswerKeyPage.tsx handleGradeNow) sends a wrapper
+            # `{"byMaDe": {"101": {...}, "102": {...}}, "default": {...}}`
+            # instead of a flat dict for multi-mã-đề exams; resolve it here,
+            # right before scoring. A plain flat dict (single-đề exams, and
+            # any older/manual caller of this endpoint) passes through
+            # unchanged — fully backward compatible.
+            resolved_answer_key = answer_key
+            if isinstance(answer_key, dict) and "byMaDe" in answer_key:
+                by_ma_de = answer_key.get("byMaDe") or {}
+                detected_ma_de: str | None = None
+                val_status = custom_values.get("MaDe")
+                if val_status is None:
+                    # Custom templates may use a different custom_key for the
+                    # mã đề block — fall back to matching by mapped name.
+                    for key, vs in custom_values.items():
+                        if key.lower() in ("made", "ma_de"):
+                            val_status = vs
+                            break
+                if val_status is not None:
+                    val, _st = val_status
+                    detected_ma_de = val if val and val.strip("?") else None
+                resolved_answer_key = (
+                    (by_ma_de.get(detected_ma_de) if detected_ma_de else None)
+                    or answer_key.get("default")
+                    or {}
+                )
+            if resolved_answer_key:
+                grading_report = score(
+                    field_results=field_results,
+                    answer_key=resolved_answer_key,
+                    section_labels=section_labels,
+                    skip_labels=skip,
+                )
 
         # Build bubble_means dict: {"label:value" → mean}
         bubble_means: dict[str, float] = {}

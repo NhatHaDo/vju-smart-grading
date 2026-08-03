@@ -23,6 +23,7 @@ import type {
   ProctorInfo,
 } from '../types/grading';
 import { computeScore, computeSectionScores, formatScoring, activeQuestionPoints, applyCorrection, TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, resolveAnswerKeyForMaDe, correctionKey, getMaDeValue, isMultiMaDe } from '../types/grading';
+import { correctionHasChanges } from './resultMapping';
 
 // ── Display model types ───────────────────────────────────────────────────────
 
@@ -497,7 +498,11 @@ function buildBangDiem(
     const sc     = akForRow ? computeScore(merged.answers ?? {}, akForRow) : null;
     const secSc  = (akForRow && sections.length > 0) ? computeSectionScores(merged.answers ?? {}, akForRow, schema) : null;
     const info   = merged.student_info ?? r.student_info ?? {};
-    const isCorrected = !!corr;
+    // 2026-08-04: "t ko sửa gì mà ấn lưu sửa thì n hiện đã sửa tay ngay?" —
+    // see correctionHasChanges() doc-comment (resultMapping.ts). Excel export
+    // had the same bug as ResultsPage/ResultDetailModal: any correction
+    // record, even a content-free one, was shown as "Đã sửa tay".
+    const isCorrected = correctionHasChanges(corr, r, infoFields);
     const review = needsReview(r);
     const isAlt  = i % 2 === 1;
 

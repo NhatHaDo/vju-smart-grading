@@ -4,7 +4,7 @@ import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import Badge from '../components/common/Badge';
 import PageHeader from '../components/layout/PageHeader';
-import { Download, Eye, AlertTriangle, CheckCircle2, Trash2, ArrowLeft, Key, Database, WifiOff, TableProperties, ChevronDown, X } from 'lucide-react';
+import { Download, Eye, AlertTriangle, CheckCircle2, Trash2, ArrowLeft, Key, Database, WifiOff, TableProperties, ChevronDown, X, Search } from 'lucide-react';
 import type { BatchGradeState, OmrGradeResult, AnswerKeyStore, CorrectionsStore, InfoFieldColumns, TemplateSchema, ManualCorrection, ProctorInfo } from '../types/grading';
 import { TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, loadAnswerKey, loadCorrections, saveCorrections, clearCorrections, computeScore, applyCorrection, resolveAnswerKeyForMaDe, isMultiMaDe, correctionKey, getMaDeValue } from '../types/grading';
 import ResultDetailModal from '../components/results/ResultDetailModal';
@@ -13,7 +13,7 @@ import { resultsApi, examsApi, customFormsApi, hasToken, ApiError, type ResultBa
 import { buildSchemaFromDetail, getRowTemplateKey, getRowTemplateLabel, buildTemplateOptionsFromRows } from '../utils/templateSchema';
 import type { TemplateFilterOption } from '../utils/templateSchema';
 import type { ExamOut } from '../types/exam';
-import { dbRowToOmrResult } from '../utils/resultMapping';
+import { dbRowToOmrResult, correctionHasChanges } from '../utils/resultMapping';
 
 const LS_KEY = 'vju_last_batch_grade';
 
@@ -49,6 +49,21 @@ function clearStorage() {
 // conversion as ReviewErrorsPage/ExcelPreviewPage already use.
 
 // ── Template label helper ──────────────────────────────────────────────────
+
+// ── "Lượt chấm" (grading batch/session) helpers ─────────────────────────────
+// A row's own `graded_at` (see resultMapping.ts) is the grouping key. Falls
+// back to `batch.gradedAt` for rows from a batch just graded in this session
+// (not yet round-tripped through the DB, so r.graded_at is still undefined).
+function rowGradedAt(r: OmrGradeResult, batch: BatchGradeState | null): string | null {
+  return r.graded_at ?? batch?.gradedAt ?? null;
+}
+
+function formatGradedAtLabel(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 function getBatchTemplateLabel(b: BatchGradeState): string {
   if (b.templateMode === 'custom') {
@@ -234,7 +249,7 @@ function fmtDate(iso: string) {
 
 // ── RealRow ────────────────────────────────────────────────────────────────
 
-function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, onOpen, onDelete, infoFields, showTemplateCol, templateLabel, selected, onToggleSelect, proctors }: {
+function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, onOpen, onDelete, infoFields, showTemplateCol, templateLabel, rowIdentityFields, selected, onToggleSelect, proctors }: {
   idx:             number;
   r:               OmrGradeResult;
   merged:          { student_info: OmrGradeResult['student_info']; answers: Record<string, string | null> };
@@ -249,6 +264,12 @@ function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, 
   infoFields:      import('../types/grading').TemplateInfoField[];
   showTemplateCol?: boolean;
   templateLabel?:  string;
+  /** 2026-08-04: "Tất cả mẫu phiếu" mode's per-row identifying fields (up to
+   *  2, resolved from THIS row's own template — see resolveRowSchema() at
+   *  the call site) — mixed-template rows have no single fixed column that
+   *  fits every row, so this replaces the single "Mẫu phiếu"-only view with
+   *  each row's own MSV/SBD/CCCD/... label:value pairs. */
+  rowIdentityFields?: import('../types/grading').TemplateInfoField[];
   selected:        boolean;
   onToggleSelect:  () => void;
   /** "Có cán bộ coi thi/chấm thi" checkboxes for this row's mã đề — gates missingSignatures(). */
@@ -313,11 +334,25 @@ function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, 
         {r._error && <div style={{ fontSize: 10, color: '#EF4444', marginTop: 2 }}>{r._error.slice(0, 80)}</div>}
       </td>
       {showTemplateCol
-        ? <td style={{ padding: '11px 10px', fontSize: 11 }}>
-            <span style={{ background: '#F3F4F6', color: '#374151', borderRadius: 9999, padding: '2px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>
-              {templateLabel ?? '—'}
-            </span>
-          </td>
+        ? <>
+            <td style={{ padding: '11px 10px', fontSize: 11, fontFamily: 'monospace' }}>
+              {rowIdentityFields && rowIdentityFields.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {rowIdentityFields.map(field => (
+                    <span key={field.key} title={field.displayName}>
+                      <span style={{ color: '#9CA3AF', fontFamily: 'inherit', fontWeight: 400 }}>{field.displayName}: </span>
+                      <span style={{ color: '#C8102E', fontWeight: 600 }}>{info?.[field.key] ?? '—'}</span>
+                    </span>
+                  ))}
+                </div>
+              ) : '—'}
+            </td>
+            <td style={{ padding: '11px 10px', fontSize: 11 }}>
+              <span style={{ background: '#F3F4F6', color: '#374151', borderRadius: 9999, padding: '2px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                {templateLabel ?? '—'}
+              </span>
+            </td>
+          </>
         : infoFields.map((field, fi) => (
             <InfoCell
               key={field.key}
@@ -439,6 +474,23 @@ export default function ResultsPage() {
   const [selectedExamName,    setSelectedExamName]    = useState<string | null>(null);
   const [exams,               setExams]               = useState<ExamOut[]>([]);
   const [selectedTemplateKey, setSelectedTemplateKey] = useState<string>('all');
+  // 2026-08-03: "kết quả và export cũng cần hiển thị theo kì thi/ lượt chấm —
+  // hiện tại danh sách này đang ở cùng 1 nơi cho tất cả các bài chấm" —
+  // separate from the exam filter above: within one exam, group/filter rows
+  // by which grading session ("lượt chấm") produced them. Auto-derived from
+  // each row's own graded_at (all rows saved from the same handleGradeNow()
+  // call share the exact same ISO timestamp — see AnswerKeyPage.tsx line
+  // ~849 `gradedAt: new Date().toISOString()` — so exact-match grouping is
+  // reliable without needing a dedicated batch_id column in the DB).
+  const [selectedGradedAt, setSelectedGradedAt] = useState<string>('all');
+  // 2026-08-04: "cũng ko thấy có bộ lọc theo msv hay sbd ở đây" — a quick
+  // find-a-student box, independent of the "hard" scoping filters above
+  // (kỳ thi/lượt chấm/mẫu phiếu/kiểm tra lỗi, which also affect stats and
+  // export). Matches against the filename AND every value in that row's own
+  // student_info (CCCD/SBD/MSV/Mã đề/... — whatever fields that row's own
+  // template actually has), so it works regardless of which template a row
+  // belongs to, without needing to know which exact field name to search.
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Schema cache for custom templates loaded from DB (which don't carry templateSchema)
   const [fetchedSchemas, setFetchedSchemas] = useState<Map<number, TemplateSchema>>(new Map());
@@ -611,6 +663,8 @@ export default function ResultsPage() {
     setSelectedExamId(eid);
     setSelectedExamName(ename);
     setSelectedTemplateKey('all'); // reset template filter when exam changes
+    setSelectedGradedAt('all');    // reset lượt chấm filter when exam changes
+    setSearchQuery('');            // reset search box when exam changes
     setBatch(null);
     setDataSource('init');
     setSelectedKeys(new Set());
@@ -687,7 +741,7 @@ export default function ResultsPage() {
   };
   const toggleSelectAllVisible = () => {
     setSelectedKeys(prev => {
-      const visibleKeys = visibleScoredRows.map(({ r }) => rowKey(r));
+      const visibleKeys = searchedRows.map(({ r }) => rowKey(r));
       const allSelected  = visibleKeys.length > 0 && visibleKeys.every(k => prev.has(k));
       if (allSelected) {
         const next = new Set(prev);
@@ -812,13 +866,43 @@ export default function ResultsPage() {
     saveCorrections(next);
   };
 
-  // Rows visible after template filter
-  const templateFilteredRows = isAllMode
+  // Distinct grading sessions ("lượt chấm") present in the current exam's
+  // rows, newest first (ISO strings sort lexically). Only meaningful when
+  // there's more than one — a single-session exam has nothing to filter.
+  const gradedAtOptions = Array.from(
+    safeResults.reduce((map, r) => {
+      const key = rowGradedAt(r, batch);
+      if (key) map.set(key, (map.get(key) ?? 0) + 1);
+      return map;
+    }, new Map<string, number>()).entries()
+  ).sort((a, b) => b[0].localeCompare(a[0]));
+  const multipleGradedAt = gradedAtOptions.length > 1;
+  const isAllGradedAt    = selectedGradedAt === 'all';
+
+  // Rows visible after lượt chấm filter, then template filter
+  const gradedAtFilteredRows = isAllGradedAt
     ? allScoredRows
-    : allScoredRows.filter(({ r }) => getRowTemplateKey(r, batch) === selectedTemplateKey);
+    : allScoredRows.filter(({ r }) => rowGradedAt(r, batch) === selectedGradedAt);
+  const templateFilteredRows = isAllMode
+    ? gradedAtFilteredRows
+    : gradedAtFilteredRows.filter(({ r }) => getRowTemplateKey(r, batch) === selectedTemplateKey);
   const visibleScoredRows = reviewOnly
     ? templateFilteredRows.filter(({ r, missingKeyForMaDe }) => hasWarnings(r) || !!missingKeyForMaDe)
     : templateFilteredRows;
+
+  // 2026-08-04: quick find-a-student search — narrows only what the TABLE
+  // shows (and "chọn tất cả" checkbox), not the stats/export above, which
+  // stay scoped to the "hard" filters (kỳ thi/lượt chấm/mẫu phiếu/kiểm tra
+  // lỗi) exactly as before search existed.
+  const searchedRows = (() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return visibleScoredRows;
+    return visibleScoredRows.filter(({ r, merged }) => {
+      if ((r.input?.filename ?? '').toLowerCase().includes(q)) return true;
+      const info = merged.student_info ?? {};
+      return Object.values(info).some(v => v != null && String(v).toLowerCase().includes(q));
+    });
+  })();
 
   // 2026-07-31: "sao ấn kiểm tra ngay thì n đưa vào màn hình này, show cái
   // list cần ktra là được rồi" — this used to also auto-open the first
@@ -938,7 +1022,28 @@ export default function ResultsPage() {
               </button>
             </div>
           )}
-          {/* Row 2: Template filter — always show when batch exists */}
+          {/* Row 2: Lượt chấm filter — only shown when this exam has more than one grading session */}
+          {hasBatch && multipleGradedAt && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#374151', whiteSpace: 'nowrap', minWidth: 76 }}>Lượt chấm:</span>
+              <div style={{ position: 'relative', flex: 1, maxWidth: 360 }}>
+                <select
+                  value={selectedGradedAt}
+                  onChange={e => setSelectedGradedAt(e.target.value)}
+                  style={{ width: '100%', padding: '7px 32px 7px 12px', borderRadius: 9, border: '1.5px solid #E5E7EB', fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff', appearance: 'none', cursor: 'pointer' }}
+                >
+                  <option value="all">Tất cả lượt chấm ({safeResults.length})</option>
+                  {gradedAtOptions.map(([iso, count]) => (
+                    <option key={iso} value={iso}>
+                      {formatGradedAtLabel(iso)} ({count})
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={14} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: '#9CA3AF' }} />
+              </div>
+            </div>
+          )}
+          {/* Row 3: Template filter — always show when batch exists */}
           {hasBatch && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: '#374151', whiteSpace: 'nowrap', minWidth: 76 }}>Mẫu phiếu:</span>
@@ -948,10 +1053,10 @@ export default function ResultsPage() {
                   onChange={e => setSelectedTemplateKey(e.target.value)}
                   style={{ width: '100%', padding: '7px 32px 7px 12px', borderRadius: 9, border: `1.5px solid ${isAllMode && multipleTemplates ? '#FCD34D' : '#E5E7EB'}`, fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff', appearance: 'none', cursor: 'pointer' }}
                 >
-                  <option value="all">Tất cả mẫu phiếu ({safeResults.length})</option>
+                  <option value="all">Tất cả mẫu phiếu ({gradedAtFilteredRows.length})</option>
                   {templateOptions.map(opt => (
                     <option key={opt.key} value={opt.key}>
-                      {opt.label} ({allScoredRows.filter(({ r }) => getRowTemplateKey(r, batch) === opt.key).length})
+                      {opt.label} ({gradedAtFilteredRows.filter(({ r }) => getRowTemplateKey(r, batch) === opt.key).length})
                     </option>
                   ))}
                 </select>
@@ -1105,12 +1210,43 @@ export default function ResultsPage() {
                   {getBatchTemplateLabel(batch)}
                 </Badge>
               )}
+              <div style={{ flex: 1 }} />
+              {/* 2026-08-04: "cũng ko thấy có bộ lọc theo msv hay sbd ở đây" —
+                 quick find-a-student box; matches filename + any info field
+                 value (CCCD/SBD/MSV/Mã đề/...) on the currently-shown rows.
+                 Purely a display convenience — doesn't affect stats/export
+                 above, which stay scoped to the exam/lượt chấm/mẫu phiếu
+                 filters exactly as before. */}
+              <div style={{ position: 'relative', width: 220 }}>
+                <Search size={13} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF' }} />
+                <input
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Tìm theo MSV, SBD, CCCD..."
+                  style={{ width: '100%', padding: '6px 10px 6px 28px', borderRadius: 8, border: '1.5px solid #E5E7EB', fontSize: 12, fontFamily: 'inherit', outline: 'none' }}
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    title="Xoá tìm kiếm"
+                    style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'transparent', cursor: 'pointer', color: '#9CA3AF', display: 'flex' }}
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
             </div>
             {reviewOnly && visibleScoredRows.length === 0 ? (
               <div style={{ padding: '48px 24px', textAlign: 'center' }}>
                 <div style={{ fontSize: 32, marginBottom: 10 }}>✅</div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: '#065F46', marginBottom: 4 }}>Không còn phiếu nào cần xem lại</div>
                 <Button size="sm" variant="outline" icon={<X size={13} />} onClick={() => setReviewOnly(false)} style={{ marginTop: 10 }}>Xem tất cả</Button>
+              </div>
+            ) : searchQuery.trim() && searchedRows.length === 0 ? (
+              <div style={{ padding: '48px 24px', textAlign: 'center' }}>
+                <div style={{ fontSize: 32, marginBottom: 10 }}>🔍</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#374151', marginBottom: 4 }}>Không tìm thấy phiếu nào khớp "{searchQuery}"</div>
+                <Button size="sm" variant="outline" icon={<X size={13} />} onClick={() => setSearchQuery('')} style={{ marginTop: 10 }}>Xoá tìm kiếm</Button>
               </div>
             ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -1120,14 +1256,21 @@ export default function ResultsPage() {
                     <th style={{ padding: '10px 10px', width: 32 }}>
                       <input
                         type="checkbox"
-                        checked={visibleScoredRows.length > 0 && visibleScoredRows.every(({ r }) => selectedKeys.has(rowKey(r)))}
+                        checked={searchedRows.length > 0 && searchedRows.every(({ r }) => selectedKeys.has(rowKey(r)))}
                         onChange={toggleSelectAllVisible}
                         title="Chọn tất cả"
                         style={{ accentColor: '#fff', width: 15, height: 15, cursor: 'pointer' }}
                       />
                     </th>
                     {['STT', 'File',
-                      ...(isAllMode ? ['Mẫu phiếu'] : activeInfoFields.map(f => f.displayName)),
+                      // 2026-08-04: "cái này ko có mssv hay sbd à? (theo tuỳ
+                      // phiếu ấy)" — in "Tất cả mẫu phiếu" mode, rows can come
+                      // from different templates with different info fields,
+                      // so there's no single fixed column that fits every
+                      // row — add one generic "Mã định danh" column instead,
+                      // showing each row's own first identifying field(s) —
+                      // see RealRow's showTemplateCol branch below.
+                      ...(isAllMode ? ['Mã định danh', 'Mẫu phiếu'] : activeInfoFields.map(f => f.displayName)),
                       ...(hasKey ? ['Đúng','Sai','Trống','Điểm'] : []),
                       'Thao tác',
                     ].map(h => (
@@ -1136,10 +1279,11 @@ export default function ResultsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleScoredRows.map(({ r, merged, corr, sc, missingKeyForMaDe, maDeValue, proctors }, i) => (
+                  {searchedRows.map(({ r, merged, corr, sc, missingKeyForMaDe, maDeValue, proctors }, i) => (
                     <RealRow
                       key={r.db_id ?? r.input?.filename ?? i}
-                      idx={i + 1} r={r} merged={merged} corrected={!!corr} sc={sc}
+                      idx={i + 1} r={r} merged={merged} corrected={correctionHasChanges(corr, r, resolveRowSchema(r).infoFields)} sc={sc}
+                      rowIdentityFields={isAllMode ? resolveRowSchema(r).infoFields.slice(0, 2) : undefined}
                       missingKeyForMaDe={missingKeyForMaDe}
                       maDeValue={maDeValue}
                       proctors={proctors}

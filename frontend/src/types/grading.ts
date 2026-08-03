@@ -212,6 +212,11 @@ export interface OmrGradeResult {
   template_type?:         string | null;
   template_id?:           number | null;
   template_variant_row?:  string | null;
+  /** client-side only — per-row grading timestamp (set from DB rows, ISO string).
+   *  Used to group/filter results by "lượt chấm" (grading batch/session) on
+   *  ResultsPage — distinct from `BatchGradeState.gradedAt` above, which is a
+   *  single batch-level timestamp only set for a freshly-graded-in-session batch. */
+  graded_at?:              string | null;
 }
 
 // ── Template schema ──────────────────────────────────────────────────────────

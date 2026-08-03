@@ -394,7 +394,12 @@ async def debug_grade(
     ),
     answer_key_json: str | None = Query(
         default=None,
-        description='JSON string answer key, ví dụ: \'{"toan1":"A","toan2":"B"}\'',
+        description=(
+            'JSON string answer key. Đề đơn: \'{"toan1":"A","toan2":"B"}\'. '
+            'Đề chia theo mã đề (2026-08-03): '
+            '\'{"byMaDe":{"101":{...},"102":{...}},"default":{...}}\' — '
+            'engine.py tự chọn đúng bộ theo mã đề đọc được từ ảnh trước khi chấm.'
+        ),
     ),
     template_variant: str | None = Query(
         default=None,

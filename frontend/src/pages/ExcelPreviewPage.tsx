@@ -87,6 +87,14 @@ function needsReview(r: OmrGradeResult): boolean {
   return (r.warnings ?? []).length > 0 || (r.score?.blank ?? 0) > 0 || !!r._error;
 }
 
+// Same formatting as ResultsPage.tsx's "Lượt chấm" dropdown, kept in sync.
+function formatGradedAtLabel(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 type LoadState = 'loading' | 'ok' | 'empty';
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -116,6 +124,12 @@ export default function ExcelPreviewPage() {
   const [allExamResults,     setAllExamResults]     = useState<OmrGradeResult[]>([]);
   const [gradedAt,           setGradedAt]           = useState<string>('');
   const [selectedTemplateKey, setSelectedTemplateKey] = useState<string>('');
+  // 2026-08-04: "thế nếu t muốn xuất lượt chấm khác thì sao? ở đây ko có
+  // dropdown đấy đko" — this page has its own independent exam/template
+  // selectors (doesn't reuse whatever ResultsPage had picked), so the "lượt
+  // chấm" filter added there separately never applied here. Mirrors the same
+  // r.graded_at exact-match grouping ResultsPage.tsx uses.
+  const [selectedGradedAt,   setSelectedGradedAt]   = useState<string>('all');
   const [lsFallbackBatch,    setLsFallbackBatch]    = useState<BatchGradeState | null>(null);
 
   // ── UI state ───────────────────────────────────────────────────────────────
@@ -190,6 +204,7 @@ export default function ExcelPreviewPage() {
   // Switching exam via the dropdown — reset template selection, refetch
   const handleExamChange = useCallback(async (examId: number | null, examName: string | null) => {
     setSelectedTemplateKey(''); // let the auto-pick effect below choose a valid one
+    setSelectedGradedAt('all'); // reset lượt chấm filter when exam changes
     const ok = await loadExam(examId, examName);
     if (!ok) {
       setAllExamResults([]);
@@ -232,7 +247,27 @@ export default function ExcelPreviewPage() {
     });
   }, [allExamResults, lsFallbackBatch]);
 
-  // ── Template options for the selected exam ─────────────────────────────────
+  // ── "Lượt chấm" (grading batch/session) options for the selected exam ──────
+  // Distinct r.graded_at values across every row of this exam, newest first.
+  // Only meaningful with 2+ sessions — a single-session exam has nothing to
+  // filter (mirrors ResultsPage.tsx's identical logic).
+  const gradedAtOptions = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of allExamResults) {
+      const key = r.graded_at ?? '';
+      if (key) map.set(key, (map.get(key) ?? 0) + 1);
+    }
+    return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [allExamResults]);
+  const multipleGradedAt = gradedAtOptions.length > 1;
+  const isAllGradedAt    = selectedGradedAt === 'all';
+
+  const gradedAtFilteredResults = useMemo(
+    () => isAllGradedAt ? allExamResults : allExamResults.filter(r => (r.graded_at ?? '') === selectedGradedAt),
+    [allExamResults, isAllGradedAt, selectedGradedAt],
+  );
+
+  // ── Template options for the selected exam + lượt chấm ──────────────────────
 
   // Shared with ResultsPage (utils/templateSchema.ts) — includes the
   // "custom:unknown" fallback for rows with no resolvable template_type
@@ -240,8 +275,8 @@ export default function ExcelPreviewPage() {
   // wrong column headers and "—" for every info cell on rows actually
   // graded with a different form).
   const templateOptions: TemplateFilterOption[] = useMemo(
-    () => buildTemplateOptionsFromRows(allExamResults, lsFallbackBatch, fetchedSchemas, fetchedTemplateNames),
-    [allExamResults, lsFallbackBatch, fetchedSchemas, fetchedTemplateNames],
+    () => buildTemplateOptionsFromRows(gradedAtFilteredResults, lsFallbackBatch, fetchedSchemas, fetchedTemplateNames),
+    [gradedAtFilteredResults, lsFallbackBatch, fetchedSchemas, fetchedTemplateNames],
   );
 
   // Auto-pick a valid template once options are known (or when the current
@@ -257,8 +292,8 @@ export default function ExcelPreviewPage() {
   // ── Resolve effective batch + schema for the selected template only ───────
 
   const safeResults = useMemo(
-    () => allExamResults.filter(r => getRowTemplateKey(r, lsFallbackBatch) === selectedTemplateKey),
-    [allExamResults, lsFallbackBatch, selectedTemplateKey]
+    () => gradedAtFilteredResults.filter(r => getRowTemplateKey(r, lsFallbackBatch) === selectedTemplateKey),
+    [gradedAtFilteredResults, lsFallbackBatch, selectedTemplateKey]
   );
 
   const templateSchema = selectedTemplateOpt?.templateSchema ?? null;
@@ -276,11 +311,14 @@ export default function ExcelPreviewPage() {
         : undefined,
       templateSchema:     selectedTemplateOpt.templateMode === 'custom' ? selectedTemplateOpt.templateSchema : undefined,
       results:  safeResults,
-      gradedAt: gradedAt,
+      // 2026-08-04: reflect the selected lượt chấm's own timestamp in the
+      // exported "Thời gian chấm" row when one is picked, instead of always
+      // the exam's very first row overall.
+      gradedAt: isAllGradedAt ? gradedAt : selectedGradedAt,
       examId:   selectedExamId,
       examName: selectedExamName,
     };
-  }, [selectedTemplateOpt, safeResults, gradedAt, selectedExamId, selectedExamName, lsFallbackBatch]);
+  }, [selectedTemplateOpt, safeResults, gradedAt, isAllGradedAt, selectedGradedAt, selectedExamId, selectedExamName, lsFallbackBatch]);
 
   // ── Rebuild workbook when data changes ────────────────────────────────────
 
@@ -487,6 +525,27 @@ export default function ExcelPreviewPage() {
                 </>
               )}
 
+              {multipleGradedAt && (
+                <>
+                  <span>· Lượt chấm</span>
+                  <div style={{ position: 'relative', display: 'inline-flex' }}>
+                    <select
+                      value={selectedGradedAt}
+                      onChange={e => setSelectedGradedAt(e.target.value)}
+                      style={subtitleSelectStyle}
+                    >
+                      <option value="all">Tất cả ({allExamResults.length})</option>
+                      {gradedAtOptions.map(([iso, count]) => (
+                        <option key={iso} value={iso}>
+                          {formatGradedAtLabel(iso)} ({count})
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown size={11} style={{ position: 'absolute', right: 3, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: INK_MUTED }} />
+                  </div>
+                </>
+              )}
+
               {templateOptions.length > 0 && (
                 <>
                   <span>· Mẫu phiếu</span>
@@ -501,7 +560,7 @@ export default function ExcelPreviewPage() {
                     >
                       {templateOptions.map(opt => (
                         <option key={opt.key} value={opt.key}>
-                          {opt.label} ({allExamResults.filter(r => getRowTemplateKey(r, lsFallbackBatch) === opt.key).length})
+                          {opt.label} ({gradedAtFilteredResults.filter(r => getRowTemplateKey(r, lsFallbackBatch) === opt.key).length})
                         </option>
                       ))}
                     </select>
