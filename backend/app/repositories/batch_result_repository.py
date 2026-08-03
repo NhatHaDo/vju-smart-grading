@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.models.batch_result import BatchResult
 from app.models.exam import Exam
 from app.schemas.result_schema import ResultBatchSaveItem, ResultCorrectionRequest
+from app.services.overlay_cleanup import delete_overlay_files_for, delete_overlay_files_for_many
 
 
 @dataclass
@@ -230,12 +231,20 @@ class BatchResultRepository:
     # ── Delete ────────────────────────────────────────────────────────────────
 
     def delete(self, result_id: int) -> bool:
-        """Delete one BatchResult. Returns True if found and deleted."""
+        """Delete one BatchResult. Returns True if found and deleted.
+
+        2026-08-03: also deletes the row's on-disk debug overlay files
+        (outputs/debug_overlays/{run_id}_*.jpg) — previously only the DB
+        row was removed, so every deleted result left its debug images
+        behind forever. See app/services/overlay_cleanup.py for why this
+        is safe (each grading run's uuid4 id is never shared/reused)."""
         row = self.get_by_id(result_id)
         if row is None:
             return False
+        debug_paths_json = row.debug_paths_json
         self.db.delete(row)
         self.db.commit()
+        delete_overlay_files_for(debug_paths_json)
         return True
 
     def delete_all(self, filters: BatchResultFilters | None = None) -> int:
@@ -243,6 +252,10 @@ class BatchResultRepository:
         Delete all rows matching filters (or all rows if filters is None/empty).
         Returns number of deleted rows.
         Does NOT cascade to sheets/exams/templates.
+
+        2026-08-03: also deletes each row's on-disk debug overlay files —
+        same rationale as delete() above. A bulk `q.delete()` doesn't load
+        row objects, so debug_paths_json is fetched separately beforehand.
         """
         f = filters or BatchResultFilters(limit=10_000)
         q = self.db.query(BatchResult)
@@ -256,8 +269,10 @@ class BatchResultRepository:
             q = q.filter(BatchResult.exam_id == f.exam_id)
         if f.template_type is not None:
             q = q.filter(BatchResult.template_type == f.template_type)
+        debug_paths_jsons = [r.debug_paths_json for r in q.with_entities(BatchResult.debug_paths_json).all()]
         count = q.delete(synchronize_session=False)
         self.db.commit()
+        delete_overlay_files_for_many(debug_paths_jsons)
         return count
 
 
