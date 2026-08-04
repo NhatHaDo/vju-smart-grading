@@ -184,7 +184,22 @@ INT_OUTLIER_TIGHT_REST_SPREAD_MAX = 8.0
 # FLAT_STRIP_MAX_SPREAD note below).
 MCQ_OUTLIER_MIN_JUMP = 15
 MCQ_OUTLIER_TIGHT_MIN_JUMP = 7.3
-MCQ_OUTLIER_TIGHT_REST_SPREAD_MAX = 8.3
+
+# 2026-08-04: confirmed real miss — a phiếu's "trắc nghiệm ABCD" câu 25 had
+# means [B=101.3, D=112.9, C=119.5, A=121.8] (top2_gap=11.6, rest_spread=8.9).
+# User visually confirmed on "Ảnh gốc": only B is filled, the other 3 are
+# genuinely blank — yet the field graded BLANK because rest_spread (8.9)
+# missed the old ceiling (8.3) by 0.6. Swept the 8.3 → 9.5 change against
+# all 829 archived debug means.json files (38,611 four-choice MCQ readings):
+# only 16 distinct mean-patterns newly cross into the tight-outlier path,
+# every one with the same shape as this confirmed case (one bubble clearly
+# separated, the other three within a few px of each other) — no case
+# resembling the flat/noisy patterns that FLAT_STRIP_MAX_SPREAD or the
+# confirmed-multi-mark rest_spread (31.8, see FLAT_STRIP_MAX_SPREAD note
+# below) guard against. Nudged to 9.5 (not just the bare 8.9 minimum) for
+# the same "clear the ceiling with a small buffer" margin already used for
+# MCQ_OUTLIER_TIGHT_MIN_JUMP above.
+MCQ_OUTLIER_TIGHT_REST_SPREAD_MAX = 9.5
 
 # 2026-07-28: a genuinely BLANK strip (no bubble filled at all) can still
 # fall through every check above — best_gap < MIN_JUMP, and top2_gap too
