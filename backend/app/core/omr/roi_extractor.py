@@ -148,6 +148,79 @@ def extract_roi_inverse(
     return roi
 
 
+def extract_region_inverse(
+    image: np.ndarray,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    M_inv: np.ndarray,
+    expand_px: int = 0,
+) -> np.ndarray:
+    """
+    Same projection logic as `extract_roi_inverse`, but for an arbitrary
+    template-space rectangle (x, y, w, h) instead of a bubble.
+
+    Added 2026-08-06 for the "Họ và tên" / "Ngày sinh" info-box crop (see
+    engine.py's `_get_name_dob_crop_box()`) — that region is a plain
+    rectangle measured on the aligned image, not a bubble, so it has no
+    `BubbleSpec`. Kept as a separate function (rather than forcing callers
+    to fabricate a dummy BubbleSpec) since BubbleSpec's other fields
+    (field_label, bubble_value, field_type, block_name) have no meaning
+    for a generic crop.
+
+    Args:
+        image:     Grayscale or BGR original image (NOT warped to pageDimensions).
+        x, y, w, h: Rectangle in template space (pageDimensions coordinates).
+        M_inv:     3×3 inverse homography: template space → original image space.
+        expand_px: Grow the rectangle on each side before projection.
+
+    Returns:
+        Array of shape (h+2*expand_px, w+2*expand_px, ...). Falls back to a
+        white image of the same size on projection failure.
+    """
+    out_w = w + 2 * expand_px
+    out_h = h + 2 * expand_px
+    channels = image.shape[2] if image.ndim == 3 else None
+
+    def _blank():
+        shape = (out_h, out_w, channels) if channels else (out_h, out_w)
+        return np.full(shape, 255, dtype=np.uint8)
+
+    x0, y0 = x - expand_px, y - expand_px
+    x1, y1 = x + w + expand_px, y + h + expand_px
+
+    template_corners = np.array(
+        [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype="float32"
+    ).reshape(1, 4, 2)
+
+    try:
+        scan_corners = cv2.perspectiveTransform(template_corners, M_inv).reshape(4, 2)
+    except Exception:
+        return _blank()
+
+    img_h, img_w = image.shape[:2]
+    scan_corners[:, 0] = np.clip(scan_corners[:, 0], 0, img_w - 1)
+    scan_corners[:, 1] = np.clip(scan_corners[:, 1], 0, img_h - 1)
+
+    dst_corners = np.array(
+        [[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]],
+        dtype="float32",
+    )
+
+    try:
+        M_local = cv2.getPerspectiveTransform(scan_corners, dst_corners)
+        roi = cv2.warpPerspective(
+            image, M_local, (out_w, out_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
+    except Exception:
+        return _blank()
+
+    return roi
+
+
 def extract_all_rois(
     image: np.ndarray,
     bubbles: list[BubbleSpec],

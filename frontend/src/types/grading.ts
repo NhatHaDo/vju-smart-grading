@@ -176,6 +176,10 @@ export interface OmrDebugInfo {
   overlay_marked_only_path: string | null;
   overlay_warnings_path:    string | null;
   means_json_path:          string | null;
+  /** Crop of "2. Họ và tên" + "3. Ngày sinh" info box — visual-only (no OCR),
+   *  only populated for templates with a calibrated crop box (see engine.py's
+   *  _get_name_dob_crop_box(), currently just shared_40tn_dungsai). */
+  name_dob_crop_path?:      string | null;
 }
 
 /** OMR-detected ink presence in one "CÁN BỘ COI THI"/"CÁN BỘ CHẤM THI" box —

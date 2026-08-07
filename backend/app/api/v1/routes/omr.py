@@ -21,10 +21,13 @@ import shutil
 import uuid
 from pathlib import Path
 
+import cv2
+import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.core.omr.crop_on_markers import crop_on_markers
 from app.core.omr.engine import OMREngine, DebugVisualPaths
 from app.core.omr.field_reader import FieldStatus
 from app.core.templates.template_loader import load_template
@@ -401,6 +404,17 @@ async def debug_grade(
             'engine.py tự chọn đúng bộ theo mã đề đọc được từ ảnh trước khi chấm.'
         ),
     ),
+    scoring_json: str | None = Query(
+        default=None,
+        description=(
+            '2026-08-06: trọng số điểm lấy từ "Thang điểm" (AnswerKeyPage) — '
+            '\'{"correct":1,"wrong":0,"blank":0,"questionPoints":{"toan3":2}}\'. '
+            "Dùng để tính điểm từng câu (kể cả câu đặt điểm riêng) và tóm tắt "
+            "điểm từng Phần in lên ảnh overlay khi template khớp quy ước tên "
+            "field đã biết (xem OMREngine._auto_detect_phan_sections). Không "
+            "bắt buộc — bỏ trống thì mỗi câu đúng vẫn tính 1 điểm như cũ.",
+        ),
+    ),
     template_variant: str | None = Query(
         default=None,
         description="Variant template: 'sbd4' (SBD 4 số) hoặc 'sbd8' (SBD 8 số). "
@@ -536,6 +550,32 @@ async def debug_grade(
                 detail=f"answer_key_json không phải JSON hợp lệ: {exc}",
             )
 
+    # ── 4b. Parse optional scoring weights ("Thang điểm") ─────────────────
+    question_points: dict[str, float] | None = None
+    wrong_points = 0.0
+    blank_points = 0.0
+    if scoring_json:
+        try:
+            _scoring = json.loads(scoring_json)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"scoring_json không phải JSON hợp lệ: {exc}",
+            )
+        if isinstance(_scoring, dict):
+            question_points = _scoring.get("questionPoints") or None
+            wrong_points = float(_scoring.get("wrong") or 0.0)
+            blank_points = float(_scoring.get("blank") or 0.0)
+            # "correct" (điểm mỗi câu đúng mặc định) truyền vào qua
+            # points_per_question — chỉ dùng khi câu đó KHÔNG có trong
+            # questionPoints (override riêng), giống hệt công thức ở
+            # AnswerKeyPage.
+            _default_correct = float(_scoring.get("correct") or 1.0)
+        else:
+            _default_correct = 1.0
+    else:
+        _default_correct = 1.0
+
     # ── 5. Run OMR engine ─────────────────────────────────────────────────
     debug_overlay_dir = Path(settings.omr_output_dir) / "debug_overlays"
     debug_overlay_dir.mkdir(parents=True, exist_ok=True)
@@ -568,6 +608,10 @@ async def debug_grade(
                 output_dir=debug_overlay_dir,
                 prefix=stem,
                 answer_key=answer_key,
+                points_per_question=_default_correct,
+                question_points=question_points,
+                wrong_points=wrong_points,
+                blank_points=blank_points,
                 block_filter=block_filter,
                 image_source=image_source,
             )
@@ -575,6 +619,10 @@ async def debug_grade(
             omr_result = engine.run(
                 str(save_path),
                 answer_key=answer_key,
+                points_per_question=_default_correct,
+                question_points=question_points,
+                wrong_points=wrong_points,
+                blank_points=blank_points,
                 debug_filename=f"{stem}_overlay_all.jpg",
                 image_source=image_source,
             )
@@ -714,9 +762,67 @@ async def debug_grade(
             "aligned_candidate_path":     vis.aligned_candidate_path,
             "overlay_all_path":           vis.overlay_all_path,
             "markers_debug_path":         vis.markers_debug_path,
+            "name_dob_crop_path":         vis.name_dob_crop_path,
             # ── Extra debug (kept for scripts / OmrDebugPage) ─────────────
             "overlay_marked_only_path":   vis.overlay_marked_only_path,
             "overlay_warnings_path":      vis.overlay_warnings_path,
             "means_json_path":            vis.means_json_path,
         },
+    }
+
+
+# ── Quick-check (2026-08-04) ────────────────────────────────────────────────
+# "giơ máy lên là tự chấm" — Giai đoạn 3 của kế hoạch camera. Frontend giữ
+# camera mở liên tục và gọi endpoint này định kỳ (~mỗi 300-500ms) với 1 khung
+# hình độ phân giải thấp, để biết phiếu đã vào đúng vị trí (đủ 4 marker góc,
+# đủ rõ/thẳng) hay chưa — trước khi tự động chụp ảnh full-res và gửi sang
+# /debug-grade như bình thường.
+#
+# Cố ý KHÔNG lưu file xuống đĩa (route /debug-grade thì có) — endpoint này bị
+# gọi liên tục trong lúc camera đang mở, lưu mỗi khung sẽ tái tạo đúng vấn đề
+# đầy quota đĩa vừa sửa ở overlay_cleanup.py. Cũng KHÔNG chạy pipeline chấm
+# đầy đủ (đọc từng ô bubble) — chỉ chạy crop_on_markers() để lấy
+# quality_score, nhẹ hơn nhiều so với /debug-grade.
+QUICK_CHECK_READY_THRESHOLD = 0.55
+
+
+@router.post(
+    "/quick-check",
+    summary="Kiểm tra nhanh 1 khung hình camera: đã đủ marker + đủ rõ để tự động chụp chưa",
+    status_code=200,
+)
+async def quick_check(
+    image: UploadFile = File(..., description="Khung hình camera (độ phân giải thấp là đủ)"),
+) -> dict:
+    """
+    Không lưu file, không chấm đầy đủ — chỉ chạy crop_on_markers() để trả lời
+    nhanh "phiếu đã vào đúng vị trí chưa". Dùng cho vòng lặp tự động phía
+    frontend (CameraCaptureModal chế độ "Tự động").
+
+    Response:
+      detected       — có tìm thấy đủ 4 marker góc không
+      quality_score  — 0.0-1.0, càng cao càng đáng tin (xem crop_on_markers.py)
+      ready          — quality_score đã vượt ngưỡng để tự động chụp chưa
+    """
+    try:
+        raw = await image.read()
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Ảnh không hợp lệ: {exc}")
+
+    if img is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Không đọc được ảnh")
+
+    try:
+        result = crop_on_markers(img, target_size=None, min_warp_quality=QUICK_CHECK_READY_THRESHOLD)
+    except Exception as exc:
+        logger.warning("quick_check: crop_on_markers lỗi — %s", exc)
+        return {"detected": False, "quality_score": 0.0, "ready": False}
+
+    ready = bool(result.success and result.marker_quality_score >= QUICK_CHECK_READY_THRESHOLD)
+    return {
+        "detected":      bool(result.success),
+        "quality_score": result.marker_quality_score,
+        "ready":         ready,
     }

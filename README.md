@@ -37,9 +37,7 @@ This project aims to provide a software solution that improves grading speed, re
 
 ## Tech Stack
 
-| Layer          | Technologies                                |
-| -------------- | ------------------------------------------- |
-| Frontend       | Vite, React, TypeScript, Tailwind CSS       |
+| Layer          | Technologies                                | 
 | Backend        | FastAPI, SQLAlchemy, SQLite                 |
 | OMR Core       | Python, OpenCV, OMRChecker-based processing |
 | Authentication | JWT access/refresh tokens, bcrypt           |

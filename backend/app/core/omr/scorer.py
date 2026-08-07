@@ -66,6 +66,9 @@ def score(
     section_labels: dict[str, list[str]] | None = None,
     points_per_question: float = 1.0,
     skip_labels: set[str] | None = None,
+    question_points: dict[str, float] | None = None,
+    wrong_points: float = 0.0,
+    blank_points: float = 0.0,
 ) -> GradingReport:
     """
     Grade field_results against answer_key.
@@ -74,13 +77,25 @@ def score(
         field_results:      {field_label: FieldResult} from field_reader.
         answer_key:         {field_label: correct_answer_str}.
         section_labels:     Optional grouping, e.g. {"Toán": ["toan1..15"]}.
-        points_per_question: Points awarded per correct answer.
+        points_per_question: Points awarded per correct answer (default/fallback
+                              when a label has no entry in `question_points`).
         skip_labels:        Labels to exclude from scoring (e.g. CCCD, SBD).
+        question_points:    Optional per-question override for the CORRECT-answer
+                             point value, e.g. {"toan3": 2.0} — mirrors the
+                             "Chọn câu để đặt điểm riêng" feature in AnswerKeyPage
+                             (frontend ScoringWeights.questionPoints). Falls back
+                             to points_per_question when a label isn't present.
+        wrong_points:        Points awarded for an ANSWERED-but-wrong response
+                              (can be negative for a penalty) — mirrors the
+                              "Sai (±)" field in AnswerKeyPage's Thang điểm.
+        blank_points:        Points awarded for a BLANK/no-answer response —
+                              mirrors the "Bỏ trống" field in Thang điểm.
 
     Returns:
         GradingReport with per-question and per-section scores.
     """
     skip = skip_labels or set()
+    qpts = question_points or {}
     questions: list[QuestionScore] = []
     needs_review: list[str] = []
     missing: list[str] = []
@@ -92,7 +107,8 @@ def score(
         if label in skip:
             continue
 
-        max_points += points_per_question
+        correct_pts = qpts.get(label, points_per_question)
+        max_points += correct_pts
         result = field_results.get(label)
 
         if result is None:
@@ -102,10 +118,11 @@ def score(
                 correct_answer=correct_answer,
                 student_answer=None,
                 is_correct=False,
-                points_earned=0.0,
-                points_possible=points_per_question,
+                points_earned=blank_points,
+                points_possible=correct_pts,
                 status=FieldStatus.INVALID,
             ))
+            total_points += blank_points
             continue
 
         student_answer = result.selected_value
@@ -113,7 +130,12 @@ def score(
             result.status == FieldStatus.ANSWERED
             and student_answer == correct_answer
         )
-        earned = points_per_question if is_correct else 0.0
+        if is_correct:
+            earned = correct_pts
+        elif result.status == FieldStatus.ANSWERED:
+            earned = wrong_points          # answered, but not the correct value
+        else:
+            earned = blank_points          # blank / too_light / multi_mark / etc.
         total_points += earned
 
         if result.status in (FieldStatus.MULTI_MARK, FieldStatus.TOO_LIGHT, FieldStatus.NEEDS_REVIEW):
@@ -125,7 +147,7 @@ def score(
             student_answer=student_answer,
             is_correct=is_correct,
             points_earned=earned,
-            points_possible=points_per_question,
+            points_possible=correct_pts,
             status=result.status,
         ))
 

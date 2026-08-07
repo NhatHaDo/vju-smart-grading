@@ -78,6 +78,42 @@ MARKER_MAX_ZONE_FRAC = 0.38
 # Real markers printed at the same physical size should be ±30% in area.
 MARKER_MAX_AREA_RATIO = 6.0
 
+# Maximum allowed relative deviation between the detected marker quad's
+# width/height ratio and the EXPECTED ratio (derived from
+# marker_centers_in_template, when provided) before rejecting the pick and
+# retrying with the next binary/relaxation stage.
+#
+# 2026-08-05: found via a 34-photo real-world batch test (AET2015 sheets,
+# same physical layout as the QM2025 template) — 4/34 photos produced a
+# quad that passed EVERY existing check (para_score 0.93-0.99, solidity,
+# area-consistency, diagonal-midpoint) yet had aspect 0.575-1.02 instead of
+# the template's true 0.71 (up to a 43% relative miss). None of the existing
+# checks catch this: they all validate INTERNAL self-consistency of the 4
+# points (is it a parallelogram? do diagonals bisect?) but never compare the
+# resulting shape's overall proportions against what the physical page is
+# known to look like. A clean, well-formed parallelogram of the WRONG size
+# is exactly what you get when detection locks onto 4 self-consistent but
+# non-marker blobs (e.g. all 4 corners of an interior content box) instead
+# of the true corner markers — the existing checks are structurally blind to
+# this failure mode. Genuine photos (even skewed/rotated ones — a proper
+# homography corrects for that) stayed within 0.3% of the true aspect across
+# all 30 unaffected photos in the same batch, so 6% leaves a wide margin
+# above real variation while still catching the smallest observed miss
+# (8.6%).
+MARKER_MAX_ASPECT_DEVIATION = 0.06
+
+# 2026-08-06: looser tolerance used when expected_aspect came from
+# page_aspect_fallback (the template's raw page W/H) instead of precise
+# marker-center calibration. Real corner markers aren't printed exactly on
+# the page edge, so the marker-QUAD aspect ratio can differ from the raw
+# PAGE aspect ratio by a small, template-dependent, but not zero, margin —
+# unlike the 0.3%-across-30-photos precision quoted above for calibrated
+# templates. Set well above that possible offset plus ordinary handheld
+# keystone, but still far below the -30%/+23%/-30% deviations actually
+# observed on the 3 real "Utokyo" misdetections this constant was added to
+# catch (see page_aspect_fallback docstring in crop_on_markers()).
+MARKER_MAX_ASPECT_DEVIATION_FALLBACK = 0.18
+
 # ── Quality gate ──────────────────────────────────────────────────────────
 # Minimum quality score (0–1) to apply warp.  Below this the detected markers
 # are considered unreliable and the original image is returned instead.
@@ -127,6 +163,7 @@ def crop_on_markers(
     debug: bool = False,
     marker_centers_in_template: dict[str, tuple[int, int]] | None = None,
     min_warp_quality: float = WARP_QUALITY_MIN_SCORE,
+    page_aspect_fallback: float | None = None,
 ) -> MarkerResult:
     """
     Detect 4 corner markers and (if quality gate passes) warp the sheet to target_size.
@@ -149,6 +186,26 @@ def crop_on_markers(
                      Lower = more aggressive (apply warp even with noisy markers).
                      Use image_source to drive this: flatbed=0.65, scan_app=0.60,
                      camera=0.35, auto=0.45.
+        page_aspect_fallback:
+                     width/height of the template's page — used as the
+                     expected marker-quad aspect ratio (see the "Aspect-ratio
+                     plausibility check" below) whenever
+                     marker_centers_in_template isn't available ("legacy"
+                     warp mode). 2026-08-06: that check already existed and
+                     already catches exactly this failure — a well-formed
+                     but WRONG quad (e.g. a sheet's internal Phần I/II/III/IV
+                     section-divider squares picked instead of the true
+                     corners) — but it was silently a no-op for any template
+                     without explicit marker-center calibration, since
+                     expected_aspect had no other source. The page rectangle
+                     itself is a perfectly good (if slightly less precise)
+                     stand-in: real corner markers are printed close to the
+                     page edges, so the marker-quad AR should track the page
+                     AR to within a few percent on a correctly-cropped photo
+                     — confirmed on 3 real "Utokyo" template photos that were
+                     stretching content into the wrong shape: observed quad
+                     AR was off by -30%, +23%, -30% vs the page's 0.707,
+                     miles past MARKER_MAX_ASPECT_DEVIATION=0.06.
 
     Returns:
         MarkerResult with .success, .image, .warp_used, .marker_quality_score.
@@ -160,6 +217,24 @@ def crop_on_markers(
     original_size = (orig_w, orig_h)
 
     logger.debug(f"CropOnMarkers: original size = {orig_w}×{orig_h}")
+
+    # Expected marker-quad aspect ratio. Prefer the precise value derived
+    # from the template's own declared marker positions ("correct mode");
+    # fall back to the page's own aspect ratio when that calibration isn't
+    # available — see page_aspect_fallback docstring above.
+    expected_aspect: float | None = None
+    if marker_centers_in_template is not None:
+        try:
+            ew = float(marker_centers_in_template["TR"][0]) - float(marker_centers_in_template["TL"][0])
+            eh = float(marker_centers_in_template["BL"][1]) - float(marker_centers_in_template["TL"][1])
+            if ew > 0 and eh > 0:
+                expected_aspect = ew / eh
+        except (KeyError, IndexError, TypeError, ZeroDivisionError):
+            expected_aspect = None
+    expected_aspect_is_fallback = False
+    if expected_aspect is None and page_aspect_fallback is not None and page_aspect_fallback > 0:
+        expected_aspect = page_aspect_fallback
+        expected_aspect_is_fallback = True
 
     # ── Pre-process: CLAHE → GaussianBlur ────────────────────────────────
     # CLAHE normalises uneven illumination (camera photos with shadows).
@@ -191,16 +266,32 @@ def crop_on_markers(
     # Morphology kernel for closing small gaps
     close_k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 
+    # 2026-08-04: pre-compute ALL 3 morphed binaries once, up front — the
+    # outlier-quadrant refinement (see _refine_worst_quadrant) needs to be
+    # able to search EVERY binary strategy for the flagged quadrant, not just
+    # whichever one happened to be "current" when 4 markers first turned up.
+    # Confirmed real case: the true TL corner was cleanly isolated (sol=0.95,
+    # asp=1.00) under "adaptive" thresholding, but under "otsu" it was fused
+    # into one large blob with an adjacent printed border line (sol=0.61,
+    # asp=3.30 — nothing like a marker) — invisible to a refinement that only
+    # ever looks at the single binary the outer loop is currently trying.
+    morphed_binaries = [
+        cv2.morphologyEx(b, cv2.MORPH_CLOSE, close_k, iterations=2)
+        for b in binary_candidates
+    ]
+
     # ── Try each binary × each relaxation stage until 4 markers found ────
     for stage_idx, (min_sol, min_asp, max_asp, min_af, max_af, max_zone) in enumerate(_RELAX_STAGES):
-        for bin_idx, raw_binary in enumerate(binary_candidates):
-            binary = cv2.morphologyEx(raw_binary, cv2.MORPH_CLOSE, close_k, iterations=2)
-
+        for bin_idx, binary in enumerate(morphed_binaries):
             chosen, src_pts, marker_info = _detect_markers(
                 binary, orig_w, orig_h,
                 min_sol=min_sol, min_asp=min_asp, max_asp=max_asp,
                 min_area_frac=min_af, max_area_frac=max_af,
                 max_zone=max_zone,
+                stage_idx=stage_idx,
+                all_binaries=morphed_binaries,
+                expected_aspect=expected_aspect,
+                expected_aspect_is_fallback=expected_aspect_is_fallback,
                 debug=(debug and stage_idx == 0 and bin_idx == 0),
             )
 
@@ -306,6 +397,264 @@ def _compute_marker_quality(
     return round(quality, 3), reject_reason
 
 
+# ── Outlier-quadrant refinement (see call site in _detect_markers) ────────
+
+REFINE_TRIGGER_PCT      = 3.0   # only attempt refinement above this diag offset %
+# 2026-08-06: was 5.0 — lowered after a real case (z8093749410429) measured
+# 4.6% diag offset from a single wrong TL corner (a decoy square from a
+# folded/dog-eared paper corner) and silently sailed under the old trigger,
+# never even attempting a search. See _refine_worst_quadrant's 2026-08-06
+# note for the full story (also fixed a bug there: refinement used to only
+# search the single quadrant a flawed heuristic guessed was "worst", which
+# on this exact photo picked the WRONG quadrant to fix). REFINE_MIN_IMPROVEMENT
+# and REFINE_MAX_ACCEPT_PCT below are what actually keep this safe — a lower
+# trigger just means refinement is ATTEMPTED more often, not that swaps are
+# accepted more easily.
+REFINE_MIN_IMPROVEMENT  = 0.60  # candidate's new offset must be <= this fraction of current
+REFINE_MAX_ACCEPT_PCT   = 8.0   # candidate's new offset must also land below this absolute bar
+# 2026-08-04: matches the stricter of the two area-ratio hard-reject cutoffs
+# already enforced downstream (_compute_marker_quality's own hard_reject at
+# 5.0x, tighter than _detect_markers' post-hoc MARKER_MAX_AREA_RATIO=6.0) —
+# confirmed real case: multi-binary search found a candidate with a nearly
+# perfect diag offset (2.7%) but a much SMALLER area than the other 3
+# markers (a partial/fragment blob, not the full printed square), which
+# passed the diag-offset bar but then tripped the downstream area-ratio hard
+# reject, rejecting the ENTIRE warp — worse than leaving the original
+# (imperfect but area-consistent) pick alone. Refinement must reject such
+# candidates itself instead of letting a later stage silently throw away the
+# whole detection.
+REFINE_MAX_AREA_RATIO   = 5.0
+
+# Absolute ceiling on post-swap aspect-ratio deviation from expected_aspect
+# (see the 2026-08-06 guard in _refine_worst_quadrant). Looser than the
+# module-level MARKER_MAX_ASPECT_DEVIATION_FALLBACK=0.18 hard-reject — this
+# only needs to stop refinement from CONFIDENTLY installing a swap that's
+# still clearly wrong; the hard-reject downstream is the last line of
+# defense if refinement can't find anything under this bar.
+REFINE_MAX_ACCEPT_ASPECT_DEV = 0.08
+
+
+def _diag_offset_pct(chosen: dict) -> float:
+    """% of the TL-BR diagonal length by which the TL-BR and TR-BL diagonal
+    midpoints fail to coincide — 0% for a perfect parallelogram, larger for
+    an increasingly non-rectangular quad. See _refine_worst_quadrant."""
+    tl, tr, bl, br = chosen["TL"], chosen["TR"], chosen["BL"], chosen["BR"]
+    mid1 = ((tl["cx"] + br["cx"]) / 2.0, (tl["cy"] + br["cy"]) / 2.0)
+    mid2 = ((tr["cx"] + bl["cx"]) / 2.0, (tr["cy"] + bl["cy"]) / 2.0)
+    off = ((mid1[0] - mid2[0]) ** 2 + (mid1[1] - mid2[1]) ** 2) ** 0.5
+    length = (((br["cx"] - tl["cx"]) ** 2 + (br["cy"] - tl["cy"]) ** 2) ** 0.5) + 1.0
+    return off / length * 100.0
+
+
+REFINE_MAX_ROUNDS = 2   # re-check for a NEW worst quadrant after each swap
+
+
+def _quad_observed_aspect(chosen: dict) -> float:
+    """Same aggregate top/bottom-width ÷ left/right-height formula as the
+    module-level aspect-ratio plausibility check — kept separate so
+    _refine_worst_quadrant can evaluate it per-candidate without needing the
+    4 numpy points assembled yet."""
+    tl, tr, bl, br = chosen["TL"], chosen["TR"], chosen["BL"], chosen["BR"]
+    top_w   = ((tr["cx"] - tl["cx"]) ** 2 + (tr["cy"] - tl["cy"]) ** 2) ** 0.5
+    bot_w   = ((br["cx"] - bl["cx"]) ** 2 + (br["cy"] - bl["cy"]) ** 2) ** 0.5
+    left_h  = ((bl["cx"] - tl["cx"]) ** 2 + (bl["cy"] - tl["cy"]) ** 2) ** 0.5
+    right_h = ((br["cx"] - tr["cx"]) ** 2 + (br["cy"] - tr["cy"]) ** 2) ** 0.5
+    return ((top_w + bot_w) / 2.0) / max((left_h + right_h) / 2.0, 1.0)
+
+
+def _refine_worst_quadrant(
+    chosen: dict,
+    binaries: list[np.ndarray],
+    orig_w: int, orig_h: int,
+    stage_idx: int,
+    debug: bool,
+    expected_aspect: float | None = None,
+) -> dict:
+    """Try to fix the single most-inconsistent corner by cross-checking
+    against the other 3 (see the long comment at the call site for the real
+    case this was written for). No-op unless the current quad already looks
+    suspicious AND a decisively better alternate exists.
+
+    2026-08-04: originally only re-scanned the ONE binary (otsu/adaptive/
+    fixed) that the outer loop happened to be trying when 4 markers first
+    turned up — but a marker can be perfectly clean under one binary
+    strategy while fused into an unrelated blob under another. Confirmed
+    real case: true TL marker was fused with an adjacent printed border
+    line under otsu (sol=0.61, asp=3.30 — nothing marker-like) but cleanly
+    isolated under adaptive (sol=0.95, asp=1.00, 5px from the true corner).
+    The outer loop never even TRIES adaptive for this photo because otsu
+    already returned *a* 4-corner result (just a wrong one) — so refinement
+    must search every binary itself. Also loops up to REFINE_MAX_ROUNDS
+    times: fixing the worst quadrant can reveal that a different one is now
+    the new worst (each swap only ever touches one quadrant at a time).
+
+    2026-08-06: which quadrant is "worst" used to be picked BEFORE searching
+    for alternates, via distance from the chosen point to the raw image
+    corner (0,0)/(w,0)/etc. That heuristic conflates "far from the image
+    edge" with "wrong" — but a correctly-detected marker can sit far from
+    the raw image corner for a completely innocent reason (extra background/
+    table margin in the photo framing), while a genuinely wrong point can
+    still be close to its image corner. Confirmed on a real photo
+    (z8093749410429): TL had locked onto a decoy square (another sheet's
+    marker peeking out from under a folded/dog-eared corner) instead of the
+    true TL marker sitting 116px away — but the pre-search heuristic flagged
+    TR as "worst" instead (TR's raw distance to (w,0) was, by coincidence of
+    this photo's framing, slightly larger than TL's distance to (0,0)),
+    wasted its one swap moving TR from a correct position to a WRONG one,
+    and left the actually-broken TL untouched — diag offset numerically
+    improved (4.6%→0.8%) while the quad got LESS correct.
+    The leave-one-out parallelogram defect (expected_X via the other 3) is
+    mathematically identical in magnitude for all 4 corners when only one is
+    wrong — it cannot tell you which corner to blame either. The only way to
+    find out is to try candidates in EVERY quadrant and see which single
+    swap actually explains away the defect: on the same photo, swapping in
+    the true alternate TL candidate reduced the offset to 0.25% — a clearly
+    better resolution than the wrong TR swap's 0.81%. So: evaluate the best
+    available candidate in ALL 4 quadrants each round (not just one
+    heuristically-guessed quadrant), and commit to whichever single swap
+    yields the lowest resulting offset."""
+    corner_targets = {"TL": (0, 0), "TR": (orig_w, 0), "BL": (0, orig_h), "BR": (orig_w, orig_h)}
+    img_area = orig_w * orig_h
+    min_edge_x = MARKER_MIN_EDGE_FRAC * orig_w
+    min_edge_y = MARKER_MIN_EDGE_FRAC * orig_h
+
+    def best_candidate_for_quadrant(quad: str, current_pct: float) -> tuple[dict | None, float]:
+        """Search every binary × every relaxation tier (from stage_idx
+        onward) for the alternate candidate in `quad` that most reduces the
+        overall diagonal offset. Returns (candidate_or_None, resulting_pct)."""
+        best_cand: dict | None = None
+        best_pct = current_pct
+        for tier_idx in range(stage_idx, len(_RELAX_STAGES)):
+            min_sol, min_asp, max_asp, min_af, max_af, max_zone = _RELAX_STAGES[tier_idx]
+            min_area = min_af * img_area
+            max_area = max_af * img_area
+            max_zone_x = max_zone * orig_w
+            max_zone_y = max_zone * orig_h
+
+            for binary in binaries:
+                cnts, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                for c in cnts:
+                    area = cv2.contourArea(c)
+                    if area < min_area or area > max_area:
+                        continue
+                    hull = cv2.convexHull(c)
+                    hull_area = cv2.contourArea(hull)
+                    if hull_area < 1:
+                        continue
+                    solidity = area / hull_area
+                    if solidity < min_sol:
+                        continue
+                    x, y, w, h = cv2.boundingRect(c)
+                    aspect = w / max(h, 1)
+                    if not (min_asp <= aspect <= max_asp):
+                        continue
+                    cx, cy = x + w / 2, y + h / 2
+
+                    in_left   = min_edge_x < cx < max_zone_x
+                    in_right  = orig_w - max_zone_x < cx < orig_w - min_edge_x
+                    in_top    = min_edge_y < cy < max_zone_y
+                    in_bottom = orig_h - max_zone_y < cy < orig_h - min_edge_y
+                    in_quad_zone = {
+                        "TL": in_left and in_top, "TR": in_right and in_top,
+                        "BL": in_left and in_bottom, "BR": in_right and in_bottom,
+                    }[quad]
+                    if not in_quad_zone:
+                        continue
+
+                    # A candidate that fits the diagonal geometry well but is
+                    # a fragment/partial blob (much smaller area than the
+                    # other 3 already-trusted markers) would trip the
+                    # downstream area-consistency hard-reject and throw away
+                    # the WHOLE detection — worse than not refining at all.
+                    other_areas = [chosen[q]["area"] for q in chosen if q != quad]
+                    trial_areas = other_areas + [area]
+                    area_ratio = max(trial_areas) / max(min(trial_areas), 1.0)
+                    if area_ratio > REFINE_MAX_AREA_RATIO:
+                        continue
+
+                    trial = dict(chosen)
+                    trial[quad] = {"cx": cx, "cy": cy}
+                    pct = _diag_offset_pct(trial)
+                    if pct < best_pct:
+                        best_pct = pct
+                        best_cand = {"cx": cx, "cy": cy, "area": area, "solidity": solidity, "aspect": aspect}
+        return best_cand, best_pct
+
+    for _round in range(REFINE_MAX_ROUNDS):
+        current_pct = _diag_offset_pct(chosen)
+        if current_pct <= REFINE_TRIGGER_PCT:
+            break  # already coherent — nothing left to refine
+
+        # Try all 4 quadrants, keep whichever single swap wins outright.
+        best_quad: str | None = None
+        best_cand: dict | None = None
+        best_pct = current_pct
+        for quad in corner_targets:
+            cand, pct = best_candidate_for_quadrant(quad, current_pct)
+            if cand is not None and pct < best_pct:
+                best_pct = pct
+                best_cand = cand
+                best_quad = quad
+
+        if not (
+            best_cand is not None
+            and best_pct <= current_pct * REFINE_MIN_IMPROVEMENT
+            and best_pct <= REFINE_MAX_ACCEPT_PCT
+        ):
+            break  # no decisive improvement found this round — stop
+
+        # 2026-08-06: diagonal-bisection offset alone isn't sufficient —
+        # confirmed on a real photo (z8093749637297) where TL was ALREADY
+        # correctly detected (x≈91, matching the true corner), but the
+        # search still found an alternate TL candidate (x≈238, actually an
+        # internal decorative marker) that made the quad's diagonals bisect
+        # *more* precisely (6.6%→0.2%) purely by coincidence — every photo
+        # has some genuine keystone, so the true (correctly-detected) quad
+        # is never a perfect parallelogram, leaving room for a wrong-but-
+        # more-symmetric alternate to look "better" by this metric alone.
+        # That swap silently made a fine detection much worse (AR deviation
+        # from the page's known aspect ratio went from ~1% to 17%). Guard:
+        # when expected_aspect is available, require the swap to also not
+        # make the AR deviation worse — a swap that "fixes" the diagonals
+        # while moving further from the known page shape is exactly the
+        # coincidence above, not a genuine correction.
+        if expected_aspect is not None and expected_aspect > 0:
+            aspect_dev_before = abs(_quad_observed_aspect(chosen) / expected_aspect - 1.0)
+            trial = dict(chosen)
+            trial[best_quad] = best_cand
+            aspect_dev_after = abs(_quad_observed_aspect(trial) / expected_aspect - 1.0)
+            # Relative check alone isn't enough: if the PRE-swap quad already
+            # has a bad aspect deviation (e.g. because it came from a binary/
+            # stage path that itself isn't great), "doesn't get much worse"
+            # can still leave a badly-wrong quad standing. Also require the
+            # POST-swap deviation to land under an absolute ceiling —
+            # REFINE_MAX_ACCEPT_ASPECT_DEV — mirroring the existing relative-
+            # AND-absolute pattern already used for the diagonal-offset check
+            # (REFINE_MIN_IMPROVEMENT + REFINE_MAX_ACCEPT_PCT above).
+            if (
+                aspect_dev_after > aspect_dev_before + 0.02
+                or aspect_dev_after > REFINE_MAX_ACCEPT_ASPECT_DEV
+            ):
+                if debug:
+                    logger.debug(
+                        f"  _refine_worst_quadrant round {_round}: rejected {best_quad} swap — "
+                        f"diag offset improved ({current_pct:.1f}%->{best_pct:.1f}%) but aspect "
+                        f"deviation worsened ({aspect_dev_before*100:.0f}%->{aspect_dev_after*100:.0f}%)"
+                    )
+                break
+
+        if debug:
+            logger.debug(
+                f"  _refine_worst_quadrant round {_round}: {best_quad} "
+                f"{current_pct:.1f}% -> {best_pct:.1f}% via alt candidate "
+                f"at ({best_cand['cx']:.0f},{best_cand['cy']:.0f})"
+            )
+        chosen = dict(chosen)
+        chosen[best_quad] = best_cand
+
+    return chosen
+
+
 # ── Marker detection core ─────────────────────────────────────────────────
 
 def _detect_markers(
@@ -315,6 +664,10 @@ def _detect_markers(
     min_sol: float, min_asp: float, max_asp: float,
     min_area_frac: float, max_area_frac: float,
     max_zone: float,
+    stage_idx: int = 0,
+    all_binaries: list[np.ndarray] | None = None,
+    expected_aspect: float | None = None,
+    expected_aspect_is_fallback: bool = False,
     debug: bool,
 ) -> tuple[dict | None, np.ndarray | None, list[dict] | None]:
     """
@@ -459,6 +812,44 @@ def _detect_markers(
         logger.debug(f"  _detect_markers: missing quadrant(s): {missing}")
         return None, None, None
 
+    # ── Outlier-quadrant refinement ───────────────────────────────────────
+    # 2026-08-04: the per-quadrant `_score` above picks INDEPENDENTLY per
+    # quadrant — it has no way to notice that its pick for ONE quadrant makes
+    # the overall 4-point quad an obvious non-rectangle, even when the other
+    # 3 quadrants clearly agree with each other. Confirmed on 3 separate real
+    # camera photos of the same custom template ("Utokyo" — has extra small
+    # black-square SECTION-DIVIDER markers at internal Phần I/II/III/IV
+    # boundaries, printed in the outer 38% corner zone by coincidence of this
+    # template's layout): the true corner marker was slightly under-detected
+    # (blur/shadow shaved a few points off its solidity, occasionally below
+    # this stage's min_sol cutoff entirely) so a section-divider square won
+    # its quadrant on local score alone — producing a visibly skewed
+    # trapezoid. One confirmed case: TL landed ~460px from the true corner,
+    # diagonal-bisection offset 10.3% of the diagonal — under the existing
+    # 15% hard-reject cutoff below, so the bad warp was silently applied.
+    #
+    # Fix: if the resulting quad's diagonal offset is already large enough to
+    # be suspicious (>5%, chosen well below the 15% hard-reject line so this
+    # only touches genuinely borderline cases), re-scan ONLY the single
+    # worst-agreeing quadrant using the NEXT relaxation tier's looser
+    # thresholds, and swap in whichever alternate candidate makes the 4-point
+    # quad most self-consistent (minimises diagonal-bisection offset) — never
+    # picked by local squareness/solidity/distance alone, but cross-checked
+    # against the other 3 markers, which independently agreeing with each
+    # other is itself strong evidence they're already correct. Only accepts
+    # the swap if it is a decisive improvement (cuts the offset by ≥40% AND
+    # lands at ≤8%, comfortably inside the range of normally-good photos) —
+    # otherwise leaves the original per-quadrant picks untouched entirely, so
+    # already-coherent detections (the vast majority — median offset across
+    # 69 unique archived camera photos is 0.34%) are never touched by this.
+    # Verified on the 992234f27e734e339a1bd7b9c13a3e4e case: TL offset
+    # 10.3% → 3.95%, swapping (388,432) [wrong] for (124,430) [the true
+    # corner marker's own position].
+    chosen = _refine_worst_quadrant(
+        chosen, all_binaries or [binary], orig_w, orig_h, stage_idx, debug,
+        expected_aspect=expected_aspect,
+    )
+
     # ── Area consistency check ────────────────────────────────────────────
     areas = [chosen[q]["area"] for q in ("TL", "TR", "BL", "BR")]
     area_ratio = max(areas) / max(min(areas), 1)
@@ -513,6 +904,37 @@ def _detect_markers(
                 f"{diag_off / diag_len * 100:.0f}% of diagonal) → reject, retry next strategy"
             )
         return None, None, None
+
+    # ── Aspect-ratio plausibility check ────────────────────────────────────
+    # See MARKER_MAX_ASPECT_DEVIATION above for the real-world case this
+    # catches: a quad can be a clean, internally-consistent parallelogram
+    # (passes parallelism, solidity, area-consistency, AND diagonal-midpoint
+    # above) while still being the WRONG shape entirely — e.g. all 4 points
+    # actually landed on an interior content box instead of the true corner
+    # markers. Comparing against the page's own known aspect ratio (from the
+    # template's declared marker positions) is the only check that catches
+    # this, because it is the only one that looks outside the 4 points
+    # themselves.
+    if expected_aspect is not None and expected_aspect > 0:
+        top_w   = float(np.linalg.norm(tr_pt - tl_pt))
+        bot_w   = float(np.linalg.norm(br_pt - bl_pt))
+        left_h  = float(np.linalg.norm(bl_pt - tl_pt))
+        right_h = float(np.linalg.norm(br_pt - tr_pt))
+        observed_aspect = ((top_w + bot_w) / 2.0) / max((left_h + right_h) / 2.0, 1.0)
+        aspect_dev = abs(observed_aspect / expected_aspect - 1.0)
+        aspect_limit = (
+            MARKER_MAX_ASPECT_DEVIATION_FALLBACK if expected_aspect_is_fallback
+            else MARKER_MAX_ASPECT_DEVIATION
+        )
+        if aspect_dev > aspect_limit:
+            if debug:
+                logger.debug(
+                    f"  _detect_markers: aspect mismatch (observed={observed_aspect:.3f} "
+                    f"expected={expected_aspect:.3f}, dev={aspect_dev * 100:.0f}%, "
+                    f"limit={aspect_limit*100:.0f}%{' [fallback]' if expected_aspect_is_fallback else ''}) "
+                    f"→ reject, retry next strategy"
+                )
+            return None, None, None
 
     marker_info = [
         {"quad": q, "cx": chosen[q]["cx"], "cy": chosen[q]["cy"],

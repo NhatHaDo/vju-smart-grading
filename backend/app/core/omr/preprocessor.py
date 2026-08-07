@@ -247,6 +247,74 @@ def resize_to_template(
     return cv2.resize(image, (target_w, target_h), interpolation=interp)
 
 
+def flatten_illumination(
+    gray: np.ndarray,
+    ksize: int = 45,
+) -> np.ndarray:
+    """
+    Flatten uneven lighting/shadow across a photographed sheet — the same
+    idea document-scanner apps (CamScanner/Office Lens "scan" filter) use to
+    turn a phone photo into something that looks like a flatbed scan.
+
+    2026-08-06: "vấn đề mấy cái vàng thì có vẻ là do thiếu sáng ... đưa về
+    ảnh scan trước khi detect". Root cause: a single `global_threshold` (plus
+    per-strip local-jump logic) is computed for the WHOLE sheet, but a phone
+    photo's brightness commonly drifts 20-40+ gray levels across the page
+    (hand/phone shadow, uneven room light). A blank bubble in a shadowed
+    corner can measure darker than a truly-filled bubble in a bright corner
+    — no single threshold (global or local-per-strip) can fully separate
+    that without either missing real marks or hallucinating fake ones. This
+    is the same uneven-lighting failure mode behind the GRADIENT_MAX_SIGN_
+    CHANGES / FLAT_STRIP_MAX_SPREAD tolerance bumps earlier this project —
+    those made the classifier more forgiving of noise; this instead removes
+    the noise before it reaches the classifier.
+
+    Method: MORPHOLOGICAL CLOSE (not Gaussian blur — see below) estimates
+    the local page-background brightness, then the original is divided by
+    that estimate and rescaled so "paper white" reads ~255 everywhere,
+    independent of which part of the page was shadowed.
+
+    First attempt used a large Gaussian blur as the background estimate —
+    wrong tool for a *dense, ink-heavy* page like an OMR sheet (question
+    text, grid lines, 40+ bubble rows). A blur AVERAGES ink into its own
+    background estimate, so dividing partially cancels the very darkness
+    that separates a fill from blank paper — regression-tested against the
+    34 real photos behind the "phiếu lỗi" report: at blur=65 it flipped 293
+    previously-correct `answered` fields to `needs_review` (marks washed
+    out) against only 37 genuine fixes — net harmful. MORPH_CLOSE instead
+    takes the local bright *envelope* (dilate-then-erode), which — as long
+    as ksize is bigger than a bubble (19px in this template) — reconstructs
+    "what this pixel would read with no ink here" without ink density
+    dragging the estimate down. Re-tested the same 34 photos at ksize=45:
+    56 fields flipped blank→answered (real under-detected marks now read
+    correctly — confirmed by hand on m_sinh_vin8/z8093749377371: mark "5"
+    measured 100.6 vs neighbors 106.8-109.9 before, i.e. only a 6.2 gray-
+    level gap — under INT_MIN_JUMP=12, hence blank; after flattening the
+    gap opens to 12.8, clearing the threshold) against 12 answered→
+    needs_review (all 3 source photos already flagged bad this session for
+    unrelated reasons — a missing physical corner marker on one of them —
+    and the flipped fields were themselves marginal ~8-13 gray-level gaps,
+    i.e. downgraded from a low-confidence guess to an honest review flag,
+    not a confident-right-answer-turned-wrong).
+
+    Args:
+        gray:  Grayscale image (typically the perspective-corrected,
+               already-resized-to-template sheet — call AFTER warp, not on
+               the raw photo, so marker detection is untouched).
+        ksize: Morphological closing kernel (pixels). 45 is tuned for this
+               project's ~1000-1900px-wide template pages with ~19-40px
+               bubbles — big enough to bridge over a full bubble/ink blob,
+               small enough to still track real page-level shading changes.
+
+    Returns:
+        uint8 grayscale image, same size, with lighting flattened.
+    """
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
+    background = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+    flattened = (gray.astype(np.float32) / (background.astype(np.float32) + 1e-6)) * 255.0
+    return np.clip(flattened, 0, 255).astype(np.uint8)
+
+
 def resize_fit_pad(
     image: np.ndarray,
     page_dimensions: list[int],

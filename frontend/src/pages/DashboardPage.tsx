@@ -370,9 +370,14 @@ export default function DashboardPage() {
               <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', height: 80, marginBottom: 12 }}>
                 {recentExams.map(({ exam, graded }, i) => {
                   const sc  = getExamStudentCount(exam);
-                  const pct = sc !== null && sc > 0
+                  // 2026-08-04: chấm bù/chấm lại có thể khiến graded > sĩ số
+                  // đăng ký (hoặc sĩ số chưa nhập/nhập thấp) — pct khi đó > 1
+                  // và cột render cao hàng nghìn px, tràn đè lên nội dung
+                  // xung quanh (thấy rõ trên màn hình hẹp di động). Chặn ở 1.
+                  const pctRaw = sc !== null && sc > 0
                     ? graded / sc
                     : graded > 0 ? 1 : 0;
+                  const pct = Math.min(1, pctRaw);
                   const h = Math.max(8, pct * 80);
                   return (
                     <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>

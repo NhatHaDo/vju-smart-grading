@@ -123,6 +123,69 @@ INT_MIN_JUMP = 12   # lower than MCQ MIN_JUMP=25; catches 10–12-unit gaps
 INT_OUTLIER_TIGHT_MIN_JUMP = 7
 INT_OUTLIER_TIGHT_REST_SPREAD_MAX = 8.0
 
+# 2026-08-04: a handheld-camera photo with an uneven lighting/shadow gradient
+# across the page can make an ENTIRE genuinely blank INT digit column read as
+# a smooth, monotonic slope from one physical end of the column to the other
+# (e.g. digit "0" brightest, digit "9" darkest, every step in between — no
+# real jump anywhere). Confirmed real case ("Phần IV" signed-decimal columns,
+# all 6 "Câu" × 4 digit positions): means climbed/fell smoothly, strip_spread
+# 12.8 — above FLAT_STRIP_MAX_SPREAD (10.0), so not caught by the flat-strip
+# fallback below — yet with no gap anywhere near INT_MIN_JUMP or
+# INT_OUTLIER_TIGHT_MIN_JUMP either, so it fell all the way to global_thr,
+# which (for a generally dark/underexposed photo) sat right inside the
+# gradient and marked the darkest 1-2 positions as MARKED purely because
+# they were at the dark end of the slope, not because of any ink.
+#
+# A genuine mark is a LOCAL spike/dip against its neighbours in PHYSICAL
+# POSITION order, not a smooth slope across the whole column — so
+# classify_strip_int() checks strip_means in position order (not sorted by
+# darkness) for a monotonic trend before trusting global_thr. Spread is
+# capped well below the only confirmed genuine multi-mark rest_spread on
+# record (31.8, see FLAT_STRIP_MAX_SPREAD note) so a real double-mark can
+# never be mistaken for a gradient.
+GRADIENT_MAX_SIGN_CHANGES = 2   # tolerate 2 non-conforming steps (page noise)
+# 2026-08-05 (later same day): raised from 1 to 2. Real case — CV1239 draft
+# template, "Phần III" signed-decimal digit columns, real phone photo
+# (cauIII_1_d3): means [163.94,159.96,156.63,153.5,146.39,140.99,140.36,
+# 143.62,140.11,142.06] — visually confirmed BLANK (no pencil mark anywhere),
+# but the smooth top-to-bottom fall has 2 small reversals near the bottom
+# (rows 6→7, 8→9), one over the old tolerance of 1. Fell through to
+# global_thr and mis-marked rows 6+8, producing a false multi_mark that
+# collapsed the whole composite short-answer to "cần review".
+#
+# This directly contradicts the note just below (kept for the record): that
+# earlier decision left this tolerance at 1 specifically to avoid hiding a
+# genuine double-mark, because at the time there wasn't data to rule the risk
+# out. Re-tested now against all 999 archived means.json on disk (13,641 INT
+# digit-column strips, 1,228 already flagged multi_mark): re-running
+# classify_strip_int with this tolerance raised to 2 resolves 176 of those
+# multi_mark strips to fully BLANK, flips ZERO previously-blank or
+# previously-single-marked strips to anything else, and fabricates ZERO new
+# single "confident" marks out of noise (every resolved strip lands on 0
+# marked bubbles, never 1) — the remaining 602 (nonconform ≥ 3, or spread >
+# GRADIENT_MAX_SPREAD) still correctly fall through to manual review. A
+# strip with an actual second real mark produces a LOCAL spike, not a smooth
+# near-monotonic slope with 2 reversals — see the "genuine mark = local
+# spike, not a slope" reasoning above, which is what this whole guard rests
+# on and remains true at tolerance=2, not just tolerance=1.
+# 2026-08-05: a more severely lit camera photo ("t chấm bằng temp 40 câu TN",
+# custom template shared_40tn_dungsai — 12 cảnh báo trên 1 ảnh, "detect sai
+# tùm lum") pushed the gradient spread past the old 20.0 ceiling: 3 columns
+# (custom_1785281786622_d1=25.63, _d4=21.77, custom_1785281844407_d1=26.28)
+# were textbook monotonic slopes (nonconform ≤ 1, i.e. GRADIENT_MAX_SIGN_
+# CHANGES already vetted them as gradient-shaped) but got rejected purely on
+# spread, falling back to global_thr and reading as MULTI_MARK. Raised to
+# 28.0 — enough headroom for these three, while staying safely below the
+# only confirmed genuine multi-mark spread on record (31.8, see
+# FLAT_STRIP_MAX_SPREAD note) so a real double-mark still can't slip through
+# as "just a gradient". NOTE: this same photo had 9 other warned columns
+# with nonconform 2–4 (e.g. m_sinh_vin2: spread=31.3, nonconform=4) — those
+# are NOT fixed by this change and correctly still require manual review;
+# they don't look like a clean gradient (too many direction reversals) and
+# loosening GRADIENT_MAX_SIGN_CHANGES to catch them would materially raise
+# the risk of hiding a real double-mark, so that tolerance was left alone.
+GRADIENT_MAX_SPREAD = 28.0      # was 20.0; confirmed real case measured 12.8
+
 # Outlier fallback for MCQ strips (see get_local_threshold's outlier_min_jump).
 # Low-contrast camera photos routinely produce marked/blank gaps well under
 # the strict MIN_JUMP=25 cutoff — clearly a single mark to the eye, but not
@@ -216,7 +279,33 @@ MCQ_OUTLIER_TIGHT_REST_SPREAD_MAX = 9.5
 # (every confirmed genuine multi-mark case in this file has rest_spread
 # >= 8, most >> 20 — e.g. tn27's confirmed case had rest_spread=31.8), so
 # a strip this flat is treated as blank instead of deferring to global_thr.
-FLAT_STRIP_MAX_SPREAD = 10.0
+#
+# 2026-08-05: raised 10.0 → 14.0. Real case — production template "Mẫu 40
+# câu TN + Đúng/Sai" (id=9), real phone photo, trắc nghiệm ABCD câu 37 + 40:
+#   - câu37: means [A=102.69, B=116.02, C=110.91, D=108.05], spread=13.33.
+#   - câu40: means [A=104.70, B=114.96, C=112.50, D=108.76], spread=10.26.
+# Both visually confirmed on the actual scan (only 1 bubble filled each,
+# rest genuinely blank), but both missed the old 10.0 ceiling and fell
+# through to global_thr on this dark/low-contrast photo, marking all 4
+# choices "MARKED" (multi_mark) — user saw wildly inflated Sai counts
+# (e.g. 35/40 wrong) across a whole batch graded this way, because a
+# multi_mark answer never equals the single correct-answer key value, so
+# every affected row silently scored as wrong instead of "needs review".
+# Re-tested against all archived means.json on disk (1,170 files, 52,751
+# MCQ4 strips): raising the cap to 14.0 resolves 1,194 of these false
+# multi_mark strips to blank, flips ZERO previously-single-marked or
+# already-blank strips, fabricates ZERO single marks out of noise (every
+# resolved strip lands on 0 marked, never 1) — swept up to 30.0 with the
+# same zero-regression result, but kept the raise modest (14.0, just past
+# the observed 13.33) rather than jumping to the corpus's current safety
+# ceiling, per this function's own established pattern of "clear the
+# ceiling with a small buffer, don't take the largest headroom just
+# because today's corpus allows it" (see MCQ_OUTLIER_TIGHT_REST_SPREAD_MAX
+# comment above). This constant is shared with classify_strip_int()'s own
+# flat-strip check — re-verified combined with that function's 2026-08-05
+# GRADIENT_MAX_SIGN_CHANGES change on all 19,941 archived INT strips: 925
+# resolve to blank, 0 risky, 0 fabricated.
+FLAT_STRIP_MAX_SPREAD = 14.0
 
 
 # ── Data types ────────────────────────────────────────────────────────────
@@ -626,6 +715,26 @@ def analyze_bubble(
 
 # ── INT-field adaptive classifier ────────────────────────────────────────
 
+def _is_monotonic_gradient(strip_means: list[float]) -> bool:
+    """True if strip_means, in PHYSICAL BUBBLE-POSITION order (not sorted by
+    darkness), form an almost-uninterrupted monotonic climb or fall — the
+    signature of a lighting/shadow gradient across the strip rather than a
+    genuine local ink mark. See classify_strip_int's step-2 fallback for the
+    confirmed real case (Phần IV signed-decimal columns) this guards against.
+    """
+    n = len(strip_means)
+    if n < 4:
+        return False  # too few points to tell a trend from noise
+    spread = max(strip_means) - min(strip_means)
+    if spread > GRADIENT_MAX_SPREAD:
+        return False
+    diffs = [strip_means[i + 1] - strip_means[i] for i in range(n - 1)]
+    pos = sum(1 for d in diffs if d > 0)
+    neg = sum(1 for d in diffs if d < 0)
+    non_conforming = len(diffs) - max(pos, neg)
+    return non_conforming <= GRADIENT_MAX_SIGN_CHANGES
+
+
 def classify_strip_int(
     strip_means: list[float],
     bubbles: list[BubbleSpec],
@@ -717,6 +826,13 @@ def classify_strip_int(
                 # columns; see the scoping note on that branch).
                 strip_spread = sorted_m[-1] - sorted_m[0]
                 if strip_spread <= FLAT_STRIP_MAX_SPREAD:
+                    eff_thr = sorted_m[0] - confident_surplus - 1.0
+                elif _is_monotonic_gradient(strip_means):
+                    # See GRADIENT_MAX_SIGN_CHANGES/GRADIENT_MAX_SPREAD note
+                    # above: strip_spread alone can exceed FLAT_STRIP_MAX_
+                    # SPREAD purely from a smooth lighting gradient (not a
+                    # real jump), so also check position-order monotonicity
+                    # before trusting global_thr for a wider-spread strip.
                     eff_thr = sorted_m[0] - confident_surplus - 1.0
 
     # A tight-cluster threshold can sit inside a gap as small as 8px —

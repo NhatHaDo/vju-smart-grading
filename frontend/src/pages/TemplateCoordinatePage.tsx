@@ -1547,13 +1547,19 @@ export default function TemplateCoordinatePage() {
 
       <input ref={importRef} type="file" accept=".json" style={{ display: 'none' }} onChange={importAreas} />
 
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+      {/* 2026-08-04: "UI ở trên mobile nó bị dính hết vào nhau" — canvas
+         column (flex:1) and the wizard sidebar (fixed width:320) used to
+         sit side-by-side unconditionally. On a ~375px phone the canvas got
+         squeezed to ~55px and every label/button overlapped. See
+         .tpl-coord-main in globals.css: below 768px this stacks canvas on
+         top, wizard sidebar below, each full width. */}
+      <div className="tpl-coord-main" style={{ display: 'flex', flex: 1, minHeight: 0 }}>
 
         {/* ═══ LEFT: Canvas ═══════════════════════════════════════════════════ */}
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+        <div className="tpl-coord-canvas-col" style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
 
           {/* Top bar */}
-          <div style={{ padding: '8px 16px', borderBottom: '1px solid #E5E7EB', background: '#fff', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div className="tpl-coord-topbar" style={{ padding: '8px 16px', borderBottom: '1px solid #E5E7EB', background: '#fff', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             {/* Mode toggle */}
             <div style={{ display: 'flex', gap: 3, background: '#F1F5F9', borderRadius: 8, padding: 3 }}>
               <button style={modeBtn(templateMode === 'vju_preset')} onClick={() => switchTemplateMode('vju_preset')}>
@@ -1566,6 +1572,7 @@ export default function TemplateCoordinatePage() {
 
             {/* Template selector */}
             <select
+              className="tpl-coord-topbar-field"
               value={editingTemplateId != null ? String(editingTemplateId) : '__new__'}
               onChange={e => { void handleSelectTemplate(e.target.value); }}
               disabled={templatesLoading}
@@ -1578,6 +1585,7 @@ export default function TemplateCoordinatePage() {
             </select>
 
             <input
+              className="tpl-coord-topbar-field"
               value={templateName}
               onChange={e => setTemplateName(e.target.value)}
               placeholder="Tên template"
@@ -1619,7 +1627,7 @@ export default function TemplateCoordinatePage() {
           </div>
 
           {/* Canvas */}
-          <div ref={canvasContainerRef} style={{ flex: 1, overflow: 'auto', background: '#f4f5f7', position: 'relative' }}>
+          <div ref={canvasContainerRef} className="tpl-coord-canvas-area" style={{ flex: 1, overflow: 'auto', background: '#f4f5f7', position: 'relative' }}>
             <canvas
               ref={canvasRef}
               onClick={handleClick}
@@ -1686,7 +1694,7 @@ export default function TemplateCoordinatePage() {
         </div>
 
         {/* ═══ RIGHT: Wizard panel ════════════════════════════════════════════ */}
-        <div style={{ width: 320, flexShrink: 0, borderLeft: '1px solid #E5E7EB', background: '#F8FAFC', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div className="tpl-coord-sidebar" style={{ width: 320, flexShrink: 0, borderLeft: '1px solid #E5E7EB', background: '#F8FAFC', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflowY: 'auto', padding: '12px 12px 0' }}>
 
             {/* ── No fields placeholder (custom mode, empty) ─────────────── */}
@@ -1971,9 +1979,9 @@ export default function TemplateCoordinatePage() {
 
       {/* ══ Add / Edit Field Modal ══════════════════════════════════════════════ */}
       {showAddModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        <div className="tpl-coord-modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           onClick={e => { if (e.target === e.currentTarget) setShowAddModal(false); }}>
-          <div style={{ background: '#fff', borderRadius: 14, padding: '24px 28px', width: 380, boxShadow: '0 20px 60px rgba(0,0,0,0.3)', fontFamily: 'inherit' }}>
+          <div className="tpl-coord-modal-card" style={{ background: '#fff', borderRadius: 14, padding: '24px 28px', width: 380, maxWidth: '92vw', maxHeight: '86vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', fontFamily: 'inherit' }}>
             <div style={{ fontSize: 16, fontWeight: 700, color: '#111827', marginBottom: 18 }}>
               {editingKey ? 'Sửa field' : 'Thêm field mới'}
             </div>

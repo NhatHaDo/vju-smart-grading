@@ -8,6 +8,7 @@ import ForgotPasswordPage from '../pages/ForgotPasswordPage';
 import DashboardPage     from '../pages/DashboardPage';
 import ExamPage          from '../pages/ExamPage';
 import SheetReviewPage   from '../pages/SheetReviewPage';
+import QuickGradePage    from '../pages/QuickGradePage';
 import SettingsPage      from '../pages/SettingsPage';
 import OmrDebugPage      from '../pages/OmrDebugPage';
 import ResultsPage       from '../pages/ResultsPage';
@@ -45,6 +46,7 @@ export default function AppRoutes() {
         <Route index                  element={<DashboardPage />} />
         <Route path="exams"           element={<ExamPage />} />
         <Route path="upload"          element={<SheetReviewPage />} />
+        <Route path="quick-grade"     element={<QuickGradePage />} />
         <Route path="results"         element={<ResultsPage />} />
         <Route path="review-errors"   element={<ReviewErrorsPage />} />
         <Route path="answer-key"      element={<AnswerKeyPage />} />

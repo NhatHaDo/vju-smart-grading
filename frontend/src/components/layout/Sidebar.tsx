@@ -7,6 +7,7 @@ import {
   LayoutGrid,
   BookOpen,
   Upload,
+  Zap,
   BarChart2,
   BarChart3,
   Key,
@@ -27,6 +28,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/app',              icon: <LayoutGrid   size={20} />, label: 'Dashboard',           end: true },
   { to: '/app/exams',        icon: <BookOpen     size={20} />, label: 'Kỳ thi' },
   { to: '/app/upload',       icon: <Upload       size={20} />, label: 'Upload & Chấm' },
+  { to: '/app/quick-grade',  icon: <Zap          size={20} />, label: 'Chấm nhanh' },
   { to: '/app/results',        icon: <BarChart2        size={20} />, label: 'Kết quả & Export' },
   { to: '/app/excel-preview', icon: <TableProperties  size={20} />, label: 'Xem trước Excel' },
   { to: '/app/analytics',     icon: <BarChart3        size={20} />, label: 'Thống kê & Phân tích' },
@@ -140,13 +142,13 @@ export default function Sidebar() {
            box the user saw. Sliced by group instead, so this can't drift out
            of sync with NAV_ITEMS's length again. */}
         {/* Group 1: Main */}
-        {NAV_ITEMS.slice(0, 3).map(item => <SidebarLink key={item.to} {...item} />)}
+        {NAV_ITEMS.slice(0, 4).map(item => <SidebarLink key={item.to} {...item} />)}
         <Divider />
         {/* Group 2: Results */}
-        {NAV_ITEMS.slice(3, 6).map(item => <SidebarLink key={item.to} {...item} />)}
+        {NAV_ITEMS.slice(4, 7).map(item => <SidebarLink key={item.to} {...item} />)}
         <Divider />
         {/* Group 3: Config */}
-        {NAV_ITEMS.slice(6).map(item => <SidebarLink key={item.to} {...item} />)}
+        {NAV_ITEMS.slice(7).map(item => <SidebarLink key={item.to} {...item} />)}
       </nav>
 
       <div style={{ paddingBottom: 8, borderTop: '1px solid #F0F0F0' }}>

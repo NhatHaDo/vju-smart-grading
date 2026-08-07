@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
-import { FileImage, CheckCircle2, AlertTriangle, X, RefreshCw, LayoutTemplate, FolderUp, Trash2 } from 'lucide-react';
+import { FileImage, CheckCircle2, AlertTriangle, X, RefreshCw, LayoutTemplate, FolderUp, Trash2, Camera, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import PageHeader from '../components/layout/PageHeader';
+import CameraCaptureModal from '../components/common/CameraCaptureModal';
 import type { TemplateVariant, ImageSource, TemplateSchema } from '../types/grading';
 import {
   TEMPLATE_VARIANT_LABEL, saveLastUsedTemplate, PINNED_TEMPLATES, PINNED_TEMPLATE_40_ID, VJU_PRESET_SCHEMA,
@@ -56,8 +57,12 @@ export default function SheetReviewPage() {
   // ── Template mode: 'vju' | 'custom' ─────────────────────────────────────
   const [templateMode,   setTemplateMode]   = useState<'vju' | 'custom'>('vju');
   const [selectedSbd,    setSelectedSbd]    = useState(1); // 0=sbd4, 1=sbd8
-  /** Non-null when a PINNED_TEMPLATES button is picked (from within the "vju" tab). */
-  const [selectedPinnedCustomId, setSelectedPinnedCustomId] = useState<number | null>(null);
+  /** Non-null when a PINNED_TEMPLATES button is picked (from within the "vju" tab).
+   *  2026-08-05: mặc định lúc mới vào trang chọn sẵn "Mẫu 40 câu TN + Đúng/Sai"
+   *  (PINNED_TEMPLATE_40_ID) thay vì VJU SBD 8 số — theo yêu cầu, vì đây là mẫu
+   *  phiếu được dùng thực tế nhiều nhất hiện nay. sessionStorage preselect (điều
+   *  hướng từ trang Template) vẫn ghi đè giá trị này như cũ, xem useEffect bên dưới. */
+  const [selectedPinnedCustomId, setSelectedPinnedCustomId] = useState<number | null>(PINNED_TEMPLATE_40_ID);
 
   // ── Custom templates ─────────────────────────────────────────────────────
   const [customForms,        setCustomForms]        = useState<CustomFormMeta[]>([]);
@@ -77,6 +82,7 @@ export default function SheetReviewPage() {
   const [dragging,       setDragging]       = useState(false);
   const [dupWarning,     setDupWarning]     = useState<string | null>(null);
   const [selectedIdx,    setSelectedIdx]    = useState<Set<number>>(new Set());
+  const [cameraOpen,     setCameraOpen]     = useState(false);
   const fileRef   = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
 
@@ -312,6 +318,11 @@ export default function SheetReviewPage() {
       <PageHeader
         title="Upload & Chấm phiếu"
         subtitle="Chọn kỳ thi, upload ảnh phiếu rồi sang nhập đáp án để chấm"
+        actions={
+          <Button variant="outline" icon={<Zap size={15} />} onClick={() => navigate('/app/quick-grade')}>
+            Chấm nhanh liên tục
+          </Button>
+        }
       />
 
       <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -559,14 +570,30 @@ export default function SheetReviewPage() {
           <FileImage size={36} color={dragging ? '#C8102E' : '#FCA5A5'} style={{ margin: '0 auto 10px' }} />
           <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 15, color: '#374151' }}>Kéo thả ảnh/PDF phiếu thi vào đây</p>
           <p style={{ margin: '0 0 14px', fontSize: 13, color: '#9CA3AF' }}>Hỗ trợ JPG, PNG, HEIC/HEIF, WEBP, TIFF, BMP, PDF</p>
-          <button
-            type="button"
-            onClick={e => { e.stopPropagation(); void pickFolder(); }}
-            style={{ border: '1.5px solid #FECACA', borderRadius: 9999, padding: '6px 16px', fontSize: 12.5, fontWeight: 700, color: '#C8102E', background: '#fff', cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6 }}
-          >
-            <FolderUp size={13} /> Hoặc chọn cả thư mục
-          </button>
+          <div style={{ display: 'inline-flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); setCameraOpen(true); }}
+              style={{ border: '1.5px solid #C8102E', borderRadius: 9999, padding: '6px 16px', fontSize: 12.5, fontWeight: 700, color: '#fff', background: '#C8102E', cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <Camera size={13} /> Chụp ảnh bằng camera
+            </button>
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); void pickFolder(); }}
+              style={{ border: '1.5px solid #FECACA', borderRadius: 9999, padding: '6px 16px', fontSize: 12.5, fontWeight: 700, color: '#C8102E', background: '#fff', cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <FolderUp size={13} /> Hoặc chọn cả thư mục
+            </button>
+          </div>
         </div>
+
+        {cameraOpen && (
+          <CameraCaptureModal
+            onCapture={file => handleFiles([file])}
+            onClose={() => setCameraOpen(false)}
+          />
+        )}
 
         {dupWarning && (
           <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 10, padding: '8px 14px', fontSize: 12.5, color: '#92400E', display: 'flex', alignItems: 'center', gap: 8 }}>

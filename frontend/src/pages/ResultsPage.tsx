@@ -15,6 +15,21 @@ import type { TemplateFilterOption } from '../utils/templateSchema';
 import type { ExamOut } from '../types/exam';
 import { dbRowToOmrResult, correctionHasChanges } from '../utils/resultMapping';
 
+// ── Name/DOB thumbnail helper (2026-08-06) ──────────────────────────────────
+// Same path-resolution logic as imgUrl() in SheetImageViewer.tsx / OverlayLink()
+// in OmrDebugPage.tsx — debug.*_path can be an absolute filesystem path
+// (production) or relative (local dev); only the "outputs/"/"uploads/" tail is
+// an actual route the backend exposes (see app.mount() in main.py).
+const RESULTS_BACKEND = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
+function nameDobCropUrl(path: string | null | undefined): string | null {
+  if (!path) return null;
+  if (path.startsWith('http')) return path;
+  const norm = path.replace(/\\/g, '/');
+  const idx  = Math.max(norm.lastIndexOf('outputs/'), norm.lastIndexOf('uploads/'));
+  const relative = idx >= 0 ? norm.slice(idx) : norm.replace(/^\//, '');
+  return `${RESULTS_BACKEND}/${relative}`;
+}
+
 const LS_KEY = 'vju_last_batch_grade';
 
 // ── LocalStorage helpers ───────────────────────────────────────────────────
@@ -128,6 +143,9 @@ function buildBatchSaveRequest(batch: BatchGradeState, examId?: number | null): 
           // via batch grading (2026-07-28).
           original_image_path:     r.debug?.original_image_path      ?? null,
           aligned_image_path:      r.debug?.aligned_image_path       ?? null,
+          // 2026-08-06: crop riêng "Họ và tên"/"Ngày sinh" — hiện thumbnail
+          // ở cột riêng trong bảng Kết quả (xem RealRow bên dưới).
+          name_dob_crop_path:      r.debug?.name_dob_crop_path       ?? null,
         },
       })),
   };
@@ -332,6 +350,19 @@ function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, 
           )}
         </div>
         {r._error && <div style={{ fontSize: 10, color: '#EF4444', marginTop: 2 }}>{r._error.slice(0, 80)}</div>}
+      </td>
+      <td style={{ padding: '6px 10px' }}>
+        {nameDobCropUrl(r.debug?.name_dob_crop_path) ? (
+          <img
+            src={nameDobCropUrl(r.debug?.name_dob_crop_path)!}
+            alt="Họ và tên / Ngày sinh"
+            title="Họ và tên / Ngày sinh"
+            style={{ maxWidth: 180, maxHeight: 44, display: 'block', borderRadius: 5, border: '1px solid #E5E7EB' }}
+            onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+          />
+        ) : (
+          <span style={{ color: '#D1D5DB', fontSize: 11 }}>—</span>
+        )}
       </td>
       {showTemplateCol
         ? <>
@@ -993,9 +1024,9 @@ export default function ResultsPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: '#fff', border: '1px solid #E5E7EB', borderRadius: 12, padding: '12px 16px' }}>
           {/* Row 1: Exam selector */}
           {exams.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: '#374151', whiteSpace: 'nowrap', minWidth: 76 }}>Kỳ thi:</span>
-              <div style={{ position: 'relative', flex: 1, maxWidth: 360 }}>
+            <div className="results-filter-row" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span className="results-filter-label" style={{ fontSize: 13, fontWeight: 700, color: '#374151', whiteSpace: 'nowrap', minWidth: 76 }}>Kỳ thi:</span>
+              <div className="results-filter-select" style={{ position: 'relative', flex: 1, maxWidth: 360 }}>
                 <select
                   value={selectedExamId ?? ''}
                   onChange={e => {
@@ -1024,9 +1055,9 @@ export default function ResultsPage() {
           )}
           {/* Row 2: Lượt chấm filter — only shown when this exam has more than one grading session */}
           {hasBatch && multipleGradedAt && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: '#374151', whiteSpace: 'nowrap', minWidth: 76 }}>Lượt chấm:</span>
-              <div style={{ position: 'relative', flex: 1, maxWidth: 360 }}>
+            <div className="results-filter-row" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span className="results-filter-label" style={{ fontSize: 13, fontWeight: 700, color: '#374151', whiteSpace: 'nowrap', minWidth: 76 }}>Lượt chấm:</span>
+              <div className="results-filter-select" style={{ position: 'relative', flex: 1, maxWidth: 360 }}>
                 <select
                   value={selectedGradedAt}
                   onChange={e => setSelectedGradedAt(e.target.value)}
@@ -1045,9 +1076,9 @@ export default function ResultsPage() {
           )}
           {/* Row 3: Template filter — always show when batch exists */}
           {hasBatch && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: '#374151', whiteSpace: 'nowrap', minWidth: 76 }}>Mẫu phiếu:</span>
-              <div style={{ position: 'relative', flex: 1, maxWidth: 360 }}>
+            <div className="results-filter-row" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span className="results-filter-label" style={{ fontSize: 13, fontWeight: 700, color: '#374151', whiteSpace: 'nowrap', minWidth: 76 }}>Mẫu phiếu:</span>
+              <div className="results-filter-select" style={{ position: 'relative', flex: 1, maxWidth: 360 }}>
                 <select
                   value={selectedTemplateKey}
                   onChange={e => setSelectedTemplateKey(e.target.value)}
@@ -1132,7 +1163,7 @@ export default function ResultsPage() {
 
         {/* Summary cards — only when results exist */}
         {hasBatch && (
-          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${hasKey ? 7 : 4}, 1fr)`, gap: 12 }}>
+          <div className="results-stat-grid" style={{ display: 'grid', gridTemplateColumns: `repeat(${hasKey ? 7 : 4}, 1fr)`, gap: 12 }}>
             {[
               { label: 'Tổng phiếu',  value: String(totalSheets), sub: 'Đã xử lý' },
               { label: 'Cần xem lại', value: String(warnCount),   sub: 'Trước khi export' },
@@ -1201,7 +1232,7 @@ export default function ResultsPage() {
         {/* Results table or empty state */}
         {hasBatch ? (
           <Card style={{ padding: 0, overflow: 'hidden' }}>
-            <div style={{ padding: '14px 16px', fontSize: 12, color: '#6B7280', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div className="results-table-toolbar" style={{ padding: '14px 16px', fontSize: 12, color: '#6B7280', display: 'flex', alignItems: 'center', gap: 8 }}>
               👆 Click hàng để xem chi tiết
               {batch && (
                 <Badge
@@ -1210,14 +1241,14 @@ export default function ResultsPage() {
                   {getBatchTemplateLabel(batch)}
                 </Badge>
               )}
-              <div style={{ flex: 1 }} />
+              <div className="results-table-toolbar-spacer" style={{ flex: 1 }} />
               {/* 2026-08-04: "cũng ko thấy có bộ lọc theo msv hay sbd ở đây" —
                  quick find-a-student box; matches filename + any info field
                  value (CCCD/SBD/MSV/Mã đề/...) on the currently-shown rows.
                  Purely a display convenience — doesn't affect stats/export
                  above, which stay scoped to the exam/lượt chấm/mẫu phiếu
                  filters exactly as before. */}
-              <div style={{ position: 'relative', width: 220 }}>
+              <div className="results-search-box" style={{ position: 'relative', width: 220 }}>
                 <Search size={13} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF' }} />
                 <input
                   value={searchQuery}
@@ -1262,7 +1293,7 @@ export default function ResultsPage() {
                         style={{ accentColor: '#fff', width: 15, height: 15, cursor: 'pointer' }}
                       />
                     </th>
-                    {['STT', 'File',
+                    {['STT', 'File', 'Họ tên / Ngày sinh',
                       // 2026-08-04: "cái này ko có mssv hay sbd à? (theo tuỳ
                       // phiếu ấy)" — in "Tất cả mẫu phiếu" mode, rows can come
                       // from different templates with different info fields,

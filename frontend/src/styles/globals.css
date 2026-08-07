@@ -106,6 +106,17 @@ body {
   }
 }
 
+/* ─── App shell height — dvh with vh fallback ─────────────────────────────
+   100vh on mobile Safari/Chrome measures the LARGEST possible viewport
+   (address bar hidden), not what's actually visible — pushes the fixed
+   BottomNav below the real visible area ("tab bị mất"). Declare vh first
+   (older browsers/fallback), then dvh — browsers that don't understand the
+   dvh line simply ignore that one declaration and keep the vh value. */
+.app-shell-root {
+  height: 100vh;
+  height: 100dvh;
+}
+
 /* ─── Mobile bottom navigation (replaces icon Sidebar under 768px) ───────── */
 .app-bottom-nav {
   display: none;
@@ -182,6 +193,121 @@ body {
 @media (max-width: 420px) {
   .dash-stat-grid    { grid-template-columns: 1fr 1fr !important; gap: 10px !important; }
   .dash-subject-grid { grid-template-columns: 1fr !important; }
+}
+
+/* ─── ResultsPage — mobile stacking ────────────────────────────────────────
+   2026-08-04: "sao lộn xộn quá vậy" — filter rows (Kỳ thi/Lượt chấm/Mẫu
+   phiếu) and the 4-7-column stat-card grid were hard-coded row/grid layouts
+   with no mobile fallback, wide enough to force the whole page to scroll
+   sideways on a phone (label + select + nowrap button/badge never wrapped). */
+@media (max-width: 768px) {
+  .results-filter-row {
+    flex-wrap: wrap !important;
+  }
+  .results-filter-label {
+    min-width: 0 !important;
+  }
+  .results-filter-select {
+    flex: 1 1 100% !important;
+    max-width: 100% !important;
+    order: 3;
+  }
+  .results-stat-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  .results-table-toolbar {
+    flex-wrap: wrap !important;
+  }
+  .results-table-toolbar-spacer {
+    flex-basis: 100% !important;
+    height: 0 !important;
+  }
+  .results-search-box {
+    width: 100% !important;
+  }
+}
+
+/* ─── ResultDetailModal — mobile stacking ──────────────────────────────────
+   2026-08-04: "UI ở trên mobile nó bị dính hết vào nhau" — the score/answer
+   panel and the SheetImageViewer (Ảnh detect/đã căn chỉnh/gốc) were forced
+   into a fixed 38%/62% side-by-side grid at all widths. On a phone that's
+   ~140px vs ~230px — every answer chip, the zoom toolbar, and the image
+   itself get crushed into a sliver at once. Stack them into one column
+   (info panel on top, image viewer below, both full-width and independently
+   scrollable) below 768px, and let the modal use the full screen instead of
+   floating at 95vw/92vh with rounded corners eating even more space. */
+@media (max-width: 768px) {
+  .result-detail-overlay {
+    padding: 0 !important;
+  }
+  .result-detail-modal {
+    width: 100vw !important;
+    height: 100vh !important;   /* fallback for browsers without dvh support */
+    height: 100dvh !important;  /* declared last so it wins where supported — see .app-shell-root note */
+    max-width: none !important;
+    border-radius: 0 !important;
+  }
+  .result-detail-body {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: auto minmax(340px, 48vh) !important;
+    overflow-y: auto !important;
+  }
+  .result-detail-left {
+    border-right: none !important;
+    border-bottom: 1px solid #F3F4F6;
+    overflow-y: visible !important;
+    padding: 14px !important;
+  }
+  .result-detail-right {
+    padding: 8px !important;
+  }
+  .result-detail-actionbar {
+    flex-wrap: wrap !important;
+    padding: 8px 14px !important;
+  }
+  .result-detail-actionbar-hint {
+    flex-basis: 100% !important;
+  }
+  .result-detail-actionbar-spacer {
+    display: none !important;
+  }
+}
+
+/* ─── TemplateCoordinatePage — mobile stacking ─────────────────────────────
+   2026-08-04: "UI ở trên mobile nó bị dính hết vào nhau" — canvas column
+   (flex:1) sat next to a fixed width:320 wizard sidebar unconditionally;
+   on a ~375px phone the canvas was squeezed to ~55px and every label
+   overlapped. Stack them (canvas on top, wizard below) below 768px. The
+   canvas keeps its own scroll container (tpl-coord-canvas-area, overflow
+   auto already inline) so a wide template image doesn't force the whole
+   page to scroll sideways. */
+@media (max-width: 768px) {
+  .tpl-coord-main {
+    flex-direction: column !important;
+    overflow-y: auto !important;
+  }
+  .tpl-coord-canvas-col {
+    flex: none !important;
+    width: 100% !important;
+  }
+  .tpl-coord-canvas-area {
+    min-height: 46vh !important;
+  }
+  .tpl-coord-topbar {
+    padding: 8px 10px !important;
+    gap: 6px !important;
+  }
+  .tpl-coord-topbar-field {
+    flex: 1 1 100% !important;
+    max-width: 100% !important;
+  }
+  .tpl-coord-sidebar {
+    width: 100% !important;
+    flex-shrink: 1 !important;
+    border-left: none !important;
+    border-top: 1px solid #E5E7EB !important;
+    max-height: none !important;
+  }
 }
 
 /* ─── Generic horizontal-scroll table wrapper — mobile ────────────────────── */

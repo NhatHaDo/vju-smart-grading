@@ -176,6 +176,7 @@ export function dbRowToOmrResult(row: BatchResultOut): OmrGradeResult & { db_id:
       overlay_marked_only_path:  debugPaths['overlay_marked_only_path']  ?? null,
       overlay_warnings_path:     debugPaths['overlay_warnings_path']     ?? null,
       means_json_path:           null,
+      name_dob_crop_path:        debugPaths['name_dob_crop_path']        ?? null,
     },
   };
 }

@@ -305,6 +305,7 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
 
   return (
     <div
+      className="result-detail-overlay"
       style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -312,14 +313,17 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
       }}
       onClick={e => e.target === e.currentTarget && onClose()}
     >
-      <div style={{
-        background: '#fff', borderRadius: 16,
-        width: '95vw', height: '92vh',
-        maxWidth: 1600,
-        boxShadow: '0 32px 100px rgba(0,0,0,0.3)',
-        overflow: 'hidden',
-        display: 'flex', flexDirection: 'column',
-      }}>
+      <div
+        className="result-detail-modal"
+        style={{
+          background: '#fff', borderRadius: 16,
+          width: '95vw', height: '92vh',
+          maxWidth: 1600,
+          boxShadow: '0 32px 100px rgba(0,0,0,0.3)',
+          overflow: 'hidden',
+          display: 'flex', flexDirection: 'column',
+        }}
+      >
 
         {/* ── Red header ── */}
         <div style={{ background: '#C8102E', padding: '14px 20px', flexShrink: 0 }}>
@@ -411,11 +415,11 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
            below is directly clickable; this bar is just where you commit
            ("Lưu sửa") or discard ("Hủy") whatever you've changed. ── */}
         {canEdit && (
-          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', background: '#FFF9F9', borderBottom: '1px solid #FECACA' }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: '#C8102E', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div className="result-detail-actionbar" style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', background: '#FFF9F9', borderBottom: '1px solid #FECACA' }}>
+            <span className="result-detail-actionbar-hint" style={{ fontSize: 12, fontWeight: 700, color: '#C8102E', display: 'flex', alignItems: 'center', gap: 6 }}>
               <Pencil size={13} /> Bấm trực tiếp vào ô câu nào cần sửa bên trái — nhớ bấm "Lưu sửa" sau khi xong
             </span>
-            <div style={{ flex: 1 }} />
+            <div className="result-detail-actionbar-spacer" style={{ flex: 1 }} />
             <button onClick={handleSaveEdit} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#C8102E', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
               <Save size={13} /> Lưu sửa
             </button>
@@ -442,11 +446,12 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
           </div>
         )}
 
-        {/* ── Body: 38 / 62 split ── */}
-        <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '38% 62%', minHeight: 0 }}>
+        {/* ── Body: 38 / 62 split (stacks to 1 column on mobile — see
+           .result-detail-body in globals.css) ── */}
+        <div className="result-detail-body" style={{ flex: 1, display: 'grid', gridTemplateColumns: '38% 62%', minHeight: 0 }}>
 
           {/* ── Left panel: score + answers + debug ── */}
-          <div style={{ borderRight: '1px solid #F3F4F6', overflowY: 'auto', padding: '18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div className="result-detail-left" style={{ borderRight: '1px solid #F3F4F6', overflowY: 'auto', padding: '18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
 
             {/* Score cards */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
@@ -722,7 +727,7 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
           </div>
 
           {/* ── Right panel: SheetImageViewer ── */}
-          <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, padding: '12px' }}>
+          <div className="result-detail-right" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, padding: '12px' }}>
             <SheetImageViewer
               debug={debug}
               originalFallback={r.input?.saved_as}

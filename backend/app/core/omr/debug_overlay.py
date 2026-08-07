@@ -890,6 +890,133 @@ def draw_overlay_projected(
     return canvas
 
 
+# ── Section score summary (2026-08-06) ────────────────────────────────────
+# In tóm tắt điểm từng "Phần" (P1/P2/P3...) + tổng điểm lên góc ảnh overlay,
+# kiểu chấm bằng bút đỏ — dùng scorer.GradingReport.sections (đã tính sẵn
+# theo đúng điểm từng câu đặt ở "Thang điểm"/AnswerKeyPage). Không import
+# GradingReport ở đây để tránh phụ thuộc vòng (debug_overlay ← engine ←
+# scorer) — nhận thẳng `sections`/`total_score`/`max_score` đã tính xong.
+#
+# Dùng PIL (không phải cv2.putText) để vẽ — font Hershey mặc định của OpenCV
+# vừa xấu (răng cưa, không có nét thanh/đậm) vừa KHÔNG vẽ được dấu tiếng Việt
+# (từng phải viết "Tong" thay vì "Tổng" vì lý do này). PIL vẽ được font
+# TrueType thật + đủ dấu, khớp đúng font "Be Vietnam Pro" web đang dùng
+# (frontend/index.html) nếu có sẵn file — xem _resolve_score_font().
+try:
+    from PIL import Image as _PILImage, ImageDraw as _PILImageDraw, ImageFont as _PILImageFont
+    _PIL_AVAILABLE = True
+except ModuleNotFoundError:
+    _PIL_AVAILABLE = False
+
+CLR_SCORE_TEXT = (0, 0, 220)   # đỏ (BGR) — giống mực chấm bài
+CLR_SCORE_BG   = (255, 255, 255)
+
+# "Phần I-II" → "P1", "Phần III" → "P2", "Phần IV" → "P3"... — thứ tự cố định
+# theo đúng thứ tự vật lý trên phiếu (I-II trước, rồi III, rồi IV), không
+# phải thứ tự dict trả về (dict không đảm bảo giữ thứ tự chèn qua nhiều bước).
+_PHAN_ORDER = ["Phần I-II", "Phần III", "Phần IV"]
+_PHAN_SHORT = {"Phần I-II": "P1", "Phần III": "P2", "Phần IV": "P3"}
+
+# Thứ tự ưu tiên tìm font: (1) font bundle sẵn trong repo — thả file
+# "Be Vietnam Pro Bold" (hoặc bất kỳ .ttf nào) vào đây để khớp CHÍNH XÁC font
+# web đang dùng (tải tại https://fonts.google.com/specimen/Be+Vietnam+Pro →
+# Download family → lấy file "BeVietnamPro-Bold.ttf" → đổi tên đúng thành
+# "score_summary.ttf" → bỏ vào backend/app/core/omr/assets/fonts/); (2) vài
+# font hệ thống macOS/Linux phổ biến có đủ dấu tiếng Việt, phòng khi chưa có
+# bước (1); (3) font bitmap mặc định của PIL (luôn có sẵn, xấu nhưng không
+# bao giờ lỗi) — đảm bảo tính năng vẫn chạy được ngay cả khi thiếu mọi font.
+_BUNDLED_FONT_PATH = Path(__file__).resolve().parent / "assets" / "fonts" / "score_summary.ttf"
+_FALLBACK_FONT_CANDIDATES = [
+    "/System/Library/Fonts/SFNS.ttf",                              # macOS — San Francisco (hệ thống)
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",         # macOS cũ — phủ Unicode rộng
+    "/System/Library/Fonts/HelveticaNeue.ttc",                      # macOS
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",         # Linux (sandbox dev)
+    "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",  # Linux
+]
+
+_score_font_cache: dict[int, "object"] = {}
+
+
+def _resolve_score_font(size: int):
+    """Trả về PIL ImageFont phù hợp nhất tìm được, cache theo size."""
+    if size in _score_font_cache:
+        return _score_font_cache[size]
+    candidates = [str(_BUNDLED_FONT_PATH), *_FALLBACK_FONT_CANDIDATES]
+    font = None
+    for path in candidates:
+        if Path(path).exists():
+            try:
+                font = _PILImageFont.truetype(path, size=size)
+                break
+            except Exception:
+                continue
+    if font is None:
+        font = _PILImageFont.load_default()
+    _score_font_cache[size] = font
+    return font
+
+
+def draw_section_score_summary(
+    image: np.ndarray,
+    sections: dict[str, "object"],   # dict[str, scorer.SectionScore], xem ghi chú trên
+    total_score: float,
+    max_score: float,
+    origin: tuple[int, int] = (18, 34),
+    line_height: int = 38,
+    font_size: int = 30,
+) -> np.ndarray:
+    """
+    Vẽ text kiểu:
+        P1: 32/40 = 3.20
+        P2: 4/4; 4/4; 0/4; 2/4 = 2.25
+        P3: 5/6 = 1.80
+        Tổng: 7.25
+    lên góc trên-trái `image` (đã copy, không sửa ảnh gốc), dùng font
+    TrueType thật (xem _resolve_score_font) thay vì font cv2 mặc định. Bỏ
+    qua nếu `sections` rỗng (template không khớp quy ước Phần nào đã biết)
+    hoặc thiếu thư viện Pillow.
+    """
+    if not sections or not _PIL_AVAILABLE:
+        return image
+
+    lines: list[str] = []
+    ordered_names = [n for n in _PHAN_ORDER if n in sections] + [
+        n for n in sections if n not in _PHAN_ORDER
+    ]
+    for name in ordered_names:
+        sec = sections[name]
+        short = _PHAN_SHORT.get(name, name)
+        lines.append(f"{short}: {sec.correct}/{sec.total} = {sec.points_earned:.2f}")
+    lines.append(f"Tổng: {total_score:.2f}/{max_score:.2f}")
+
+    font = _resolve_score_font(font_size)
+
+    # cv2 (numpy BGR) → PIL (RGB) để vẽ chữ, rồi chuyển ngược lại.
+    pil_img = _PILImage.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    draw = _PILImageDraw.Draw(pil_img)
+
+    x, y = origin
+    max_tw = max(draw.textlength(t, font=font) for t in lines)
+    pad = 12
+    box_h = line_height * len(lines) + pad
+
+    # Nền trắng mờ phía sau cho dễ đọc trên nền phiếu, rồi mới vẽ chữ đỏ đè lên.
+    overlay = pil_img.copy()
+    overlay_draw = _PILImageDraw.Draw(overlay)
+    overlay_draw.rectangle(
+        (x - pad, y - pad, x + max_tw + pad, y - pad + box_h),
+        fill=(255, 255, 255),
+    )
+    pil_img = _PILImage.blend(pil_img, overlay, 0.75)
+    draw = _PILImageDraw.Draw(pil_img)
+
+    text_color_rgb = (CLR_SCORE_TEXT[2], CLR_SCORE_TEXT[1], CLR_SCORE_TEXT[0])
+    for i, text in enumerate(lines):
+        draw.text((x, y + i * line_height), text, font=font, fill=text_color_rgb)
+
+    return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+
 # ── Save ─────────────────────────────────────────────────────────────────
 
 def save_overlay(

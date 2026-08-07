@@ -58,6 +58,7 @@ try:
         draw_overlay_marked_only,
         draw_overlay_projected,
         draw_overlay_warnings,
+        draw_section_score_summary,
         draw_template_overlay,
         save_overlay,
     )
@@ -75,6 +76,7 @@ except ModuleNotFoundError:
     draw_overlay_marked_only = _overlay_disabled_return_image
     draw_overlay_projected = _overlay_disabled_return_image
     draw_overlay_warnings = _overlay_disabled_return_image
+    draw_section_score_summary = _overlay_disabled_return_image
     save_overlay = _overlay_disabled_save
 from app.core.omr.field_reader import (
     FieldResult,
@@ -83,8 +85,14 @@ from app.core.omr.field_reader import (
     aggregate_signed_decimal,
     read_field,
 )
-from app.core.omr.preprocessor import CropPageResult, crop_page, resize_fit_pad, resize_to_template
-from app.core.omr.roi_extractor import extract_roi, extract_roi_expanded, extract_roi_inverse
+from app.core.omr.preprocessor import (
+    CropPageResult,
+    crop_page,
+    flatten_illumination,
+    resize_fit_pad,
+    resize_to_template,
+)
+from app.core.omr.roi_extractor import extract_roi, extract_roi_expanded, extract_roi_inverse, extract_region_inverse
 from app.core.omr.scorer import GradingReport, score
 from app.core.omr.signature_detector import SignatureCheck, detect_signatures
 from app.core.templates.template_loader import VJUTemplate
@@ -149,6 +157,7 @@ class DebugVisualPaths:
     overlay_warnings_path:     str | None = None
     means_json_path:           str | None = None
     markers_debug_path:        str | None = None   # annotated original with detected markers
+    name_dob_crop_path:        str | None = None   # crop of "Họ và tên"/"Ngày sinh" info box (2026-08-06)
 
 
 # ── Result container ──────────────────────────────────────────────────────
@@ -232,6 +241,7 @@ class OMREngine:
         debug_overlay_dir: str | Path | None = None,
         mean_mode: str = "circle_mask",
         signature_box_set: str | None = None,
+        enable_illumination_flatten: bool = True,
     ):
         """
         Args:
@@ -248,9 +258,27 @@ class OMREngine:
                                actually have a registered box set — the
                                calibrated coordinates assume that exact page
                                layout and are meaningless on anything else.
+            enable_illumination_flatten: Flatten uneven page lighting (see
+                               flatten_illumination() in preprocessor.py)
+                               right before bubble reading, whenever the
+                               sheet was aligned via marker-warp (prep_
+                               method == "markers" — i.e. almost always for
+                               phone photos, regardless of the largely-unused
+                               image_source parameter). Deliberately NOT
+                               gated on image_source: grading_service.py
+                               (the real production call site) and
+                               QuickGradePage.tsx's captureAndGrade() both
+                               always pass image_source="auto" (confirmed by
+                               reading both call sites), so a source=="camera"
+                               gate would silently never fire in production —
+                               same dead-code trap as the Phase 1 visual fix
+                               earlier this project. Set False to reproduce
+                               pre-2026-08-06 behavior exactly (used by the
+                               regression-comparison script).
         """
         self.template = template
         self.enable_crop = enable_crop
+        self.enable_illumination_flatten = enable_illumination_flatten
         self.debug_overlay_dir = Path(debug_overlay_dir) if debug_overlay_dir else None
         self.mean_mode = mean_mode
         self.signature_box_set = signature_box_set
@@ -268,6 +296,10 @@ class OMREngine:
         # of _execute() before scoring (2026-08-03).
         answer_key: dict | None = None,
         section_labels: dict[str, list[str]] | None = None,
+        points_per_question: float = 1.0,
+        question_points: dict[str, float] | None = None,
+        wrong_points: float = 0.0,
+        blank_points: float = 0.0,
         debug_filename: str | None = None,
         image_source: str = "auto",
     ) -> OMRResult:
@@ -276,6 +308,10 @@ class OMREngine:
             image_input,
             answer_key=answer_key,
             section_labels=section_labels,
+            points_per_question=points_per_question,
+            question_points=question_points,
+            wrong_points=wrong_points,
+            blank_points=blank_points,
             image_source=image_source,
         )
 
@@ -299,6 +335,10 @@ class OMREngine:
         # of _execute() before scoring (2026-08-03).
         answer_key: dict | None = None,
         section_labels: dict[str, list[str]] | None = None,
+        points_per_question: float = 1.0,
+        question_points: dict[str, float] | None = None,
+        wrong_points: float = 0.0,
+        blank_points: float = 0.0,
         block_filter: str | None = None,
         image_source: str = "auto",
     ) -> tuple[OMRResult, DebugVisualPaths]:
@@ -317,7 +357,11 @@ class OMREngine:
             output_dir:    Directory to save all outputs.
             prefix:        Filename prefix (default "debug").
             answer_key:    Optional {field_label: correct_answer}.
-            section_labels:Optional section groupings for scoring.
+            section_labels:Optional section groupings for scoring — auto-detected
+                            via `_auto_detect_phan_sections()` when left None and
+                            the template matches a known field-naming convention
+                            (see that method's docstring).
+            question_points, wrong_points, blank_points: see scorer.score().
             block_filter:  If set, marked_only/warnings overlays show only this block.
 
         Returns:
@@ -333,6 +377,10 @@ class OMREngine:
             image_input,
             answer_key=answer_key,
             section_labels=section_labels,
+            points_per_question=points_per_question,
+            question_points=question_points,
+            wrong_points=wrong_points,
+            blank_points=blank_points,
             image_source=image_source,
         )
 
@@ -430,6 +478,15 @@ class OMREngine:
                     block_expand_px=block_expand_px or None,
                     correctness=correctness,
                 )
+            # Tóm tắt điểm từng Phần (P1/P2/P3 + Tổng), kiểu chấm bút đỏ —
+            # chỉ vẽ khi có grading_report VÀ có sections (tức có đáp án +
+            # template khớp quy ước tên field đã biết, xem
+            # _auto_detect_phan_sections()); im lặng bỏ qua nếu không.
+            gr = omr_result.grading_report
+            if gr is not None and gr.sections:
+                img_all = draw_section_score_summary(
+                    img_all, gr.sections, gr.total_score, gr.max_score,
+                )
             p = save_overlay(img_all, out / f"{prefix}_overlay_all.jpg")
             vis.overlay_all_path = str(p)
             logger.info(f"Saved overlay_all → {p} (projected={_use_projected})")
@@ -522,9 +579,96 @@ class OMREngine:
             except Exception as e:
                 logger.warning(f"markers_debug failed: {e}")
 
+        # ── 7. Name/DOB crop ("Họ và tên" / "Ngày sinh") ───────────────────
+        # See _get_name_dob_crop_box() docstring-comment above for why this
+        # region is hardcoded and template-restricted. Prefers cropping via
+        # M_inv from the original (un-warped) image — same source used for
+        # the projected overlays above — so the handwriting stays at native
+        # photo resolution instead of being blurred by the pageDimensions
+        # warp; falls back to cropping aligned_image directly when M_inv
+        # isn't available (matches _use_projected's own fallback).
+        crop_box = self._get_name_dob_crop_box()
+        if crop_box is not None:
+            try:
+                cx1, cy1, cx2, cy2 = crop_box
+                if _use_projected and omr_result._M_inv is not None:
+                    _src = _raw_for_overlay if _raw_for_overlay is not None else self._load_image(image_input)
+                    name_dob_img = extract_region_inverse(
+                        _src, cx1, cy1, cx2 - cx1, cy2 - cy1, omr_result._M_inv,
+                    )
+                else:
+                    name_dob_img = aligned_image[cy1:cy2, cx1:cx2]
+                if name_dob_img is not None and name_dob_img.size > 0:
+                    if len(name_dob_img.shape) == 2:
+                        name_dob_img = cv2.cvtColor(name_dob_img, cv2.COLOR_GRAY2BGR)
+                    crop_path = out / f"{prefix}_name_dob_crop.jpg"
+                    cv2.imwrite(str(crop_path), name_dob_img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+                    vis.name_dob_crop_path = str(crop_path)
+                    logger.info(f"Saved name_dob_crop → {crop_path} (projected={_use_projected})")
+            except Exception as e:
+                logger.warning(f"name_dob_crop failed: {e}")
+
         # Also set the main overlay_path on the result for backward compat
         omr_result.debug_overlay_path = vis.overlay_all_path
         return omr_result, vis
+
+    # 2026-08-06: yêu cầu hiện tóm tắt điểm từng "Phần" vật lý trên phiếu
+    # (Phần I-II / Phần III Đúng-Sai / Phần IV điền số) in trực tiếp lên ảnh
+    # overlay kết quả, kiểu chấm bút đỏ. File template JSON không có khái
+    # niệm "Phần" nào lưu sẵn (đã kiểm tra shared_40tn_dungsai.template.json
+    # — chỉ có fieldBlocks/compositeAnswerFields, không có key "section" hay
+    # "phan" nào) nên đoán theo đúng quy ước đặt tên field của mẫu phiếu này:
+    #   - "trc_nghim_abcd*"  → Phần I-II (trắc nghiệm 4 đáp án)
+    #   - "ng_sai_cu*"       → Phần III (Đúng/Sai)
+    #   - field composite (số, trong compositeAnswerFields) → Phần IV
+    # Chỉ áp dụng khi template khớp ít nhất 1 trong 3 quy ước trên — trả về
+    # None cho mẫu phiếu khác để không gắn nhãn sai.
+    def _auto_detect_phan_sections(self) -> dict[str, list[str]] | None:
+        p1 = [l for l in self.template.all_labels if l.startswith("trc_nghim_abcd")]
+        p2 = [l for l in self.template.all_labels if l.startswith("ng_sai_cu")]
+        p3 = list(self.template.composite_answer_fields.keys())
+        if not p1 and not p2 and not p3:
+            return None
+        sections: dict[str, list[str]] = {}
+        if p1:
+            sections["Phần I-II"] = p1
+        if p2:
+            sections["Phần III"] = p2
+        if p3:
+            sections["Phần IV"] = p3
+        return sections
+
+    # 2026-08-06: yêu cầu thêm ảnh cắt riêng vùng "2. Họ và tên" + "3. Ngày
+    # sinh" (viết tay) vào kết quả, hiển thị ở trang Kết quả — người dùng
+    # chọn phương án chỉ cắt ảnh để người chấm tự đọc bằng mắt (không OCR,
+    # vì nhận diện chữ viết tay tiếng Việt không đủ tin cậy). Template hiện
+    # tại không định nghĩa vùng ROI riêng cho "Họ và tên"/"Ngày sinh" (chỉ
+    # có "Mã Sinh Viên" dạng tô bubble — xem _auto_detect_phan_sections() ở
+    # trên), nên toạ độ dưới đây được đo thủ công bằng cách crop-thử trên 1
+    # ảnh aligned thật (1000×1414, đúng pageDimensions của
+    # shared_40tn_dungsai) lấy từ 1 phiếu scan thật trong DB, khớp đúng 2
+    # dòng "2. Họ và tên:" và "3. Ngày sinh:" trong khung thông tin bên
+    # trái phiếu (đã xác nhận bằng mắt qua ảnh crop, không đoán). Chỉ áp
+    # dụng cho template khớp quy ước đặt tên field của shared_40tn_dungsai
+    # (cùng điều kiện với _auto_detect_phan_sections) VÀ đúng pageDimensions
+    # đã đo — trả về None cho mọi template khác để không cắt sai vùng.
+    # 2026-08-06: box rộng hơn mức tối thiểu đo được (170,210)-(755,340) —
+    # cố ý thêm biên margin ~15-20px mỗi phía để chịu được sai lệch nhỏ giữa
+    # các lần scan/chụp khác nhau (góc nghiêng, marker_quality thấp...) vẫn
+    # có thể làm nội dung xê dịch vài chục px trong khung 1000×1414 dù đã
+    # warp theo marker — cùng hạn chế đã biết với phần overlay bubble-đọc,
+    # xem ghi chú "marker quality thấp" ở _execute(). Không phải lỗi phần
+    # cắt ảnh; ảnh gốc/đã căn chỉnh vẫn xem được ở tab riêng khi crop lệch.
+    _NAME_DOB_CROP_BOX = (150, 190, 770, 350)  # (x1, y1, x2, y2) tại pageDimensions 1000×1414
+
+    def _get_name_dob_crop_box(self) -> tuple[int, int, int, int] | None:
+        p1 = [l for l in self.template.all_labels if l.startswith("trc_nghim_abcd")]
+        if not p1:
+            return None
+        tpl_w, tpl_h = self.template.page_dimensions
+        if (tpl_w, tpl_h) != (1000, 1414):
+            return None
+        return self._NAME_DOB_CROP_BOX
 
     # ── Internal pipeline ─────────────────────────────────────────────────
 
@@ -540,6 +684,10 @@ class OMREngine:
         # of _execute() before scoring (2026-08-03).
         answer_key: dict | None = None,
         section_labels: dict[str, list[str]] | None = None,
+        points_per_question: float = 1.0,
+        question_points: dict[str, float] | None = None,
+        wrong_points: float = 0.0,
+        blank_points: float = 0.0,
         image_source: str = "auto",
     ) -> tuple[OMRResult, np.ndarray | None, dict[str, float] | None, np.ndarray | None]:
         """
@@ -608,10 +756,29 @@ class OMREngine:
                 logger.warning(f"OMR: signature detection failed — {exc}")
 
         # ── Phase 1 visual fix ────────────────────────────────────────────
-        # For scan_app with significant H-stretch: produce a flat, AR-preserving
-        # display image by warping to the natural marker-measured rectangle.
-        # The OMR read path (Phase 2) remains unaffected — it reads via M_inv
-        # from the original image regardless of which visual image is shown.
+        # For significant H-stretch: produce a flat, AR-preserving display
+        # image by warping to the natural marker-measured rectangle. The OMR
+        # read path (Phase 2) remains unaffected — it reads via M_inv from
+        # the original image regardless of which visual image is shown.
+        #
+        # 2026-08-04: was gated to `src == "scan_app"` only — but
+        # grading_service.py (the real production grading call) NEVER passes
+        # image_source at all, so `src` is ALWAYS "auto" for every real
+        # request regardless of how the photo was taken. That made this
+        # entire Phase1/Phase2 fix dead code in production. Confirmed via a
+        # real camera-captured photo (h_stretch=11.1%, marker_quality=0.875,
+        # warp_used=True — a technically-successful warp that's still
+        # visually a trapezoid, because a 4-point homography exactly anchors
+        # the markers but doesn't force the rest of the page level when the
+        # source quadrilateral is this keystoned): "sao ảnh thẳng thế kia mà
+        # cái ảnh detect nó chuyển sang méo mó, hình thang vậy". The fix
+        # itself (create_visual_rectified_keep_aspect, warping to the
+        # marker's OWN natural rectangle instead of forcing template AR) was
+        # already built and already produces a correctly flat result — it
+        # just never ran for camera/auto photos. h_stretch is a purely
+        # geometric property of the photo, unrelated to which capture UI
+        # produced it, so drop the source restriction entirely and let the
+        # h_stretch threshold (the real signal) decide.
         visual_image: np.ndarray | None = None
         visual_aligned_mode = "warp"
         visual_aligned_size: tuple[int, int] | None = None
@@ -623,11 +790,47 @@ class OMREngine:
         template_aspect_ratio = round(tpl_w / tpl_h, 4) if tpl_h > 0 else None
 
         mr_for_stretch = _marker_result
+        h_stretch_estimate = mr_for_stretch.estimated_h_stretch if mr_for_stretch is not None else None
+
+        # 2026-08-05: estimated_h_stretch is only ever populated by
+        # _preprocess() when the template ships an explicit
+        # cropOnMarkersConfig.markerCentersInTemplate ("correct mode") — see
+        # engine.py's _preprocess(), the assignment is nested inside
+        # `if marker_tpl_centers is not None:`. Custom/shared templates
+        # compiled without that block (confirmed: shared_40tn_dungsai —
+        # the "Mẫu 40 câu TN + Đúng/Sai" template, used for real camera
+        # gradings and reported as "lệch tùm lum, ảnh méo mó") warp in
+        # "legacy" mode instead, where estimated_h_stretch stays None
+        # forever — so Phase 1 below never triggered for them even when the
+        # source photo was heavily keystoned (confirmed: one real photo had
+        # a 142px horizontal drift between its TL/BL marker corners vs ~37px
+        # for a well-aligned shot of the same template — genuine tilt, not
+        # noise). Fix: when the precomputed value is missing, derive the
+        # same ratio directly from marker_pts vs template pageDimensions.
+        # This is not an approximation — in legacy mode the warp destination
+        # IS exactly the page rectangle (0,0)-(w,0)-(w,h)-(0,h), so
+        # dst_AR == template_aspect_ratio exactly, making this algebraically
+        # identical to the "correct mode" formula in _preprocess(). Purely a
+        # display-signal computation — does not touch classification/warp
+        # math, so it carries no grading-accuracy risk.
         if (
-            src == "scan_app"
+            h_stretch_estimate is None
             and mr_for_stretch is not None
-            and mr_for_stretch.estimated_h_stretch is not None
-            and mr_for_stretch.estimated_h_stretch > self._VISUAL_FIX_H_STRETCH_THRESHOLD
+            and mr_for_stretch.marker_pts is not None
+            and len(mr_for_stretch.marker_pts) == 4
+            and template_aspect_ratio
+        ):
+            _pts = mr_for_stretch.marker_pts.astype(float)
+            _src_h = (np.linalg.norm(_pts[1] - _pts[0]) + np.linalg.norm(_pts[2] - _pts[3])) / 2.0
+            _src_v = (np.linalg.norm(_pts[3] - _pts[0]) + np.linalg.norm(_pts[2] - _pts[1])) / 2.0
+            if _src_v > 0 and _src_h > 0:
+                _src_ar = _src_h / _src_v
+                h_stretch_estimate = round((template_aspect_ratio / _src_ar - 1.0) * 100, 2)
+
+        if (
+            mr_for_stretch is not None
+            and h_stretch_estimate is not None
+            and h_stretch_estimate > self._VISUAL_FIX_H_STRETCH_THRESHOLD
             and mr_for_stretch.marker_pts is not None
         ):
             try:
@@ -646,7 +849,7 @@ class OMREngine:
                 source_marker_aspect_ratio = round(float(nat_w / nat_h), 4) if nat_h > 0 else None
 
                 logger.info(
-                    f"OMR Phase1: scan_app h_stretch={mr_for_stretch.estimated_h_stretch:.1f}% "
+                    f"OMR Phase1: src={src} h_stretch={h_stretch_estimate:.1f}% "
                     f"→ rectified_keep_aspect {rect_w}×{rect_h} "
                     f"(marker_ar={source_marker_aspect_ratio}, tpl_ar={template_aspect_ratio})"
                 )
@@ -654,7 +857,27 @@ class OMREngine:
                 logger.warning(f"OMR Phase1: create_visual_rectified_keep_aspect failed — {exc}")
 
         # ── Phase 2 inverse-H read: compute M_inv when conditions are met ───
-        # Condition: scan_app + warp applied + h_stretch > threshold + homography exists
+        # Condition: scan_app + warp applied + h_stretch > threshold + homography exists.
+        #
+        # 2026-08-04: UNLIKE Phase 1 above, this one is intentionally kept
+        # scan_app-only (i.e. effectively never triggers, since production
+        # never passes image_source) after testing it broadened the same way.
+        # Reading bubbles via M_inv from the raw (un-warped) image sounds
+        # like it should be strictly more accurate, but on the exact camera
+        # photo that motivated this investigation it silently changed 4/89
+        # field reads — including cccd9 and cccd10, which the ALREADY-WARP-
+        # READ pipeline got right (confirmed against the archived, human-
+        # reviewed overlay: "4" and "5", matching this student's actual CCCD
+        # digits) — inverse_h_original flipped both of those two specific
+        # correct answers to blank, while also "fixing" ptbv3/cnnn4 from
+        # needs_review to a specific letter (unverified whether that's
+        # actually right either). This read path was apparently never
+        # exercised against a real photo in production before (same
+        # scan_app-only gate as Phase 1), so this bug was latent and
+        # untested. Do not broaden this condition without first finding and
+        # fixing whatever makes extract_roi_inverse/M_inv disagree with the
+        # proven warp-based read on real photos — grading correctness matters
+        # far more than the visual straightness Phase 1 alone already fixes.
         M_inv: np.ndarray | None = None
         omr_read_space = "warped_page_dimensions"
         if (
@@ -669,7 +892,7 @@ class OMREngine:
                 M_inv = np.linalg.inv(_marker_result.homography)
                 omr_read_space = "inverse_h_original"
                 logger.info(
-                    f"OMR Phase2: h_stretch={_marker_result.estimated_h_stretch:.1f}% "
+                    f"OMR Phase2: src={src} h_stretch={_marker_result.estimated_h_stretch:.1f}% "
                     f"→ reading bubbles via M_inv from original image"
                 )
             except np.linalg.LinAlgError as exc:
@@ -677,6 +900,36 @@ class OMREngine:
 
         # Select the read image: original (raw) for inverse-H, warped for standard
         read_image = raw if M_inv is not None else image
+
+        # ── Illumination flattening (2026-08-06) ───────────────────────────
+        # Only for the standard warp-read path, and only when marker-warp
+        # actually ran (prep_method == "markers" — a real phone photo aligned
+        # via the 4 corner markers). Applied to read_image only: does NOT
+        # touch `aligned_image` (used for signature detection, above, and for
+        # the saved aligned_image_path debug/display output) or `raw` (used
+        # for marker detection, already done by this point) — scoped
+        # strictly to what feeds bubble measurement, so blast radius is
+        # limited to classification accuracy alone.
+        illumination_flattened = False
+        if self.enable_illumination_flatten and M_inv is None and prep_method == "markers":
+            read_image = flatten_illumination(read_image)
+            illumination_flattened = True
+            logger.info("OMR: applied flatten_illumination() before bubble reading")
+
+            # 2026-08-06: "đưa cái ảnh đó vào cái phần ảnh đã căn chỉnh đi
+            # (của cả 3 mẫu phiếu luôn)" — also swap the debug/display
+            # `aligned_image` (returned by _execute(), saved as
+            # aligned_image_path, and reused as the background for the
+            # overlay images) to the flattened version, so "Ảnh đã căn
+            # chỉnh" in the UI shows what bubble-reading actually sees.
+            # Safe to reassign here: signature detection already ran on the
+            # original `aligned_image` above (line ~624) before this point,
+            # so it's unaffected; nothing else reads the old `aligned_image`
+            # between here and the function's return. Applies to every
+            # template uniformly — this is engine-level, gated on
+            # prep_method=="markers", not on which template/sheet design
+            # was used.
+            aligned_image = read_image
 
         # ── Steps 4-5: Collect all means → global threshold ───────────────
         all_mean_values: list[float] = []
@@ -765,6 +1018,48 @@ class OMREngine:
                 )
                 warnings.append(
                     f"[INT] {label}: {digits_str} [{reason}] — {details}"
+                )
+
+        # ── Step 6c: Whole-photo quality gate ──────────────────────────────
+        # 2026-08-04: an individual field landing on MULTI_MARK/NEEDS_REVIEW
+        # occasionally is normal (a genuinely light pencil mark, a stray
+        # smudge) — but a photo with uneven/poor lighting across the WHOLE
+        # page makes MANY unrelated fields fail the same way at once, because
+        # every field's classification threshold is ultimately trying to find
+        # a light/dark separation that a page-wide contrast problem shrinks
+        # everywhere simultaneously. Confirmed real cases (camera photos,
+        # poor lighting): 38-45% of all digit/MCQ fields on the SAME photo
+        # came back MULTI_MARK despite the physical sheet being correctly
+        # filled (or even blank) — no per-field fix chases this down, because
+        # the defect is in the raw pixel data, not any one field's logic (see
+        # bubble_analyzer.py's classify_strip_int/classify_strip history).
+        # A calibration pass across ~60 archived photos found a clear natural
+        # gap: normal photos sit under ~18% (median ~2%), genuinely
+        # bad-lighting photos jump to 45%+ — thresholds below sit safely in
+        # that gap on both sides.
+        multi_field_total = 0
+        multi_field_bad = 0
+        for label, result in field_results.items():
+            bubbles = self.template.bubbles_by_label.get(label)
+            if bubbles is None or len(bubbles) < 2:
+                continue  # single-bubble fields (e.g. composite sign) have no local gap to judge
+            multi_field_total += 1
+            if result.status in (FieldStatus.MULTI_MARK, FieldStatus.NEEDS_REVIEW):
+                multi_field_bad += 1
+
+        if multi_field_total >= 10:  # enough fields to be a meaningful sample
+            bad_ratio = multi_field_bad / multi_field_total
+            if bad_ratio >= 0.35:
+                warnings.append(
+                    f"⚠️ Ảnh có độ tương phản kém — {multi_field_bad}/{multi_field_total} "
+                    "câu/cột không đọc chắc chắn được cùng lúc. Rất có thể do ánh sáng/bóng đổ "
+                    "không đều khi chụp, không phải lỗi từng câu riêng lẻ — nên chụp lại ảnh rõ "
+                    "hơn, đủ sáng đều thay vì tin kết quả này."
+                )
+            elif bad_ratio >= 0.18:
+                warnings.append(
+                    f"Ảnh có khá nhiều câu/cột ({multi_field_bad}/{multi_field_total}) không "
+                    "đọc chắc chắn được — nên kiểm tra lại ánh sáng lúc chụp nếu kết quả có vẻ sai."
                 )
 
         # ── Step 7: Aggregate custom labels ───────────────────────────────
@@ -863,11 +1158,22 @@ class OMREngine:
                     or {}
                 )
             if resolved_answer_key:
+                # section_labels=None → tự đoán theo tên field nếu khớp quy ước
+                # đã biết (xem docstring _auto_detect_phan_sections); caller vẫn
+                # có thể tự truyền section_labels để ghi đè nếu cần.
+                effective_section_labels = (
+                    section_labels if section_labels is not None
+                    else self._auto_detect_phan_sections()
+                )
                 grading_report = score(
                     field_results=field_results,
                     answer_key=resolved_answer_key,
-                    section_labels=section_labels,
+                    section_labels=effective_section_labels,
                     skip_labels=skip,
+                    points_per_question=points_per_question,
+                    question_points=question_points,
+                    wrong_points=wrong_points,
+                    blank_points=blank_points,
                 )
 
         # Build bubble_means dict: {"label:value" → mean}
@@ -1047,6 +1353,13 @@ class OMREngine:
             debug=True,
             marker_centers_in_template=marker_tpl_centers,
             min_warp_quality=min_warp_quality,
+            # 2026-08-06: page W/H as a fallback expected-aspect for the
+            # "legacy" templates (no marker_centers_in_template calibration,
+            # e.g. shared_40tn_dungsai) — see page_aspect_fallback docstring
+            # in crop_on_markers(). Only used when marker_tpl_centers is None
+            # (crop_on_markers() itself prefers the precise calibrated value
+            # whenever one is available).
+            page_aspect_fallback=(target[0] / target[1] if target[1] else None),
         )
 
         # Populate per-source calibration debug fields on the result

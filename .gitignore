@@ -9,6 +9,9 @@ Thumbs.db
 .env.*
 !.env.example
 
+# Chứng chỉ HTTPS local (mkcert) — khoá riêng tư, không commit
+frontend/.cert/
+
 # Python
 __pycache__/
 *.py[cod]
