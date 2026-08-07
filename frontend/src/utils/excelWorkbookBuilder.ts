@@ -217,15 +217,25 @@ function readableInfoFieldRef(fieldKey: string, column: string | undefined, info
   return posMatch ? `${display} (cột ${posMatch[1]})` : `${display} (${column})`;
 }
 
-function chiTietCanhBao(r: OmrGradeResult, infoFields: TemplateInfoField[] = []): string {
+// 2026-08-07: "ở câu nào ghi nnay ai mà biết ?" — cột "Chi tiết cảnh báo" ghi
+// thẳng field key nội bộ (vd "trc_nghim_abcd27"), giáo viên không đọc được là
+// câu mấy. Nhận thêm questionLabelOf (cùng hàm "Câu N" đã dùng ở sheet "Bảng
+// điểm"/"Chi tiết đáp án" — xem dòng ~387) để đổi sang "Câu 27" cho khớp số
+// thứ tự câu thật trên phiếu. Mặc định = giữ nguyên field key, để không phá
+// vỡ chỗ gọi nào khác (hiện tại chỉ có 1 chỗ gọi, xem buildCanKiemTra bên dưới).
+function chiTietCanhBao(
+  r: OmrGradeResult,
+  infoFields: TemplateInfoField[] = [],
+  questionLabelOf: (q: string) => string = q => q,
+): string {
   if (r._error) return `Lỗi: ${r._error}`;
   const warns = r.warnings ?? [];
   const blank = r.score?.blank ?? 0;
   const lines: string[] = [];
   if (blank > 0) lines.push(`- Số câu bỏ trống: ${blank}`);
-  const mm  = warns.filter(w => w.type === 'multi_mark').map(w => w.field);
+  const mm  = warns.filter(w => w.type === 'multi_mark').map(w => questionLabelOf(w.field));
   const mmi = warns.filter(w => w.type === 'multi_mark_info_field').map(w => readableInfoFieldRef(w.field, w.column, infoFields));
-  const tl  = warns.filter(w => w.type === 'too_light').map(w => w.field);
+  const tl  = warns.filter(w => w.type === 'too_light').map(w => questionLabelOf(w.field));
   if (mm.length)  lines.push(`- Tô nhiều đáp án ở câu: ${mm.join(', ')}`);
   if (mmi.length) lines.push(`- Tô nhiều ô ở: ${mmi.join(', ')}`);
   if (tl.length)  lines.push(`- Tô mờ ở câu: ${tl.join(', ')}`);
@@ -610,6 +620,14 @@ function buildCanKiemTra(
   const ws = wb.addWorksheet('Cần kiểm tra');
   ws.views = [{ state: 'frozen', ySplit: 1 }];
 
+  // Cùng cách đánh số "Câu N" với sheet "Bảng điểm" (xem dòng ~387) — để cột
+  // "Chi tiết cảnh báo" bên dưới chỉ đúng câu nào, không hiện field key nội bộ.
+  const answerCols      = collectAnswerKeys(results, schema);
+  const questionLabelOf = (q: string): string => {
+    const idx = answerCols.indexOf(q);
+    return idx >= 0 ? `Câu ${idx + 1}` : q;
+  };
+
   const shownInfo = infoFields.slice(0, 3);
   const headers = ['STT', 'File', ...shownInfo.map(f => f.displayName), 'Điểm', 'Lý do', 'Chi tiết cảnh báo', 'Gợi ý'];
   ws.columns = [
@@ -647,7 +665,7 @@ function buildCanKiemTra(
     const sc2 = 3 + shownInfo.length;
     row.getCell(sc2).value     = sc ? sc.total : '—';
     row.getCell(sc2 + 1).value = lyrDo(r);
-    row.getCell(sc2 + 2).value = chiTietCanhBao(r, infoFields);
+    row.getCell(sc2 + 2).value = chiTietCanhBao(r, infoFields, questionLabelOf);
     row.getCell(sc2 + 3).value = 'Mở màn hình Kiểm tra lỗi để đối chiếu ảnh gốc và ảnh detect trước khi sử dụng kết quả chính thức.';
 
     styleDataRow(row, headers.length, i % 2 === 1);
