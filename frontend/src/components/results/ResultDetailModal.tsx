@@ -673,57 +673,6 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
               }
             </div>
 
-            {/* Debug info */}
-            <div style={{ fontSize: 10, color: '#9CA3AF', background: '#F9FAFB', borderRadius: 8, padding: '8px 10px' }}>
-              <div><strong>Threshold:</strong> {debug.threshold ?? '—'}</div>
-              <div><strong>Mode:</strong> {debug.mean_mode ?? '—'} · {debug.prep_method ?? '—'}</div>
-              {debug.image_source && (
-                <div style={{ marginTop: 3 }}>
-                  <strong>Nguồn ảnh:</strong>{' '}
-                  <span style={{ fontWeight: 700, color: debug.image_source === 'camera' ? '#B45309' : '#374151' }}>
-                    {debug.image_source}
-                  </span>
-                </div>
-              )}
-              {debug.preprocess_strategy_used && (
-                <div style={{ marginTop: 2 }}><strong>Strategy:</strong> {debug.preprocess_strategy_used}</div>
-              )}
-              {debug.alignment_info && (
-                <div style={{
-                  marginTop: 4, fontSize: 10, fontWeight: 600,
-                  color: debug.prep_method === 'markers' ? '#065F46'
-                    : debug.prep_method === 'croppage' ? '#92400E'
-                    : debug.prep_method === 'fallback_no_warp' ? '#B45309'
-                    : '#991B1B',
-                }}>
-                  {debug.alignment_info}
-                </div>
-              )}
-              {debug.marker_quality_score != null && (
-                <div style={{ marginTop: 3, color: debug.warp_used ? '#065F46' : '#B45309' }}>
-                  <strong>Marker quality:</strong> {(debug.marker_quality_score * 100).toFixed(0)}%
-                  {' · '}
-                  <strong>Warp:</strong> {debug.warp_used ? '✓ applied' : '✗ rejected'}
-                </div>
-              )}
-              {debug.warp_rejected_reason && (
-                <div style={{ color: '#D97706', marginTop: 2, fontSize: 9 }}>
-                  Lý do: {debug.warp_rejected_reason}
-                </div>
-              )}
-              {debug.marker_centers_detected && debug.marker_centers_detected.length > 0 && (
-                <div style={{ marginTop: 4, color: '#6B7280' }}>
-                  {debug.marker_centers_detected.map(m => (
-                    <span key={m.quad} style={{ marginRight: 6 }}>
-                      {m.quad}:({Math.round(m.cx)},{Math.round(m.cy)})
-                    </span>
-                  ))}
-                </div>
-              )}
-              {(debug.alignment_warnings ?? []).length > 0 && (
-                <div style={{ color: '#F59E0B', marginTop: 2 }}>{debug.alignment_warnings.join('; ')}</div>
-              )}
-            </div>
           </div>
 
           {/* ── Right panel: SheetImageViewer ── */}

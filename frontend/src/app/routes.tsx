@@ -25,6 +25,17 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// 2026-08-07: "t muốn 2 chức năng này chỉ có tài khoản admin có" — chặn
+// thẳng ở route, không chỉ ẩn icon Sidebar, để user không-admin gõ thẳng
+// URL /app/templates hay /app/template-coordinate cũng không vào được
+// (API phía sau đã trả 403 rồi, nhưng redirect ngay ở đây cho trải nghiệm
+// sạch hơn thay vì hiện trang trống/lỗi gọi API).
+function RequireAdmin({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (user?.role !== 'admin') return <Navigate to="/app" replace />;
+  return <>{children}</>;
+}
+
 export default function AppRoutes() {
   return (
     <Routes>
@@ -50,8 +61,8 @@ export default function AppRoutes() {
         <Route path="results"         element={<ResultsPage />} />
         <Route path="review-errors"   element={<ReviewErrorsPage />} />
         <Route path="answer-key"      element={<AnswerKeyPage />} />
-        <Route path="templates"       element={<TemplatePage />} />
-        <Route path="template-coordinate" element={<TemplateCoordinatePage />} />
+        <Route path="templates"       element={<RequireAdmin><TemplatePage /></RequireAdmin>} />
+        <Route path="template-coordinate" element={<RequireAdmin><TemplateCoordinatePage /></RequireAdmin>} />
         <Route path="ocr-qr"               element={<Navigate to="/app/template-coordinate" replace />} />
         <Route path="analytics"       element={<AnalyticsPage />} />
         <Route path="excel-preview"   element={<ExcelPreviewPage />} />

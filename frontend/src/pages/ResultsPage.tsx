@@ -82,7 +82,10 @@ function formatGradedAtLabel(iso: string): string {
 
 function getBatchTemplateLabel(b: BatchGradeState): string {
   if (b.templateMode === 'custom') {
-    return b.customTemplateName ? `Custom template — ${b.customTemplateName}` : 'Custom template';
+    // 2026-08-07: bỏ tiền tố "Custom template —" cho đồng nhất với
+    // getRowTemplateLabel() ở utils/templateSchema.ts — chỉ hiện tên mẫu
+    // phiếu thật, không lộ thuật ngữ nội bộ ra badge.
+    return b.customTemplateName ?? 'Mẫu phiếu tự tạo';
   }
   return TEMPLATE_VARIANT_LABEL[b.templateVariant] ?? b.templateVariant;
 }
@@ -351,13 +354,18 @@ function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, 
         </div>
         {r._error && <div style={{ fontSize: 10, color: '#EF4444', marginTop: 2 }}>{r._error.slice(0, 80)}</div>}
       </td>
-      <td style={{ padding: '6px 10px' }}>
+      <td style={{ padding: '6px 10px', maxWidth: 260 }}>
+        {/* 2026-08-07: "t thấy cái ảnh bị bé đi, cho to lên đi" — cột co
+           theo maxWidth:'100%' đang bị các cột khác ép nhỏ hơn cần thiết.
+           Tăng kích thước mục tiêu lên 260px (td maxWidth theo cùng) — vẫn
+           giữ maxWidth:'100%' để không tái diễn tràn ngang khi thật sự
+           thiếu chỗ, nhưng giờ có nhiều chỗ hơn để hiện to, rõ chữ hơn. */}
         {nameDobCropUrl(r.debug?.name_dob_crop_path) ? (
           <img
             src={nameDobCropUrl(r.debug?.name_dob_crop_path)!}
             alt="Họ và tên / Ngày sinh"
             title="Họ và tên / Ngày sinh"
-            style={{ maxWidth: 180, maxHeight: 44, display: 'block', borderRadius: 5, border: '1px solid #E5E7EB' }}
+            style={{ maxWidth: '100%', width: 260, height: 'auto', maxHeight: 58, display: 'block', borderRadius: 5, border: '1px solid #E5E7EB' }}
             onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
           />
         ) : (
@@ -378,8 +386,14 @@ function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, 
                 </div>
               ) : '—'}
             </td>
-            <td style={{ padding: '11px 10px', fontSize: 11 }}>
-              <span style={{ background: '#F3F4F6', color: '#374151', borderRadius: 9999, padding: '2px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            <td style={{ padding: '11px 10px', fontSize: 11, maxWidth: 140 }}>
+              {/* 2026-08-07: "nếu tên dài thì xuống dòng là được, sẽ có chỗ,
+                 sẽ ko bị kéo sang" — bỏ nowrap ở đây (thường là chuỗi dài
+                 nhất trong hàng, ví dụ "Custom - Mẫu 40 câu TN + Đúng/Sai")
+                 để nó tự xuống dòng trong khung thay vì ép cả bảng tràn
+                 ngang. maxWidth trên <td> giữ cột này không phình quá to
+                 khi có phòng, nhưng vẫn co lại được khi thiếu chỗ. */}
+              <span style={{ background: '#F3F4F6', color: '#374151', borderRadius: 9999, padding: '2px 8px', fontWeight: 600, display: 'inline-block', lineHeight: 1.3 }}>
                 {templateLabel ?? '—'}
               </span>
             </td>
@@ -925,11 +939,18 @@ export default function ResultsPage() {
   // shows (and "chọn tất cả" checkbox), not the stats/export above, which
   // stay scoped to the "hard" filters (kỳ thi/lượt chấm/mẫu phiếu/kiểm tra
   // lỗi) exactly as before search existed.
+  //
+  // 2026-08-07: bỏ so khớp theo tên file — trước gõ gì cũng dò luôn vào
+  // r.input.filename, mà ảnh chụp camera có tên là chuỗi hash ngẫu nhiên
+  // (vd "z8093749426404_ae3a1892a6101efd2f32233c51ad445f.jpg"), nên gõ 1
+  // số bất kỳ như "233" rất dễ vô tình khớp trúng đoạn hash, ra kết quả
+  // không liên quan gì tới MSV/SBD/CCCD — trong khi ô search ghi rõ "Tìm
+  // theo MSV, SBD, CCCD...". Giờ chỉ khớp đúng như placeholder hứa: dữ
+  // liệu học sinh trong student_info.
   const searchedRows = (() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return visibleScoredRows;
-    return visibleScoredRows.filter(({ r, merged }) => {
-      if ((r.input?.filename ?? '').toLowerCase().includes(q)) return true;
+    return visibleScoredRows.filter(({ merged }) => {
       const info = merged.student_info ?? {};
       return Object.values(info).some(v => v != null && String(v).toLowerCase().includes(q));
     });

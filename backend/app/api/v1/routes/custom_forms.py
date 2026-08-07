@@ -29,7 +29,7 @@ from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.security.permissions import get_current_user
+from app.core.security.permissions import get_current_user, require_roles
 from app.core.omr.crop_on_markers import crop_on_markers
 from app.core.omr.preprocessor import crop_page, resize_to_template
 from app.core.templates.template_compiler import (
@@ -240,7 +240,12 @@ def get_custom_form(
 def compile_custom_form(
     payload: CompileRequest,
     db:      Session = Depends(get_db),
-    user:    User    = Depends(get_current_user),
+    # 2026-08-07: "t muốn 2 chức năng này chỉ có tài khoản admin có" — Template
+    # phiếu (TemplatePage.tsx) và Tạo Template Toạ Độ (TemplateCoordinatePage.tsx)
+    # chỉ dùng customFormsApi để TẠO/SỬA/XOÁ template — các route GET (list/get)
+    # vẫn mở cho mọi role vì AnswerKeyPage/SheetReviewPage/ResultsPage/
+    # ExcelPreviewPage cần đọc danh sách template để chấm bài bình thường.
+    user:    User    = Depends(require_roles("admin")),
 ):
     """
     Compile areas → template JSON, persist to disk + DB.
@@ -325,7 +330,7 @@ def compile_custom_form(
 @router.post("/align-image")
 async def align_image_for_picker(
     file: UploadFile = File(...),
-    _:    None        = Depends(get_current_user),
+    _:    User        = Depends(require_roles("admin")),
 ):
     """
     Preprocess an uploaded image exactly as the OMR engine would before reading:
@@ -391,7 +396,7 @@ async def align_image_for_picker(
 @router.post("/preview-grid")
 def preview_grid(
     payload: PreviewGridRequest,
-    _:       User    = Depends(get_current_user),
+    _:       User    = Depends(require_roles("admin")),
 ):
     """
     Compute bubble grid coordinates for a single area dict.
@@ -415,7 +420,7 @@ def rename_custom_form(
     template_id: int,
     payload:     RenameRequest,
     db:          Session = Depends(get_db),
-    user:        User    = Depends(get_current_user),
+    user:        User    = Depends(require_roles("admin")),
 ):
     new_name = payload.name.strip()
     if not new_name:
@@ -431,7 +436,7 @@ def rename_custom_form(
 def delete_custom_form(
     template_id: int,
     db:          Session = Depends(get_db),
-    user:        User    = Depends(get_current_user),
+    user:        User    = Depends(require_roles("admin")),
 ):
     repo = TemplateRepository(db)
     tpl  = _get_owned_or_404(template_id, user, repo)
@@ -456,7 +461,7 @@ def delete_custom_form(
 def duplicate_custom_form(
     template_id: int,
     db:          Session = Depends(get_db),
-    user:        User    = Depends(get_current_user),
+    user:        User    = Depends(require_roles("admin")),
 ):
     repo = TemplateRepository(db)
     tpl  = _get_owned_or_404(template_id, user, repo)

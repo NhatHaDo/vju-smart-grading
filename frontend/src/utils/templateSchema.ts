@@ -151,8 +151,12 @@ export function getRowTemplateLabel(
   if (key.startsWith('custom:')) {
     const tid = r.template_id ?? fallbackBatch?.customTemplateId ?? null;
     const name = fallbackBatch?.customTemplateName ?? (tid != null ? templateNames?.get(tid) : null) ?? null;
-    if (name) return `Custom - ${name}`;
-    if (tid != null) return `Custom #${tid}`;
+    // 2026-08-07: "bỏ cái chữ custom đi" — badge "Mẫu phiếu" trong bảng Kết
+    // quả chỉ cần tên mẫu phiếu thật (vd "Mẫu 40 câu TN + Đúng/Sai"), chữ
+    // "Custom -" là thuật ngữ nội bộ (phân biệt với preset VJU cứng), không
+    // có ý nghĩa với người dùng cuối.
+    if (name) return name;
+    if (tid != null) return `Mẫu phiếu #${tid}`;
     return 'Không rõ mẫu phiếu (dữ liệu cũ)';
   }
   const tvar = r.template_variant_row ?? fallbackBatch?.templateVariant ?? 'sbd8';
