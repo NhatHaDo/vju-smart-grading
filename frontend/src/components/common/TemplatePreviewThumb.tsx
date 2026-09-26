@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ZoomIn, X } from 'lucide-react';
+import { Download, ZoomIn, X } from 'lucide-react';
 import type { TemplateSchema } from '../../types/grading';
 
 // 2026-07-30: "ở mục chọn template để chấm, chọn mục nào GV cần nhìn được
@@ -75,7 +75,30 @@ function ZoomButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-function Lightbox({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
+// 2026-09-26: "mẫu phiếu thiếu nút download" — teachers want to grab the
+// blank sheet photo (e.g. to print it) straight from the preview. Plain
+// <a download> since these are same-origin static assets under /public.
+function DownloadButton({ href, style }: { href: string; style?: React.CSSProperties }) {
+  return (
+    <a
+      href={href}
+      download={href.split('/').pop()}
+      onClick={e => e.stopPropagation()}
+      title="Tải mẫu phiếu"
+      style={{
+        width: 30, height: 30, borderRadius: '50%',
+        border: '1px solid #E5E7EB', background: 'rgba(255,255,255,0.92)', cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.12)', color: '#374151',
+        ...style,
+      }}
+    >
+      <Download size={15} />
+    </a>
+  );
+}
+
+function Lightbox({ onClose, children, downloadUrl }: { onClose: () => void; children: React.ReactNode; downloadUrl?: string }) {
   return (
     <div
       onClick={onClose}
@@ -96,6 +119,21 @@ function Lightbox({ onClose, children }: { onClose: () => void; children: React.
       >
         <X size={20} />
       </button>
+      {downloadUrl && (
+        <a
+          href={downloadUrl}
+          download={downloadUrl.split('/').pop()}
+          onClick={e => e.stopPropagation()}
+          title="Tải mẫu phiếu"
+          style={{
+            position: 'absolute', top: 20, right: 72, height: 38, padding: '0 14px', borderRadius: 19,
+            background: 'rgba(255,255,255,0.15)', color: '#fff', textDecoration: 'none',
+            display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600,
+          }}
+        >
+          <Download size={16} /> Tải xuống
+        </a>
+      )}
       <div
         onClick={e => e.stopPropagation()}
         style={{
@@ -145,8 +183,9 @@ export default function TemplatePreviewThumb({ loading, areas, pageWidth, pageHe
           style={{ width: '100%', height: '100%', objectFit: 'contain' }}
         />
         <ZoomButton onClick={() => setZoomOpen(true)} />
+        <DownloadButton href={imageUrl} style={{ position: 'absolute', top: 44, right: 8 }} />
         {zoomOpen && (
-          <Lightbox onClose={() => setZoomOpen(false)}>
+          <Lightbox onClose={() => setZoomOpen(false)} downloadUrl={imageUrl}>
             <img src={imageUrl} alt="Ảnh minh họa mẫu phiếu (phóng to)" style={{ maxWidth: '100%', maxHeight: '86vh', objectFit: 'contain' }} />
           </Lightbox>
         )}
