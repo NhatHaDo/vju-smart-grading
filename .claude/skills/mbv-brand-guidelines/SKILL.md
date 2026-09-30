@@ -64,9 +64,38 @@ Quy tắc:
 
 **Văn phong**: tiếng Việt, rõ ràng, tự tin, gần gũi; tránh thuật ngữ khó hiểu; thể hiện các giá trị tiên phong – nhiệt huyết – hiện đại – tin cậy. Tên đầy đủ: Ngân hàng TNHH MTV Việt Nam Hiện Đại (Modern Bank of Vietnam), viết tắt MBV; thành viên hệ sinh thái MB Group. Không bịa số liệu, lãi suất hay slogan chính thức của MBV.
 
+## Công cụ có sẵn (ưu tiên dùng thay vì tự viết lại)
+
+Đường dẫn tính từ thư mục skill. Thêm `sys.path.insert(0, "<skill>/scripts")` trước khi import.
+
+| Việc cần làm | Công cụ |
+|---|---|
+| Lấy màu/font/logo trong code | `scripts/mbv_brand.py` — `B.RED`, `B.GOLD`, `B.logo_path("white")`, `B.logo_for_background(hex)`, `B.register_reportlab_fonts()`, `B.draw_logo(canvas, x, y, width, mode)` |
+| **Slide 16:9** (.pptx) | `scripts/mbv_pptx.py` — `new_deck()`, `add_cover`, `add_section`, `add_content`, `add_two_column`, `add_kpi`, `add_table`, `add_closing` |
+| **Báo cáo A4 dọc** (.docx) | `scripts/mbv_docx.py` — `new_report()`, `add_cover`, `h1/h2/h3`, `para`, `bullets`, `callout`, `table`, `caption` |
+| Web/HTML | `templates/mbv-tokens.css` (CSS variables + kiểu cơ bản) |
+| Mẫu để mở/chỉnh trực tiếp | `templates/MBV_Slide_Template_16x9.pptx`, `templates/MBV_Report_Template_A4.docx` |
+| **Kiểm tra trước khi giao** | `python scripts/check_brand.py <file...>` — hỗ trợ .pptx .docx .pdf .html .css .svg; báo màu ngoài bảng, font lạ, ảnh bị kéo méo, slide sai 16:9; thoát mã 1 nếu có lỗi |
+| Sinh lại file mẫu | `python scripts/build_templates.py` |
+
+Ví dụ nhanh (slide):
+```python
+import sys; sys.path.insert(0, "<skill>/scripts")
+import mbv_pptx as S
+prs = S.new_deck()
+S.add_cover(prs, "Báo cáo quý III", "Khối Bán lẻ", "30/09/2026")
+S.add_content(prs, "Điểm nổi bật", ["Ý chính", ("Ý phụ", 1)])
+S.add_kpi(prs, "Chỉ số chính", [("1.250 tỷ", "Huy động"), ("18%", "Tăng trưởng")])
+S.add_closing(prs)
+prs.save("bao-cao.pptx")
+```
+Ví dụ nhanh (báo cáo): `doc = D.new_report(); D.add_cover(doc, "Tiêu đề", "Phụ đề", "Đơn vị · ngày"); D.h1(doc, "1. Tổng quan"); D.para(doc, "..."); D.table(doc, ["Chỉ tiêu","Q2","Q3"], rows); doc.save("bao-cao.docx")`
+
+Giới hạn cần biết: các builder chỉ dựng bố cục cơ bản; nếu cần bố cục đặc thù vẫn dùng các hàm nhỏ trong module và giữ nguyên bảng màu/font. Nếu môi trường không có font Liberation Sans, file .pptx/.docx vẫn ghi đúng tên font và máy người xem sẽ tự thay bằng Arial.
+
 ## Quy trình
 
-1. Xác định loại sản phẩm và định dạng đầu ra.
-2. Dùng màu HEX, font và file logo ở trên; không tự thêm màu/font khác.
-3. Kiểm tra lại: đúng màu, logo đúng bản theo nền, vùng an toàn, tương phản, font hiển thị đủ dấu tiếng Việt.
+1. Xác định loại sản phẩm và định dạng đầu ra (slide 16:9 / báo cáo A4 dọc / PDF / web / khác).
+2. Dùng builder hoặc template ở trên; không tự thêm màu/font khác bảng chuẩn.
+3. Chạy `check_brand.py` trên file đầu ra và sửa hết lỗi; với file trực quan, mở/render để kiểm tra bố cục, dấu tiếng Việt, tương phản.
 4. Nếu sản phẩm để công bố bên ngoài, nhắc người dùng đối chiếu với tài sản thương hiệu gốc của MBV.
