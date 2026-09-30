@@ -9,13 +9,16 @@ pdfmetrics.registerFont(TTFont("R",D+"LiberationSans-Regular.ttf"))
 pdfmetrics.registerFont(TTFont("B",D+"LiberationSans-Bold.ttf"))
 pdfmetrics.registerFont(TTFont("I",D+"LiberationSans-Italic.ttf"))
 W,H=landscape(A4)
-RED=HexColor("#E30613"); DRED=HexColor("#A6000D"); GOLD=HexColor("#FFC20E")
+RED=HexColor("#B61D22"); DRED=HexColor("#8A1418"); GOLD=HexColor("#FCC743")
 INK=HexColor("#1C1C1E"); GREY=HexColor("#6B6B70"); LIGHT=HexColor("#F4F1EC"); MID=HexColor("#D9D5CE")
 c=canvas.Canvas("/home/user/vju-smart-grading/brand/MBV_Brand_Identity.pdf",pagesize=(W,H))
 c.setTitle("MBV - Bộ nhận diện thương hiệu (đề xuất)"); c.setAuthor("Concept")
 pg=[0]
 
 def star(cx,cy,r,col):
+    if col==GOLD or col==white:
+        f="star_color.png" if col==GOLD else "star_white.png"
+        c.drawImage(f,cx-r,cy-r,2*r,2*r,mask="auto",preserveAspectRatio=True,anchor="c"); return
     c.setFillColor(col); p=c.beginPath()
     for i in range(10):
         a=math.pi/2+i*math.pi/5; rr=r if i%2==0 else r*0.40
@@ -24,13 +27,11 @@ def star(cx,cy,r,col):
     p.close(); c.drawPath(p,fill=1,stroke=0)
 
 def logo(x,y,h,mode="full"):
-    """x,y = bottom-left; h = cap height of wordmark. mode: full/red/white/mono"""
-    fs=h*1.4
-    wc={"full":RED,"red":RED,"white":white,"mono":INK}[mode]
-    sc={"full":GOLD,"red":RED,"white":GOLD if mode=="white" else white,"mono":INK}[mode]
-    star(x+h*0.62,y+h*0.62,h*0.62,sc)
-    c.setFillColor(wc); c.setFont("B",fs); c.drawString(x+h*1.45,y,"MBV")
-    return h*1.45+pdfmetrics.stringWidth("MBV","B",fs)
+    """logo gốc: x,y = góc dưới trái; h ~ chiều cao chữ. mode: full/red/white/mono"""
+    f={"full":"logo_color.png","red":"logo_red.png","white":"logo_white.png","mono":"logo_mono.png","blue":"logo_blue.png"}[mode]
+    hh=h*1.55; ww=hh*1055/425
+    c.drawImage(f,x,y-h*0.02,ww,hh,mask="auto")
+    return ww
 
 def head(n,title,sub=None):
     c.setFillColor(white); c.rect(0,0,W,H,fill=1,stroke=0)
@@ -41,7 +42,7 @@ def head(n,title,sub=None):
     if sub:
         c.setFillColor(GREY); c.setFont("R",11); c.drawString(40,H-96,sub)
     c.setFillColor(GREY); c.setFont("R",8)
-    c.drawString(40,22,"MBV · Bộ nhận diện thương hiệu — bản đề xuất/concept, không phải tài liệu chính thức")
+    c.drawString(40,22,"MBV · Bộ nhận diện thương hiệu — tổng hợp không chính thức, chưa được MBV xác nhận")
     c.drawRightString(W-40,22,str(n))
 
 def para(x,y,txt,w,fs=10.5,lead=15,font="R",col=INK):
@@ -88,14 +89,14 @@ c.setFillColor(GREY); c.setFont("I",8.5); c.drawString(40,50,"Nguồn: thông ti
 c.showPage()
 
 # 3 LOGO
-head(3,"Logo","Ngôi sao vàng năm cánh + chữ MBV đậm màu đỏ")
+head(3,"Logo","Wordmark MBV đỏ đậm + ngôi sao vàng đan từ các dải song song")
 c.setFillColor(LIGHT); c.roundRect(40,150,470,300,10,fill=1,stroke=0)
-logo(100,270,80,"full")
-c.setStrokeColor(MID); c.setDash(3,3); c.rect(94,262,400,120,fill=0); c.setDash()
+logo(120,275,80,"full")
+c.setStrokeColor(MID); c.setDash(3,3); c.rect(100,255,340,150,fill=0); c.setDash()
 c.setFillColor(GREY); c.setFont("R",9); c.drawString(50,160,"Vùng an toàn = chiều cao chữ M · Kích thước tối thiểu: 24 mm (in) / 96 px (số)")
 y=H-140
-for t,d in [("Ngôi sao vàng","Biểu tượng khát vọng tiên phong và tinh thần đổi mới không ngừng."),
-            ("Wordmark MBV","Chữ in đậm, màu đỏ đặc trưng: nhiệt huyết, quyết tâm, cam kết bứt phá."),
+for t,d in [("Ngôi sao vàng đan dải","Năm cánh được đan từ các dải vàng song song — khát vọng tiên phong, đổi mới không ngừng, kết nối. Đặt ở góc trên bên phải chữ."),
+            ("Wordmark MBV","Chữ in đậm, nét loe nhẹ, màu đỏ đặc trưng: nhiệt huyết, quyết tâm, cam kết bứt phá."),
             ("Sự liên kết","Bộ ba chữ cái gắn kết với thương hiệu mẹ MB trong cùng hệ sinh thái.")]:
     c.setFillColor(RED); c.setFont("B",11); c.drawString(540,y,t); y-=16
     y=para(540,y,d,260,10,14); y-=12
@@ -108,14 +109,14 @@ for i,(n,bg,m,bd) in enumerate(cells):
     x=40+(i%3)*255; yb=H-330-(i//3)*185
     c.setFillColor(bg); c.setStrokeColor(MID); c.roundRect(x,yb,240,160,8,fill=1,stroke=1 if bd else 0)
     if m=="full" and bg==GOLD: m="mono"
-    logo(x+38,yb+62,34,m)
+    logo(x+58,yb+60,26,m)
     c.setFillColor(GREY); c.setFont("R",9); c.drawString(x,yb-14,n)
 c.showPage()
 
 # 5 MÀU
 head(5,"Bảng màu","Đỏ nhiệt huyết · Vàng tiên phong · Trung tính hiện đại")
-cols=[("MBV Red","#E30613","C0 M100 Y100 K5","Màu chủ đạo",RED,white),("Deep Red","#A6000D","C15 M100 Y100 K35","Nhấn / hover",DRED,white),
-      ("Star Gold","#FFC20E","C0 M25 Y100 K0","Màu nhấn, ngôi sao",GOLD,INK),("Ink","#1C1C1E","C70 M65 Y60 K85","Chữ chính",INK,white),
+cols=[("MBV Red","#B61D22","C15 M100 Y95 K8","Màu chủ đạo",RED,white),("Deep Red","#8A1418","C25 M100 Y100 K45","Nhấn / hover",DRED,white),
+      ("Star Gold","#FCC743","C0 M25 Y80 K0","Màu nhấn, ngôi sao",GOLD,INK),("Ink","#1C1C1E","C70 M65 Y60 K85","Chữ chính",INK,white),
       ("Stone","#F4F1EC","C3 M4 Y8 K0","Nền phụ",LIGHT,INK),("White","#FFFFFF","C0 M0 Y0 K0","Nền chính",white,INK)]
 ws=[200,110,150,110,80,80]
 x=40
@@ -129,7 +130,7 @@ c.setFillColor(INK); c.setFont("B",11); c.drawString(40,100,"Tỷ lệ sử dụ
 x=40
 for w,col in [(0.5,white),(0.25,RED),(0.12,LIGHT),(0.08,INK),(0.05,GOLD)]:
     c.setFillColor(col); c.setStrokeColor(MID); c.rect(x,60,w*760,24,fill=1,stroke=1); x+=w*760
-c.setFillColor(GREY); c.setFont("I",8.5); c.drawString(40,46,"Trắng 50% · Đỏ 25% · Stone 12% · Ink 8% · Vàng 5%.  Mã màu là đề xuất, cần đối chiếu với file gốc của MBV trước khi in.")
+c.setFillColor(GREY); c.setFont("I",8.5); c.drawString(40,46,"Trắng 50% · Đỏ 25% · Stone 12% · Ink 8% · Vàng 5%.  Mã HEX lấy mẫu từ logo; CMYK là quy đổi gần đúng, cần đối chiếu với file gốc của MBV trước khi in.")
 c.showPage()
 
 # 6 CHỮ
@@ -172,7 +173,7 @@ c.showPage()
 head(8,"Chi nhánh & Digital","Bảng hiệu · Mobile banking · Banner")
 c.setFillColor(LIGHT); c.rect(40,290,420,150,fill=1,stroke=0)
 c.setFillColor(MID); c.rect(40,290,420,20,fill=1,stroke=0)
-c.setFillColor(RED); c.rect(70,340,360,80,fill=1,stroke=0); logo(110,358,34,"white")
+c.setFillColor(RED); c.rect(70,340,360,80,fill=1,stroke=0); logo(150,362,24,"white")
 c.setFillColor(GREY); c.setFont("R",9); c.drawString(40,270,"Bảng hiệu chi nhánh: nền đỏ, logo trắng – sao vàng")
 # phone
 c.setFillColor(INK); c.roundRect(500,110,150,330,20,fill=1,stroke=0)
@@ -196,12 +197,12 @@ bad=[("Không kéo giãn/méo","x"),("Không đổi màu chữ","c"),("Không đ
 for i,(t,k) in enumerate(bad):
     x=40+i*195; c.setFillColor(LIGHT); c.roundRect(x,250,180,130,8,fill=1,stroke=0)
     c.saveState(); 
-    if k=="x": c.translate(x+14,305); c.scale(1.0,0.5); logo(0,0,22,"full")
+    if k=="x": c.translate(x+14,300); c.scale(1.0,0.5); logo(0,0,14,"full")
     elif k=="c":
-        star(x+42,315,14,HexColor("#2C6BED")); c.setFillColor(HexColor("#2C6BED")); c.setFont("B",36); c.drawString(x+62,305,"MBV")
+        logo(x+20,295,20,"blue")
     elif k=="n":
-        c.setFillColor(HexColor("#8fbf6a")); c.rect(x,250,180,130,fill=1,stroke=0); logo(x+20,300,26,"full")
-    else: c.translate(x+30,270); c.rotate(20); logo(0,0,26,"full")
+        c.setFillColor(HexColor("#8fbf6a")); c.rect(x,250,180,130,fill=1,stroke=0); logo(x+20,300,16,"full")
+    else: c.translate(x+30,270); c.rotate(20); logo(0,0,16,"full")
     c.restoreState()
     c.setFillColor(RED); c.setFont("B",14); c.drawString(x,232,"✕" if False else "X"); c.setFillColor(INK); c.setFont("R",10); c.drawString(x+18,232,t)
 c.setFillColor(INK); c.setFont("B",12); c.drawString(40,180,"Nên")
@@ -213,6 +214,6 @@ c.showPage()
 c.setFillColor(RED); c.rect(0,0,W,H,fill=1,stroke=0); star(W-140,140,110,GOLD)
 logo(60,H-130,44,"white")
 c.setFillColor(white); c.setFont("B",22); c.drawString(60,H*0.5,"Ghi chú quan trọng")
-para(60,H*0.5-30,"Đây là bản đề xuất bộ nhận diện dựa trên thông tin công khai (ngôi sao vàng 5 cánh, chữ MBV đậm màu đỏ). Mã màu, font và tỷ lệ là giá trị đề xuất; không phải tài liệu chính thức của MBV/MB. Khi sử dụng thực tế, cần đối chiếu và xin tài sản thương hiệu gốc từ MBV.",560,12,18,"R",white)
+para(60,H*0.5-30,"Đây là bản tổng hợp bộ nhận diện MBV dùng file logo do khách hàng cung cấp; mã màu lấy mẫu từ logo, font, tỷ lệ và bố cục ứng dụng là đề xuất; không phải tài liệu chính thức của MBV/MB. Khi sử dụng thực tế, cần đối chiếu và xin tài sản thương hiệu gốc từ MBV.",560,12,18,"R",white)
 c.showPage()
 c.save()
