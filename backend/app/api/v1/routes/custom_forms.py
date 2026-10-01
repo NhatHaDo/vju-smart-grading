@@ -192,6 +192,18 @@ def list_custom_forms(
     return {"forms": [_to_out(f) for f in forms]}
 
 
+@router.get("/pinned")
+def get_pinned_custom_forms(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """DB ids of the shared "pinned" templates ({"mau40": id | null}). The id
+    differs per database, so the frontend asks instead of hard-coding it —
+    see app/services/shared_templates.py."""
+    from app.services.shared_templates import find_pinned_template_ids
+    return find_pinned_template_ids(db)
+
+
 @router.get("/{template_id}")
 def get_custom_form(
     template_id: int,

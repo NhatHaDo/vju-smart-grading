@@ -1,0 +1,34 @@
+Bộ nhớ đệm nào nhanh nhất?
+A. L1
+B. L2
+C. L3
+D. L4
+ANSWER: A
+
+Hệ điều hành nào của Google dành cho điện thoại?
+A. iOS
+B. Android
+C. Windows
+D. Symbian
+ANSWER: B
+
+Đuôi file của văn bản thuần là gì?
+A. .docx
+B. .pdf
+C. .txt
+D. .xlsx
+ANSWER: C
+
+1 KB bằng bao nhiêu byte?
+A. 100
+B. 1000
+C. 1012
+D. 1024
+ANSWER: D
+
+Thiết bị nào là thiết bị vào?
+A. Bàn phím
+B. Màn hình
+C. Máy in
+D. Loa
+ANSWER: A

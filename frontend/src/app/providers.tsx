@@ -1,6 +1,14 @@
 import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import type { User } from '../types/auth';
 import { setAccessToken } from '../services/apiClient';
+import { flushUserState, hydrateUserState, resetUserStateSync } from '../services/userStateSync';
+import { resolvePinnedTemplates } from '../types/grading';
+import { clearDrafts, PICKED_LS_KEY } from '../services/draftStore';
+
+/** Everything pages need from the server before they render after login. */
+function loadAccountData(): Promise<unknown> {
+  return Promise.all([hydrateUserState(), resolvePinnedTemplates()]);
+}
 
 // 2026-07-31: "ủa sao chỗ kqua cũng có dữ liệu ở đâu ra vậy ?? acc t tạo mới,
 // mới log in" — a brand-new account saw another teacher's graded batch. Root
@@ -22,6 +30,7 @@ const USER_SCOPED_LS_KEYS = [
   'vju_manual_corrections',      // grading.ts — manual correction store
   'vju_last_template',           // grading.ts — last-used template picker
   'vju_coord_picker_v3',         // TemplateCoordinatePage draft
+  PICKED_LS_KEY,                 // draftStore.ts — đáp án picked by hand per file
 ];
 const ACTIVE_USER_LS_KEY = 'vju_active_user_id';
 
@@ -42,6 +51,9 @@ interface AuthContextValue extends AuthState {
   logout:       () => void;
   updateTokens: (accessToken: string, refreshToken: string) => void;
   isAuthenticated: boolean;
+  /** False while this account's saved answer keys are being loaded from the
+   *  server after login/page load — pages must not read them before that. */
+  userStateReady: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -58,6 +70,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch { /* ignore */ }
     return { user: null, accessToken: null, refreshToken: null };
   });
+  const [userStateReady, setUserStateReady] = useState(false);
+
+  // Page load with a restored session: pull the server copy of answer keys.
+  useEffect(() => {
+    if (auth.user) loadAccountData().finally(() => setUserStateReady(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const login = useCallback(
     (tokens: { accessToken: string; refreshToken: string; user: User }) => {
@@ -82,18 +101,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       };
       setAccessToken(tokens.accessToken);
       sessionStorage.setItem('vju_auth', JSON.stringify(next));
+      setUserStateReady(false);
       setAuth(next);
+      loadAccountData().finally(() => setUserStateReady(true));
     },
     [],
   );
 
   const logout = useCallback(() => {
+    // Upload any not-yet-synced answer-key change BEFORE it's wiped below
+    // (values + token are captured synchronously by flushUserState).
+    void flushUserState({ keepalive: true });
+    resetUserStateSync();
+    setUserStateReady(false);
     setAccessToken(null);
     sessionStorage.removeItem('vju_auth');
     // Defense in depth for shared/public computers: don't leave any
     // teacher's cached batch/answer keys sitting in localStorage after
     // they've explicitly logged out.
     clearUserScopedLocalStorage();
+    clearDrafts();
     try { localStorage.removeItem(ACTIVE_USER_LS_KEY); } catch { /* ignore */ }
     setAuth({ user: null, accessToken: null, refreshToken: null });
   }, []);
@@ -125,7 +152,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ ...auth, login, logout, updateTokens, isAuthenticated: !!auth.user }}
+      value={{ ...auth, login, logout, updateTokens, isAuthenticated: !!auth.user, userStateReady }}
     >
       {children}
     </AuthContext.Provider>

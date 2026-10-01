@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -96,6 +97,24 @@ _INT_FIELD_TYPES = {"QTYPE_INT_FROM_1", "QTYPE_INT"}
 
 
 # ── Custom-template extraction helpers ────────────────────────────────────────
+
+def ma_de_key_from_areas(areas_path: str | None) -> str | None:
+    """Key of the "Mã đề" block of a custom template, from its areas file
+    (the only place the block names live). None if there's no such block."""
+    if not areas_path:
+        return None
+    try:
+        areas = json.loads(Path(areas_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(areas, dict):
+        areas = areas.get("areas") or []
+    for a in areas if isinstance(areas, list) else []:
+        if isinstance(a, dict) and re.search(r"mã\s*đề", str(a.get("label", "")), re.IGNORECASE) \
+                and a.get("fieldType") == "QTYPE_INT":
+            return a.get("key") or a.get("blockName")
+    return None
+
 
 def _extract_student_info_custom(omr_result, template) -> dict:
     """For custom templates: assemble INT block values as composite strings.
@@ -497,6 +516,7 @@ async def debug_grade(
     # ── 3. Load template ──────────────────────────────────────────────────
     # Priority: template_id (DB lookup) > template_variant > template_path > default
     _tpl_meta: dict | None = None  # extra metadata added to response when using custom template
+    _ma_de_key: str | None = None  # custom template: key of its "Mã đề" block (for byMaDe keys)
 
     if template_id is not None:
         repo = TemplateRepository(db)
@@ -512,6 +532,7 @@ async def debug_grade(
                 detail=f"Template ID {template_id} chưa có file compiled — hãy Save Template trước",
             )
         tpl_path = Path(tpl_record.file_path)
+        _ma_de_key = ma_de_key_from_areas(tpl_record.areas_path)
         _tpl_meta = {
             "template_id":   tpl_record.id,
             "template_name": tpl_record.name,
@@ -598,6 +619,7 @@ async def debug_grade(
                 else "mau40" if "40tn_dungsai" in str(tpl_path)
                 else None
             ),
+            ma_de_key=_ma_de_key,
         )
 
         vis = DebugVisualPaths()

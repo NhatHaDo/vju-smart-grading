@@ -40,11 +40,12 @@ import {
   PINNED_TEMPLATE_40_PREVIEW_IMAGE,
   loadAnswerKeyLibrary,
   addToAnswerKeyLibrary,
+  upsertAutoLibraryEntry,
   removeFromAnswerKeyLibrary,
   updateAnswerKeyLibraryEntry,
   renameAnswerKeyLibraryEntry,
 } from '../types/grading';
-import { customFormsApi } from '../services/apiClient';
+import { customFormsApi, examPapersApi } from '../services/apiClient';
 import type { CustomFormMeta } from '../services/apiClient';
 import { buildSchemaFromDetail, buildSchemaFromAnswerKeys } from '../utils/templateSchema';
 import { buildAnswerKeyWorkbook, buildAnswerKeySampleWorkbook, parseAnswerKeyWorkbook } from '../utils/answerKeyExcel';
@@ -292,6 +293,52 @@ export default function AnswerKeyPage() {
     return init;
   });
 
+  // ── Đáp án tự động từ bộ đề trộn (2026-09-29, bước 6.2) ────────────────────
+  // "Xác nhận mã đề, đáp án — tự fill từ bước import đề và đáp án, không
+  // import export ở đây, chỉ xem để giảng viên kiểm tra": when grading a kỳ
+  // thi that has bộ đề trộn attached (Trộn đề page) on the "Mẫu 40 câu"
+  // sheet, the answer key of every mã đề comes from those versions and is
+  // shown read-only. Edits happen by re-mixing / re-attaching, not here.
+  //
+  // 2026-10-01: "lỡ tôi chấm cái phiếu này ko cùng cái nào khác thì sao ? t
+  // sẽ ko đổi được à ?" — the bộ đề key stays the default, but the giảng viên
+  // can step out of it for this đợt chấm ("Dùng đáp án khác"): the bộ đề
+  // answers stay on screen as an editable starting point, the library /
+  // Excel / typing work again, and "Dùng lại đáp án bộ đề" puts them back.
+  // A sheet whose mã đề is not in the bộ đề is never graded with another
+  // đề's key: it shows "Chưa có đáp án đề …" and lands in Cần review.
+  type PaperKey = { byMaDe: Record<string, Record<string, string>>; papers: string[]; versions: string[] };
+  const [paperFetched, setPaperFetched] = useState<PaperKey | null>(null);
+  const [paperKey, setPaperKey] = useState<{ papers: string[]; versions: string[] } | null>(null);
+  const paperLocked = paperKey !== null;
+  const applyPaperKey = (k: PaperKey) => {
+    setMultiMaDe(true);
+    setMaDeCodes(k.versions);
+    setAnswersByMaDe(k.byMaDe);
+    setActiveMaDe(k.versions[0]);
+    setSavedAt(null);
+    setPaperKey({ papers: k.papers, versions: k.versions });
+  };
+  const leavePaperKey = () => {
+    if (!confirm('Không dùng đáp án tự động của bộ đề cho lần chấm này?\n\n'
+      + 'Đáp án bộ đề vẫn để trên màn hình để bạn sửa, hoặc nạp đáp án khác từ Thư viện / Import Excel. '
+      + 'Bộ đề ở trang Trộn đề không bị thay đổi; bấm "Dùng lại đáp án bộ đề" để quay lại.')) return;
+    setPaperKey(null);
+    setSavedAt(null);
+  };
+  useEffect(() => {
+    if (!isGradingMode || examId == null) return;
+    if (templateMode !== 'custom' || customTemplateId !== PINNED_TEMPLATE_40_ID) return;
+    examPapersApi.examAnswerKey(examId)
+      .then(k => {
+        if (k.versions.length === 0) return;
+        setPaperFetched(k);
+        applyPaperKey(k);
+      })
+      .catch(() => { /* no bộ đề → normal manual answer key */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Ký tên giám thị & người chấm thi (2026-07-30) ─────────────────────────
   // "Ký tên giám thị và ng chấm thi" + "2 ng mỗi loại đề" — unlike Thang điểm
   // (shared across every đề), these names genuinely differ per đề (different
@@ -313,20 +360,12 @@ export default function AnswerKeyPage() {
 
   // ── Saved answer-key library (2026-07-29) ─────────────────────────────────
   const [library,      setLibrary]      = useState<SavedAnswerKeyEntry[]>(() => loadAnswerKeyLibrary());
-  const [showLibrary,  setShowLibrary]  = useState(false);
-  const libraryPanelRef = useRef<HTMLDivElement>(null);
-
-  // Panel renders at the very bottom of a long page — without this, opening
-  // it silently appends off-screen and looks like nothing happened ("ấn vào
-  // thư viện, nó không tự nhảy xuống nên nhiều khi gv không biết là nó ở
-  // dưới"). Scroll it into view a tick after it mounts.
-  useEffect(() => {
-    if (!showLibrary) return;
-    const t = setTimeout(() => {
-      libraryPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 50);
-    return () => clearTimeout(t);
-  }, [showLibrary]);
+  // 2026-09-29: "t muốn cái thư viện đáp án này nằm ở đầu trang answer key
+  // cho dễ nhìn" — the library is now an always-visible card at the top of
+  // the page (it used to be a toggle panel below the whole form). Shows the
+  // most recent entries; "Xem tất cả" expands the rest.
+  const LIBRARY_PREVIEW_COUNT = 3;
+  const [showAllLibrary, setShowAllLibrary] = useState(false);
   const [previewEntry,  setPreviewEntry]  = useState<SavedAnswerKeyEntry | null>(null);
   const [previewMaDe,   setPreviewMaDe]   = useState<string>('');
   const [previewSchema, setPreviewSchema] = useState<TemplateSchema | null>(null);
@@ -367,7 +406,10 @@ export default function AnswerKeyPage() {
     ? (templateMode === 'custom' && customTemplateName ? customTemplateName : TEMPLATE_VARIANT_LABEL[templateVariant])
     : (directTemplateKey === 'vju'
         ? 'Mẫu phiếu VJU'
-        : (customFormOptions.find(f => templateStoreKeyFor('custom', f.id) === directTemplateKey)?.name ?? 'Custom template'));
+        : (customFormOptions.find(f => templateStoreKeyFor('custom', f.id) === directTemplateKey)?.name
+           // pinned templates (Mẫu 40) are shared, not in the user's own list
+           ?? PINNED_TEMPLATES.find(pt => templateStoreKeyFor('custom', pt.id) === directTemplateKey)?.label
+           ?? 'Custom template'));
 
   // 2026-07-30: "thế ko có cái chọn bộ đáp án để chấm à?" — the saved-answer-
   // key library was previously only reachable from the standalone Answer Key
@@ -389,6 +431,7 @@ export default function AnswerKeyPage() {
   const currentAnswers = multiMaDe ? (answersByMaDe[activeMaDe] ?? {}) : answers;
 
   const setAnswer = (label: string, val: string) => {
+    if (paperLocked) return;   // answers come from the bộ đề trộn — view only
     const v = val === '—' ? '' : val;
     if (multiMaDe) {
       setAnswersByMaDe(prev => ({ ...prev, [activeMaDe]: { ...(prev[activeMaDe] ?? {}), [label]: v } }));
@@ -549,8 +592,24 @@ export default function AnswerKeyPage() {
     setAnswersByMaDe(prev => ({ ...prev, [activeMaDe]: { ...(prev[fromCode] ?? {}) } }));
   };
 
+  /** Keep a library copy of every saved answer key (see upsertAutoLibraryEntry).
+   *  Named "<kỳ thi> – <mẫu phiếu>" (just the mẫu outside the grading flow). */
+  const autoSaveToLibrary = (store: AnswerKeyStore) => {
+    const hasAnswers = Object.values(store.answers).some(Boolean)
+      || Object.values(store.byMaDe ?? {}).some(set => Object.values(set.answers).some(Boolean));
+    if (!hasAnswers) return;
+    const templateKey = isGradingMode ? templateStoreKeyFor(templateMode, customTemplateId) : directTemplateKey;
+    setLibrary(upsertAutoLibraryEntry(`${examId ?? 'none'}|${templateKey}`, {
+      name: examName ? `${examName} – ${currentTemplateLabel}` : currentTemplateLabel,
+      templateKey,
+      templateLabel: currentTemplateLabel,
+      store,
+    }));
+  };
+
   const handleSave = () => {
     const store = buildStore();
+    autoSaveToLibrary(store);
     // Always write the single "active" key — every scoring/results/analytics
     // page reads this one, so saving here is what actually makes this
     // template's answers the one used for grading (unchanged from before).
@@ -564,6 +623,7 @@ export default function AnswerKeyPage() {
   };
 
   const handleClear = () => {
+    if (paperLocked) return;
     if (!confirm('Xóa toàn bộ answer key?')) return;
     clearAnswerKey();
     if (!isGradingMode) clearAnswerKeyDraft(directTemplateKey);
@@ -596,6 +656,7 @@ export default function AnswerKeyPage() {
   };
 
   const handleImportExcelFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (paperLocked) { e.target.value = ''; return; }
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
@@ -640,6 +701,10 @@ export default function AnswerKeyPage() {
   };
 
   const handleLoadFromLibrary = (entry: SavedAnswerKeyEntry) => {
+    if (paperLocked) {
+      alert('Đáp án đang lấy tự động từ bộ đề trộn. Muốn nạp đáp án khác cho lần chấm này, bấm "Dùng đáp án khác" ở khung xanh trước.');
+      return;
+    }
     if (isGradingMode) {
       // No template-switch branch here on purpose — grading mode's template
       // is fixed to whatever Upload already graded with, so an entry saved
@@ -665,7 +730,6 @@ export default function AnswerKeyPage() {
       const gradingProctorInit: Record<string, ProctorInfo> = {};
       if (entry.store.byMaDe) for (const [code, set] of Object.entries(entry.store.byMaDe)) gradingProctorInit[code] = { ...(set.proctors ?? {}) };
       setProctorsByMaDe(gradingProctorInit);
-      setShowLibrary(false);
       return;
     }
     if (!confirm(`Nạp đáp án "${entry.name}" (${entry.templateLabel})? Bản nháp đang có của mẫu đó (nếu có) sẽ bị ghi đè bằng đáp án đã lưu này.`)) return;
@@ -685,7 +749,6 @@ export default function AnswerKeyPage() {
       setDirectTab(entry.templateKey === 'vju' || isPinned ? 'vju' : 'custom');
       setDirectTemplateKey(entry.templateKey); // triggers the reload effect, which picks up the draft just saved above
     }
-    setShowLibrary(false);
   };
 
   const handleRenamePreviewEntry = () => {
@@ -795,6 +858,7 @@ export default function AnswerKeyPage() {
     // Save answer key first
     const store = buildStore();
     saveAnswerKey(store);
+    autoSaveToLibrary(store);
     setSavedAt(store.updatedAt);
 
     setGrading(true);
@@ -813,7 +877,9 @@ export default function AnswerKeyPage() {
           byMaDe: Object.fromEntries(
             Object.entries(store.byMaDe ?? {}).map(([maDe, set]) => [maDe, set.answers]),
           ),
-          default: store.answers,
+          // no "default": a sheet whose mã đề has no answer set must not be
+          // scored / colored with the (stale) single key — the Results page
+          // shows it as "Chưa có đáp án đề …" and sends it to Cần review
         }
       : (store.answers && Object.keys(store.answers).length > 0 ? store.answers : null);
     const answerKeyParam = answerKeyPayload
@@ -943,6 +1009,56 @@ export default function AnswerKeyPage() {
       />
 
       <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+        {/* Thư viện đáp án — top of the page so saved answer keys are the
+            first thing a teacher sees. In grading mode (fixed template) only
+            entries saved for that exact template are listed, since there's no
+            way to switch templates mid-grading to use the rest. */}
+        <Card>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: visibleLibrary.length ? 12 : 6 }}>
+            <Library size={16} color="#C8102E" style={{ flexShrink: 0 }} />
+            <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#374151', flex: 1, minWidth: 180 }}>
+              Thư viện đáp án {visibleLibrary.length > 0 && <span style={{ color: '#9CA3AF', fontWeight: 600 }}>({visibleLibrary.length})</span>}
+              {isGradingMode && <span style={{ fontWeight: 500, color: '#9CA3AF' }}> (đáp án đã lưu cho mẫu đang chấm: {currentTemplateLabel})</span>}
+            </h3>
+            <Button size="sm" variant="secondary" icon={<BookmarkPlus size={14} />} onClick={handleSaveToLibrary}>Lưu vào thư viện</Button>
+          </div>
+          {visibleLibrary.length === 0 ? (
+            <div style={{ fontSize: 13, color: '#9CA3AF' }}>
+              {isGradingMode
+                ? `Chưa có đáp án nào được lưu cho mẫu "${currentTemplateLabel}". Bấm "Lưu & Bắt đầu chấm" hoặc "Lưu vào thư viện" để lưu lại dùng cho lần sau.`
+                : 'Chưa có đáp án nào. Bấm "Lưu Answer Key" (tự lưu vào đây) hoặc "Lưu vào thư viện" để đặt tên riêng.'}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {(showAllLibrary ? visibleLibrary : visibleLibrary.slice(0, LIBRARY_PREVIEW_COUNT)).map(entry => (
+                <div key={entry.id}
+                  onClick={() => openLibraryPreview(entry)}
+                  title="Bấm để xem chi tiết"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer', flexWrap: 'wrap',
+                    padding: '10px 14px', borderRadius: 10, border: '1.5px solid #E5E7EB',
+                  }}
+                >
+                  <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, color: '#374151', overflow: 'hidden', textOverflow: 'ellipsis' }}>{entry.name}</div>
+                    <div style={{ fontSize: 12, color: '#9CA3AF' }}>
+                      {entry.templateLabel} · Lưu lúc {new Date(entry.savedAt).toLocaleString('vi-VN', { hour12: false })}
+                    </div>
+                  </div>
+                  <Button size="sm" variant="secondary" onClick={e => { e.stopPropagation(); handleLoadFromLibrary(entry); }}>Nạp vào</Button>
+                  <Button size="sm" variant="secondary" icon={<Trash2 size={13} />} title="Xóa khỏi thư viện" onClick={e => { e.stopPropagation(); handleDeleteFromLibrary(entry.id); }} style={{ color: '#EF4444', borderColor: '#FECACA' }} />
+                </div>
+              ))}
+              {visibleLibrary.length > LIBRARY_PREVIEW_COUNT && (
+                <button type="button" onClick={() => setShowAllLibrary(v => !v)}
+                  style={{ alignSelf: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', color: '#C8102E', fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: '2px 0' }}>
+                  {showAllLibrary ? 'Thu gọn' : `Xem tất cả (${visibleLibrary.length})`}
+                </button>
+              )}
+            </div>
+          )}
+        </Card>
 
         {/* Opened directly (not via Upload flow): pick which template's answer key to edit.
             Mirrors the Upload page's own picker (same 2 tabs + pinned "Mẫu 40" option) so
@@ -1129,13 +1245,49 @@ export default function AnswerKeyPage() {
           </div>
         )}
 
+        {/* Answers auto-filled from the kỳ thi's bộ đề trộn — read only */}
+        {paperKey && (
+          <div style={{ background: '#F0FDF4', border: '1.5px solid #86EFAC', borderRadius: 12, padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+            <CheckCircle2 size={20} color="#15803D" style={{ flexShrink: 0 }} />
+            <div style={{ flex: '1 1 300px', fontSize: 13, color: '#374151', lineHeight: 1.5 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#15803D', marginBottom: 2 }}>
+                Đáp án tự động từ bộ đề trộn: {paperKey.versions.length} mã đề ({paperKey.versions.join(', ')})
+              </div>
+              Lấy từ bộ đề <strong>{paperKey.papers.join(', ')}</strong> đã gắn vào kỳ thi này. Hệ thống tự đọc mã đề trên từng phiếu
+              để chấm đúng bộ đáp án. Phiếu có mã đề không thuộc bộ đề sẽ không bị chấm nhầm theo đề khác: phiếu đó báo
+              "Chưa có đáp án đề …" và nằm ở <strong>Cần review</strong> để sửa mã đề. Muốn chấm đợt này bằng đáp án khác,
+              bấm <strong>Dùng đáp án khác</strong>.
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Button size="sm" variant="secondary" icon={<Pencil size={14} />} onClick={leavePaperKey} disabled={grading}>Dùng đáp án khác</Button>
+              <Button size="sm" variant="secondary" onClick={() => navigate('/app/exam-papers')}>Mở Trộn đề</Button>
+            </div>
+          </div>
+        )}
+        {!paperKey && paperFetched && (
+          <div style={{ background: '#FFFBEB', border: '1.5px solid #FDE68A', borderRadius: 12, padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+            <AlertTriangle size={20} color="#B45309" style={{ flexShrink: 0 }} />
+            <div style={{ flex: '1 1 300px', fontSize: 13, color: '#374151', lineHeight: 1.5 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#B45309', marginBottom: 2 }}>
+                Lần chấm này không dùng đáp án tự động của bộ đề
+              </div>
+              Đáp án bên dưới sửa được (nhập tay, Thư viện đáp án, Import Excel). Bộ đề <strong>{paperFetched.papers.join(', ')}</strong> ở
+              trang Trộn đề không bị thay đổi.
+            </div>
+            <Button size="sm" variant="secondary" icon={<CheckCircle2 size={14} />} disabled={grading}
+              onClick={() => { if (confirm('Dùng lại đáp án tự động của bộ đề? Những gì đã sửa trên màn hình sẽ bị thay bằng đáp án bộ đề.')) applyPaperKey(paperFetched); }}>
+              Dùng lại đáp án bộ đề
+            </Button>
+          </div>
+        )}
+
         {/* Chia đáp án theo mã đề */}
         {canSplitByMaDe && (
           <Card>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: multiMaDe ? 12 : 0 }}>
               <Layers size={16} color="#C8102E" style={{ flexShrink: 0 }} />
               <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#374151', flex: 1 }}>Chia đáp án theo mã đề</h3>
-              {!multiMaDe ? (
+              {paperLocked ? null : !multiMaDe ? (
                 <Button size="sm" variant="secondary" icon={<Plus size={14} />} onClick={startSplitByMaDe} disabled={grading}>
                   Bật chia theo mã đề
                 </Button>
@@ -1171,7 +1323,7 @@ export default function AnswerKeyPage() {
                         >
                           Đề {code} <span style={{ fontWeight: 500, opacity: 0.8 }}>({codeFilled}/{activeLabels.length})</span>
                         </button>
-                        {maDeCodes.length > 1 && (
+                        {maDeCodes.length > 1 && !paperLocked && (
                           <button
                             onClick={() => removeMaDeTab(code)}
                             disabled={grading}
@@ -1190,15 +1342,15 @@ export default function AnswerKeyPage() {
                       </div>
                     );
                   })}
-                  <button
+                  {!paperLocked && <button
                     onClick={addMaDeTab}
                     disabled={grading}
                     style={{ padding: '7px 14px', borderRadius: 8, border: '1.5px dashed #E5E7EB', background: '#fff', color: '#6B7280', fontWeight: 600, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6 }}
                   >
                     <Plus size={13} /> Thêm đề
-                  </button>
+                  </button>}
                 </div>
-                {maDeCodes.length > 1 && (
+                {maDeCodes.length > 1 && !paperLocked && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <Copy size={13} color="#9CA3AF" />
                     <span style={{ fontSize: 12, color: '#6B7280' }}>Sao chép đáp án từ đề khác vào đề {activeMaDe}:</span>
@@ -1214,7 +1366,9 @@ export default function AnswerKeyPage() {
                   </div>
                 )}
                 <p style={{ margin: 0, fontSize: 12, color: '#9CA3AF' }}>
-                  Đang nhập đáp án cho <strong style={{ color: '#C8102E' }}>Đề {activeMaDe}</strong> — các nút "Điền nhanh" và bảng câu hỏi bên dưới áp dụng cho đề này.
+                  {paperLocked
+                    ? <>Đang xem đáp án <strong style={{ color: '#C8102E' }}>Đề {activeMaDe}</strong>. Bấm từng mã đề để kiểm tra.</>
+                    : <>Đang nhập đáp án cho <strong style={{ color: '#C8102E' }}>Đề {activeMaDe}</strong>. Các nút "Điền nhanh" và bảng câu hỏi bên dưới áp dụng cho đề này.</>}
                 </p>
               </div>
             )}
@@ -1256,8 +1410,8 @@ export default function AnswerKeyPage() {
           </div>
         </Card>
 
-        {/* Quick-fill */}
-        <Card>
+        {/* Quick-fill — hidden when answers come from a bộ đề trộn */}
+        {!paperLocked && <Card>
           <h3 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 700, color: '#374151' }}>
             Điền nhanh{multiMaDe && <span style={{ color: '#C8102E' }}> — Đề {activeMaDe}</span>}
           </h3>
@@ -1283,7 +1437,7 @@ export default function AnswerKeyPage() {
               Xóa hết (chưa lưu)
             </button>
           </div>
-        </Card>
+        </Card>}
 
         {/* Status bar */}
         <div style={{ background: '#fff', borderRadius: 10, padding: '12px 16px', border: '1px solid #E5E7EB', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -1302,7 +1456,8 @@ export default function AnswerKeyPage() {
           )}
         </div>
 
-        {/* Sections */}
+        {/* Sections — view-only when answers come from a bộ đề trộn */}
+        <div style={paperLocked ? { pointerEvents: 'none', display: 'flex', flexDirection: 'column', gap: 20 } : { display: 'contents' }}>
         {activeSections.length === 0 && templateMode === 'custom' ? (
           <Card>
             <div style={{ fontSize: 13, color: '#6B7280', textAlign: 'center', padding: '20px 0' }}>
@@ -1461,11 +1616,13 @@ export default function AnswerKeyPage() {
             })}
           </div>
         )}
+        </div>
 
         {/* Scoring config */}
         <Card>
           <h3 style={{ margin: '0 0 14px', fontSize: 14, fontWeight: 700, color: '#374151' }}>Thang điểm</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+          {/* minmax(0, 1fr): plain 1fr columns can't shrink below the inputs' own width, so on a phone the 3 boxes ran off-screen */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
             {([
               { key: 'correct' as const, label: 'Đúng (+)',  color: '#065F46', bg: '#D1FAE5' },
               { key: 'wrong'   as const, label: 'Sai (±)',   color: '#991B1B', bg: '#FEE2E2' },
@@ -1477,7 +1634,7 @@ export default function AnswerKeyPage() {
                   type="number" step="0.05" value={scoring[f.key]}
                   onChange={e => setScoringField(f.key, e.target.value)}
                   disabled={grading}
-                  style={{ padding: '9px 12px', borderRadius: 9, border: `1.5px solid ${f.bg}`, fontSize: 15, fontWeight: 700, color: f.color, background: f.bg, fontFamily: 'inherit', outline: 'none', textAlign: 'center' }}
+                  style={{ width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '9px 12px', borderRadius: 9, border: `1.5px solid ${f.bg}`, fontSize: 15, fontWeight: 700, color: f.color, background: f.bg, fontFamily: 'inherit', outline: 'none', textAlign: 'center' }}
                 />
               </div>
             ))}
@@ -1533,60 +1690,16 @@ export default function AnswerKeyPage() {
 
           {/* Excel — primary format for giáo viên (không cần biết JSON) */}
           <Button size="sm" variant="outline" icon={<FileSpreadsheet size={14} />} onClick={handleExportExcel}>Xuất Excel</Button>
-          <Button size="sm" variant="outline" icon={<Upload size={14} />} onClick={() => excelInputRef.current?.click()}>Import Excel</Button>
+          <Button size="sm" variant="outline" icon={<Upload size={14} />} disabled={paperLocked} onClick={() => excelInputRef.current?.click()}>Import Excel</Button>
           <Button size="sm" variant="secondary" icon={<FileSpreadsheet size={14} />} onClick={handleSampleExcelDownload}>Tải mẫu Excel</Button>
           <input ref={excelInputRef} type="file" accept=".xlsx" style={{ display: 'none' }} onChange={handleImportExcelFile} />
 
           <div style={{ width: 1, height: 28, background: '#E5E7EB', margin: '0 2px' }} />
           <Button size="sm" variant="secondary" icon={<BookmarkPlus size={14} />} onClick={handleSaveToLibrary}>Lưu vào thư viện</Button>
-          <Button size="sm" variant="secondary" icon={<Library size={14} />} onClick={() => setShowLibrary(v => !v)}>
-            Thư viện đáp án {visibleLibrary.length > 0 ? `(${visibleLibrary.length})` : ''}
-          </Button>
 
           <div style={{ flex: 1 }} />
-          <Button size="sm" variant="secondary" icon={<Trash2 size={14} />} onClick={handleClear} style={{ color: '#EF4444', borderColor: '#FECACA' }}>Xóa Answer Key</Button>
+          <Button size="sm" variant="secondary" icon={<Trash2 size={14} />} onClick={handleClear} disabled={paperLocked} style={{ color: '#EF4444', borderColor: '#FECACA' }}>Xóa Answer Key</Button>
         </div>
-
-        {/* Saved answer-key library panel — in grading mode (fixed template),
-            only entries saved for that exact template are listed, since
-            there's no way to switch templates mid-grading to use the rest. */}
-        {showLibrary && (
-          <div ref={libraryPanelRef}>
-          <Card>
-            <h3 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 700, color: '#374151' }}>
-              Thư viện đáp án đã lưu{isGradingMode && <span style={{ fontWeight: 500, color: '#9CA3AF' }}> — chỉ hiện đáp án đã lưu cho mẫu đang chấm ({currentTemplateLabel})</span>}
-            </h3>
-            {visibleLibrary.length === 0 ? (
-              <div style={{ fontSize: 13, color: '#9CA3AF', textAlign: 'center', padding: '16px 0' }}>
-                {isGradingMode
-                  ? `Chưa có đáp án nào được lưu sẵn cho mẫu "${currentTemplateLabel}". Nhập đáp án bên trên rồi bấm "Lưu vào thư viện" để dùng lại cho lần chấm sau.`
-                  : 'Chưa lưu đáp án nào. Bấm "Lưu vào thư viện" để đặt tên và lưu lại đáp án đang chỉnh sửa.'}
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {visibleLibrary.map(entry => (
-                  <div key={entry.id}
-                    onClick={() => openLibraryPreview(entry)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
-                      padding: '10px 14px', borderRadius: 10, border: '1.5px solid #E5E7EB',
-                    }}
-                  >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13.5, fontWeight: 700, color: '#374151' }}>{entry.name}</div>
-                      <div style={{ fontSize: 12, color: '#9CA3AF' }}>
-                        {entry.templateLabel} · Lưu lúc {new Date(entry.savedAt).toLocaleString('vi-VN', { hour12: false })} · bấm để xem chi tiết
-                      </div>
-                    </div>
-                    <Button size="sm" variant="secondary" onClick={e => { e.stopPropagation(); handleLoadFromLibrary(entry); }}>Nạp vào</Button>
-                    <Button size="sm" variant="secondary" icon={<Trash2 size={13} />} onClick={e => { e.stopPropagation(); handleDeleteFromLibrary(entry.id); }} style={{ color: '#EF4444', borderColor: '#FECACA' }} />
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-          </div>
-        )}
 
         {/* Preview modal — full detail of a saved library entry */}
         {previewEntry && (() => {

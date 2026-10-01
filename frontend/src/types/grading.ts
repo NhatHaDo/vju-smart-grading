@@ -1,3 +1,6 @@
+import { markUserStateDirty } from '../services/userStateSync';
+import { customFormsApi } from '../services/apiClient';
+
 export interface ScoringConfig {
   correct: number;
   wrong: number;
@@ -59,10 +62,30 @@ export const TEMPLATE_VARIANT_LABEL: Record<TemplateVariant, string> = {
  * the id-portability caveat: the DB id is NOT the same across environments,
  * hence the env var with a production-id fallback.
  */
-export const PINNED_TEMPLATE_40_ID = Number(import.meta.env.VITE_PINNED_TEMPLATE_40_ID ?? 2);
+//
+// 2026-09-29: the id used to be hard-coded (2 = production's id), so every
+// other database — a fresh dev clone, a new server — showed "Không tải được
+// cấu trúc custom template" / 0 câu. It's now asked from the backend
+// (GET /custom-forms/pinned, matched by the template's file name) right after
+// login, before any page renders — see resolvePinnedTemplates() and
+// providers.tsx. VITE_PINNED_TEMPLATE_40_ID still overrides it if set.
+// `let` exports are live bindings: importers see the resolved value.
+const PINNED_40_ENV = import.meta.env.VITE_PINNED_TEMPLATE_40_ID;
+export let PINNED_TEMPLATE_40_ID = Number(PINNED_40_ENV ?? 2);
 export const PINNED_TEMPLATES: { label: string; id: number }[] = [
   { label: 'Mẫu 40 câu TN + Đúng/Sai', id: PINNED_TEMPLATE_40_ID },
 ];
+
+export async function resolvePinnedTemplates(): Promise<void> {
+  if (PINNED_40_ENV) return;
+  try {
+    const { mau40 } = await customFormsApi.pinned();
+    if (mau40 != null) {
+      PINNED_TEMPLATE_40_ID = mau40;
+      PINNED_TEMPLATES[0].id = mau40;
+    }
+  } catch { /* keep the default */ }
+}
 
 /**
  * 2026-07-30: real reference photos for the fixed VJU presets, used by
@@ -365,10 +388,12 @@ export function loadAnswerKey(): AnswerKeyStore | null {
 
 export function saveAnswerKey(store: AnswerKeyStore): void {
   try { localStorage.setItem(AK_LS_KEY, JSON.stringify(store)); } catch { /* ignore */ }
+  markUserStateDirty(AK_LS_KEY);
 }
 
 export function clearAnswerKey(): void {
   try { localStorage.removeItem(AK_LS_KEY); } catch { /* ignore */ }
+  markUserStateDirty(AK_LS_KEY);
 }
 
 /** True once the answer key has at least one đề-specific set defined —
@@ -405,6 +430,7 @@ const LAST_TEMPLATE_KEY = 'vju_last_template';
 
 export function saveLastUsedTemplate(t: LastUsedTemplate): void {
   try { localStorage.setItem(LAST_TEMPLATE_KEY, JSON.stringify(t)); } catch { /* ignore */ }
+  markUserStateDirty(LAST_TEMPLATE_KEY);
 }
 
 export function loadLastUsedTemplate(): LastUsedTemplate | null {
@@ -448,6 +474,7 @@ function loadAnswerKeyDraftsMap(): Record<string, AnswerKeyStore> {
 
 function saveAnswerKeyDraftsMap(map: Record<string, AnswerKeyStore>): void {
   try { localStorage.setItem(AK_DRAFTS_KEY, JSON.stringify(map)); } catch { /* ignore */ }
+  markUserStateDirty(AK_DRAFTS_KEY);
 }
 
 export function loadAnswerKeyDraft(templateKey: TemplateStoreKey): AnswerKeyStore | null {
@@ -480,6 +507,10 @@ export interface SavedAnswerKeyEntry {
   templateKey:   TemplateStoreKey;  // which template this answer key belongs to
   templateLabel: string;            // display-name snapshot (template may be renamed/deleted later)
   store:         AnswerKeyStore;
+  /** Set on entries created automatically by "Lưu Answer Key" — one entry per
+   *  (kỳ thi, mẫu phiếu), updated in place on every later save. Absent on
+   *  entries the user saved by hand with "Lưu vào thư viện". */
+  autoKey?:      string;
 }
 
 const AK_LIBRARY_KEY = 'vju_answer_key_library';
@@ -495,6 +526,7 @@ export function loadAnswerKeyLibrary(): SavedAnswerKeyEntry[] {
 
 function saveAnswerKeyLibraryList(list: SavedAnswerKeyEntry[]): void {
   try { localStorage.setItem(AK_LIBRARY_KEY, JSON.stringify(list)); } catch { /* ignore */ }
+  markUserStateDirty(AK_LIBRARY_KEY);
 }
 
 export function addToAnswerKeyLibrary(entry: Omit<SavedAnswerKeyEntry, 'id' | 'savedAt'>): SavedAnswerKeyEntry {
@@ -507,6 +539,23 @@ export function addToAnswerKeyLibrary(entry: Omit<SavedAnswerKeyEntry, 'id' | 's
   list.unshift(full);
   saveAnswerKeyLibraryList(list);
   return full;
+}
+
+/** 2026-09-29: "t ấn lưu answer key có thấy nó lưu vào thư viện đáp án đâu"
+ *  — "Lưu Answer Key" now also keeps a library copy. One entry per autoKey
+ *  (kỳ thi + mẫu phiếu): saving again updates it and moves it to the top
+ *  instead of piling up duplicates. Returns the full updated library. */
+export function upsertAutoLibraryEntry(
+  autoKey: string,
+  entry: Omit<SavedAnswerKeyEntry, 'id' | 'savedAt' | 'autoKey'>,
+): SavedAnswerKeyEntry[] {
+  const list = loadAnswerKeyLibrary();
+  const idx  = list.findIndex(e => e.autoKey === autoKey);
+  const id   = idx >= 0 ? list[idx].id : `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  if (idx >= 0) list.splice(idx, 1);
+  list.unshift({ ...entry, id, autoKey, savedAt: new Date().toISOString() });
+  saveAnswerKeyLibraryList(list);
+  return list;
 }
 
 export function removeFromAnswerKeyLibrary(id: string): void {
@@ -583,10 +632,33 @@ export function resolveAnswerKeyForMaDe(
     // it. Carrying it through is what makes that gating possible.
     return { key: { answers: store.answers, scoring: store.scoring, updatedAt: store.updatedAt, proctors: store.proctors }, missingKeyForMaDe: false };
   }
-  const trimmed = (maDe ?? '').trim();
-  const set = trimmed ? store.byMaDe![trimmed] : undefined;
+  const code = normalizeMaDe(maDe);
+  // exact code first, then the same number ignoring leading zeros ("0206" ↔ "206")
+  const set = !code ? undefined : store.byMaDe![code] ?? (/^\d+$/.test(code)
+    ? Object.entries(store.byMaDe!).find(([k]) => /^\d+$/.test(k.trim()) && Number(k) === Number(code))?.[1]
+    : undefined);
   if (!set) return { key: null, missingKeyForMaDe: true };
   return { key: set, missingKeyForMaDe: false };
+}
+
+/** Same answer? Letters / Đ-S compare as text; numbers (trả lời ngắn)
+ *  compare by value, so "1.50" = "1,5" and "07" = "7" — mirrors
+ *  answers_match in backend/app/core/omr/scorer.py. */
+export function answersMatch(student: string | null | undefined, key: string | null | undefined): boolean {
+  if (student == null || key == null) return false;
+  if (student === key) return true;
+  const num = /^-?\d+([.,]\d+)?$/;
+  const a = student.trim(), b = key.trim();
+  return num.test(a) && num.test(b) && Number(a.replace(',', '.')) === Number(b.replace(',', '.'));
+}
+
+/** A mã đề as read off the sheet → the code it stands for. The sheet has
+ *  more columns than most codes have digits, so "206_" / "_206" mean 206; a
+ *  gap inside ("2_6") means unreadable → null. Mirrors normalize_ma_de in
+ *  backend/app/core/omr/engine.py. */
+export function normalizeMaDe(raw: string | null | undefined): string | null {
+  const code = (raw ?? '').trim().replace(/^_+|_+$/g, '');
+  return !code || /[_?]/.test(code) ? null : code;
 }
 
 /** Compute per-sheet score given answers and key. */
@@ -602,7 +674,7 @@ export function computeScore(
     const correct_ans = key.answers[q];
     if (!correct_ans) continue;          // no answer defined for this question
     if (!student)       { blank++;  total += key.scoring.blank; continue; }
-    if (student === correct_ans) { correct++; total += qp?.[q] ?? key.scoring.correct; }
+    if (answersMatch(student, correct_ans)) { correct++; total += qp?.[q] ?? key.scoring.correct; }
     else                         { wrong++;   total += key.scoring.wrong; }
   }
   return { correct, wrong, blank, total: Math.round(total * 100) / 100 };
@@ -636,7 +708,7 @@ export function computeSectionScores(
       max += qp?.[q] ?? key.scoring.correct;
       const student = sheetAnswers[q] ?? null;
       if (!student)                 { blank++;  total += key.scoring.blank; continue; }
-      if (student === correct_ans)  { correct++; total += qp?.[q] ?? key.scoring.correct; }
+      if (answersMatch(student, correct_ans))  { correct++; total += qp?.[q] ?? key.scoring.correct; }
       else                          { wrong++;   total += key.scoring.wrong; }
     }
     return {

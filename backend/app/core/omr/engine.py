@@ -242,6 +242,7 @@ class OMREngine:
         mean_mode: str = "circle_mask",
         signature_box_set: str | None = None,
         enable_illumination_flatten: bool = True,
+        ma_de_key: str | None = None,
     ):
         """
         Args:
@@ -282,6 +283,11 @@ class OMREngine:
         self.debug_overlay_dir = Path(debug_overlay_dir) if debug_overlay_dir else None
         self.mean_mode = mean_mode
         self.signature_box_set = signature_box_set
+        # custom_values key of the "Mã đề" block on a custom template (its
+        # compiled JSON has no names, only "custom_<id>" keys) — lets a
+        # {"byMaDe": …} answer key find the sheet's mã đề. None → the fixed
+        # "MaDe" key / name-based fallback below.
+        self.ma_de_key = ma_de_key
         self._morph_kernel: tuple[int, int] = (10, 10)
         self._target_size = tuple(template.page_dimensions)  # (w, h)
 
@@ -1141,7 +1147,7 @@ class OMREngine:
             if isinstance(answer_key, dict) and "byMaDe" in answer_key:
                 by_ma_de = answer_key.get("byMaDe") or {}
                 detected_ma_de: str | None = None
-                val_status = custom_values.get("MaDe")
+                val_status = custom_values.get(self.ma_de_key or "MaDe")
                 if val_status is None:
                     # Custom templates may use a different custom_key for the
                     # mã đề block — fall back to matching by mapped name.
@@ -1153,7 +1159,7 @@ class OMREngine:
                     val, _st = val_status
                     detected_ma_de = val if val and val.strip("?") else None
                 resolved_answer_key = (
-                    (by_ma_de.get(detected_ma_de) if detected_ma_de else None)
+                    pick_answer_set_for_ma_de(by_ma_de, detected_ma_de)
                     or answer_key.get("default")
                     or {}
                 )
@@ -1478,3 +1484,35 @@ def _template_blocks_in_order(self: VJUTemplate):
     yield from self.field_blocks
 
 VJUTemplate.template_blocks_in_order = _template_blocks_in_order
+
+
+def normalize_ma_de(raw: str | None) -> str | None:
+    """A mã đề as read off the sheet → the code it stands for.
+
+    The sheet has more mã đề columns than most codes have digits, so a
+    3-digit code comes back padded with blank columns ("206_", "_206") —
+    those are dropped. A blank or unreadable column INSIDE the code
+    ("2_6", "2?6") means the code isn't known → None.
+    """
+    if not raw:
+        return None
+    code = raw.strip().strip("_")
+    if not code or "_" in code or "?" in code:
+        return None
+    return code
+
+
+def pick_answer_set_for_ma_de(by_ma_de: dict, raw_ma_de: str | None) -> dict | None:
+    """The answer set in a {"byMaDe": {code: set}} key that this sheet's mã
+    đề selects: exact match first, then the same number ignoring leading
+    zeros ("0206" on the sheet ↔ đề "206")."""
+    code = normalize_ma_de(raw_ma_de)
+    if code is None or not by_ma_de:
+        return None
+    if code in by_ma_de:
+        return by_ma_de[code]
+    if code.isdigit():
+        for k, v in by_ma_de.items():
+            if str(k).strip().isdigit() and int(k) == int(code):
+                return v
+    return None

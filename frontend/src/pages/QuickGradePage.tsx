@@ -28,11 +28,16 @@ import { Zap, X, Hand, Camera as CameraIcon, ArrowLeft, AlertTriangle, CheckCirc
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import PageHeader from '../components/layout/PageHeader';
+import { examPapersApi, examsApi } from '../services/apiClient';
+import type { ExamOut } from '../types/exam';
 import {
   loadAnswerKey,
   loadLastUsedTemplate,
   isMultiMaDe,
   TEMPLATE_VARIANT_LABEL,
+  DEFAULT_SCORING,
+  PINNED_TEMPLATE_40_ID,
+  PINNED_TEMPLATES,
   type TemplateVariant,
   type OmrGradeResult,
   type BatchGradeState,
@@ -96,20 +101,26 @@ function resolveOverlayUrl(path: string | null | undefined): string | null {
 // ── Setup screen (chọn xong đáp án đang dùng, bấm Bắt đầu) ─────────────────
 
 function SetupScreen({
-  store, tpl, variant, setVariant, onStart,
+  store, tpl, variant, setVariant, onStart, exams, examId, onSelectExam, examInfo,
 }: {
   store: AnswerKeyStore | null;
   tpl: LastUsedTemplate | null;
   variant: TemplateVariant;
   setVariant: (v: TemplateVariant) => void;
   onStart: () => void;
+  exams: ExamOut[];
+  examId: number | null;
+  onSelectExam: (id: number | null) => void;
+  /** Set when the chosen kỳ thi has bộ đề trộn attached (null = none / loading). */
+  examInfo: { loading: boolean; papers: string[]; versions: string[] } | null;
 }) {
   const navigate = useNavigate();
   const mode = tpl?.mode ?? 'vju';
   const hasAnswers = !!store && (
     Object.keys(store.answers ?? {}).length > 0 || isMultiMaDe(store)
   );
-  const questionCount = store ? Object.keys(store.answers ?? {}).length : 0;
+  const firstSet = store?.byMaDe ? Object.values(store.byMaDe)[0]?.answers : undefined;
+  const questionCount = Object.keys(firstSet ?? store?.answers ?? {}).length;
   const maDeCount = store?.byMaDe ? Object.keys(store.byMaDe).length : 0;
   const templateLabel = mode === 'custom'
     ? (tpl?.name ?? 'Custom template')
@@ -126,6 +137,32 @@ function SetupScreen({
             <div style={{ fontWeight: 700, fontSize: 15, color: '#1E1E1E' }}>Đáp án đang dùng</div>
             <div style={{ fontSize: 12, color: '#6B7280' }}>Chấm nhanh dùng ngay đáp án đã lưu ở Answer Key — không chọn lại.</div>
           </div>
+        </div>
+
+        {/* 2026-09-29 (bước 6.3): pick a kỳ thi → if it has bộ đề trộn
+           attached (Trộn đề page), the answer key of each mã đề is used
+           automatically, exactly like the Upload → Answer Key flow. */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+          <span style={{ fontSize: 12, color: '#6B7280', fontWeight: 600 }}>Kỳ thi (lấy đáp án từ bộ đề trộn)</span>
+          {/* width 100% + minWidth 0: a <select> otherwise sizes itself to its
+              longest option and pushed the whole card off a phone screen */}
+          <select value={examId ?? ''} onChange={e => onSelectExam(e.target.value ? Number(e.target.value) : null)}
+            style={{ width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8,
+              border: '1.5px solid #D1D5DB', fontSize: 14, fontFamily: 'inherit', background: '#fff' }}>
+            <option value="">Không chọn, dùng đáp án đã lưu</option>
+            {exams.map(ex => <option key={ex.id} value={ex.id}>{ex.name}</option>)}
+          </select>
+          {examId != null && examInfo?.loading && <span style={{ fontSize: 12, color: '#9CA3AF' }}>Đang tải đáp án…</span>}
+          {examId != null && examInfo && !examInfo.loading && examInfo.versions.length === 0 && (
+            <span style={{ fontSize: 12, color: '#B45309' }}>
+              Kỳ thi này chưa gắn bộ đề trộn nào nên đang dùng đáp án đã lưu ở Answer Key. Gắn bộ đề ở trang <b>Trộn đề</b>.
+            </span>
+          )}
+          {examId != null && examInfo && !examInfo.loading && examInfo.versions.length > 0 && (
+            <span style={{ fontSize: 12.5, color: '#15803D' }}>
+              ✓ Đáp án tự động từ bộ đề <b>{examInfo.papers.join(', ')}</b>: {examInfo.versions.length} mã đề ({examInfo.versions.join(', ')}), phiếu Mẫu 40 câu trắc nghiệm
+            </span>
+          )}
         </div>
 
         {!hasAnswers ? (
@@ -201,18 +238,57 @@ export default function QuickGradePage() {
   const [tpl,   setTpl]   = useState<LastUsedTemplate | null>(null);
   const [variant, setVariant] = useState<TemplateVariant>('sbd8');
   const [sessionActive, setSessionActive] = useState(false);
+  const [exams, setExams] = useState<ExamOut[]>([]);
+  const [examId, setExamId] = useState<number | null>(null);
+  const [examInfo, setExamInfo] = useState<{ loading: boolean; papers: string[]; versions: string[] } | null>(null);
 
   useEffect(() => {
     setStore(loadAnswerKey());
     setTpl(loadLastUsedTemplate());
+    examsApi.list().then(setExams).catch(() => setExams([]));
   }, []);
 
-  // Re-đọc mỗi khi quay lại trang (ví dụ sau khi qua Answer Key sửa rồi bấm Back).
+  // Re-đọc mỗi khi quay lại trang (ví dụ sau khi qua Answer Key sửa rồi bấm Back)
+  // — only when no kỳ thi is driving the answer key.
   useEffect(() => {
+    if (examId != null) return;
     const onFocus = () => { setStore(loadAnswerKey()); setTpl(loadLastUsedTemplate()); };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, []);
+  }, [examId]);
+
+  // Kỳ thi chosen → use its bộ đề trộn answer keys (one set per mã đề, on the
+  // "Mẫu 40 câu" sheet). No bộ đề attached → fall back to the saved key.
+  const selectExam = (id: number | null) => {
+    setExamId(id);
+    if (id == null) {
+      setExamInfo(null);
+      setStore(loadAnswerKey());
+      setTpl(loadLastUsedTemplate());
+      return;
+    }
+    setExamInfo({ loading: true, papers: [], versions: [] });
+    examPapersApi.examAnswerKey(id)
+      .then(k => {
+        setExamInfo({ loading: false, papers: k.papers, versions: k.versions });
+        if (k.versions.length === 0) {
+          setStore(loadAnswerKey());
+          setTpl(loadLastUsedTemplate());
+          return;
+        }
+        const scoring   = loadAnswerKey()?.scoring ?? { ...DEFAULT_SCORING };
+        const updatedAt = new Date().toISOString();
+        const fromPapers: AnswerKeyStore = {
+          answers: {},
+          scoring,
+          updatedAt,
+          byMaDe: Object.fromEntries(k.versions.map(code => [code, { answers: k.byMaDe[code], scoring, updatedAt }])),
+        };
+        setStore(fromPapers);
+        setTpl({ mode: 'custom', id: PINNED_TEMPLATE_40_ID, name: PINNED_TEMPLATES[0].label });
+      })
+      .catch(() => setExamInfo({ loading: false, papers: [], versions: [] }));
+  };
 
   if (!sessionActive) {
     return (
@@ -228,6 +304,10 @@ export default function QuickGradePage() {
           variant={variant}
           setVariant={setVariant}
           onStart={() => setSessionActive(true)}
+          exams={exams}
+          examId={examId}
+          onSelectExam={selectExam}
+          examInfo={examInfo}
         />
       </>
     );

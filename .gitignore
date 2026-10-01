@@ -56,6 +56,7 @@ backend/temp/
 backend/data/custom_forms/
 backend/data/uploads/
 backend/data/outputs/
+backend/data/exam_paper_sources/
 
 # Debug artifacts
 # 2026-07-29: the old broad "*_overlay.*" suffix rule below matched
@@ -85,3 +86,6 @@ logs/
 # Local debug scripts
 backend/scripts/debug_*.py
 backend/test_write.txt
+
+# sample files the app offers for download (Trộn đề → File mẫu)
+!frontend/public/samples/*.xlsx

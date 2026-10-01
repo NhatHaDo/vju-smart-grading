@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { X, AlertTriangle, CheckCircle2, Pencil, Save, RotateCcw } from 'lucide-react';
 import type { OmrGradeResult, AnswerKeyStore, ManualCorrection, InfoFieldColumn, TemplateSchema, TemplateAnswerSection, TemplateInfoField, OmrWarning } from '../../types/grading';
-import { VJU_PRESET_SCHEMA, computeScore, resolveAnswerKeyForMaDe, getMaDeValue } from '../../types/grading';
+import { VJU_PRESET_SCHEMA, answersMatch, computeScore, resolveAnswerKeyForMaDe, getMaDeValue } from '../../types/grading';
 import { buildSchemaFromAnswerKeys } from '../../utils/templateSchema';
 import { getInfoFieldValue, correctionHasChanges } from '../../utils/resultMapping';
 import SheetImageViewer from './SheetImageViewer';
@@ -281,7 +281,7 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
     const key = rowAnswerKey.answers[lbl];
     if (!key) return 'no-key';
     if (!ans) return 'blank';
-    return ans === key ? 'correct' : 'wrong';
+    return answersMatch(ans, key) ? 'correct' : 'wrong';
   }
 
   // 2026-08-04: "cái nút huỷ sửa đang ko hoạt động? t cx ko hiểu chức năng

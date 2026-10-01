@@ -2,6 +2,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models.exam import AnswerKey, Exam
+from app.models.exam_paper import ExamPaper
 from app.repositories.exam_repository import ExamRepository
 
 
@@ -35,6 +36,10 @@ class ExamService:
 
     def delete_exam(self, exam_id: int, actor_id: int) -> None:
         exam = self.get_or_404(exam_id)
+        # Bộ đề trộn attached to it go back to "chưa gắn" — otherwise they keep
+        # pointing at an id SQLite may hand to the next kỳ thi created, and
+        # would silently fill THAT exam's answer keys.
+        self.repo.db.query(ExamPaper).filter(ExamPaper.exam_id == exam.id).update({ExamPaper.exam_id: None})
         self.repo.delete(exam)
 
     # ── Answer key ──────────────────────────────────────────────────

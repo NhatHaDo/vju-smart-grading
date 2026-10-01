@@ -101,7 +101,7 @@ function DownloadButton({ href, style }: { href: string; style?: React.CSSProper
 function Lightbox({ onClose, children, downloadUrl }: { onClose: () => void; children: React.ReactNode; downloadUrl?: string }) {
   return (
     <div
-      onClick={onClose}
+      onClick={e => { e.stopPropagation(); onClose(); }}
       style={{
         position: 'fixed', inset: 0, background: 'rgba(17,17,17,0.78)', zIndex: 1000,
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32,
@@ -175,7 +175,7 @@ export default function TemplatePreviewThumb({ loading, areas, pageWidth, pageHe
 
   if (imageUrl && !imgFailed) {
     return (
-      <div style={boxStyle}>
+      <div style={{ ...boxStyle, cursor: 'zoom-in' }} onClick={() => setZoomOpen(true)} title="Bấm để phóng to">
         <img
           src={imageUrl}
           alt="Ảnh minh họa mẫu phiếu"
@@ -211,7 +211,7 @@ export default function TemplatePreviewThumb({ loading, areas, pageWidth, pageHe
       </svg>
     );
     return (
-      <div style={boxStyle}>
+      <div style={{ ...boxStyle, cursor: 'zoom-in' }} onClick={() => setZoomOpen(true)} title="Bấm để phóng to">
         {diagram}
         <span style={{ position: 'absolute', bottom: 4, right: 6, fontSize: 9.5, color: '#9CA3AF', background: 'rgba(255,255,255,0.85)', padding: '1px 5px', borderRadius: 4 }}>
           Sơ đồ vùng đọc — không phải ảnh thật của phiếu

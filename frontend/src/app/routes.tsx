@@ -18,10 +18,17 @@ import TemplatePage      from '../pages/TemplatePage';
 import TemplateCoordinatePage from '../pages/TemplateCoordinatePage';
 import AnalyticsPage     from '../pages/AnalyticsPage';
 import ExcelPreviewPage  from '../pages/ExcelPreviewPage';
+import QuestionBankPage  from '../pages/QuestionBankPage';
+import ExamPapersPage    from '../pages/ExamPapersPage';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, userStateReady } = useAuth();
   if (!isAuthenticated) return <Navigate to="/login" replace />;
+  // Wait for this account's saved answer keys to be restored from the server
+  // (see services/userStateSync.ts) — pages read them on mount.
+  if (!userStateReady) {
+    return <div style={{ padding: 40, textAlign: 'center', color: '#9CA3AF', fontSize: 14 }}>Đang tải dữ liệu…</div>;
+  }
   return <>{children}</>;
 }
 
@@ -56,6 +63,8 @@ export default function AppRoutes() {
       >
         <Route index                  element={<DashboardPage />} />
         <Route path="exams"           element={<ExamPage />} />
+        <Route path="question-bank"   element={<QuestionBankPage />} />
+        <Route path="exam-papers"     element={<ExamPapersPage />} />
         <Route path="upload"          element={<SheetReviewPage />} />
         <Route path="quick-grade"     element={<QuickGradePage />} />
         <Route path="results"         element={<ResultsPage />} />

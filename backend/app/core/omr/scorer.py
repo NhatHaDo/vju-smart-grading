@@ -17,9 +17,27 @@ Only labels present in the answer key and whose status is ANSWERED are scored.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from app.core.omr.field_reader import FieldResult, FieldStatus
+
+
+_NUMBER = re.compile(r"^-?\d+([.,]\d+)?$")
+
+
+def answers_match(student: str | None, correct: str | None) -> bool:
+    """Same answer? Letters/Đ-S compare as text; numbers (trả lời ngắn)
+    compare by value, so "1.50" = "1,5" and "07" = "7"."""
+    if student is None or correct is None:
+        return False
+    if student == correct:
+        return True
+    a, b = student.strip(), str(correct).strip()
+    if _NUMBER.match(a) and _NUMBER.match(b):
+        return Decimal(a.replace(",", ".")) == Decimal(b.replace(",", "."))
+    return False
 
 
 @dataclass
@@ -128,7 +146,7 @@ def score(
         student_answer = result.selected_value
         is_correct = (
             result.status == FieldStatus.ANSWERED
-            and student_answer == correct_answer
+            and answers_match(student_answer, correct_answer)
         )
         if is_correct:
             earned = correct_pts

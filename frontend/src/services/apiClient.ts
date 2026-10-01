@@ -10,6 +10,9 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
 
+/** A question's formula / picture ("[[ct:<id>]]" in its text) as an image URL. */
+export const questionAssetUrl = (id: string) => `${API_BASE}/api/v1/question-bank/assets/${id}.svg`;
+
 // ── Typed API error ──────────────────────────────────────────────────────────
 
 export class ApiError extends Error {
@@ -445,6 +448,10 @@ export interface CustomFormDetail {
 }
 
 export const customFormsApi = {
+  /** DB ids of the shared "pinned" templates — they differ per database. */
+  pinned: () =>
+    request<{ mau40: number | null }>('/api/v1/custom-forms/pinned'),
+
   list: () =>
     request<{ forms: CustomFormMeta[] }>('/api/v1/custom-forms'),
 
@@ -471,3 +478,265 @@ export const healthApi = {
 };
 
 export default request;
+
+// ── Ngân hàng câu hỏi ─────────────────────────────────────────────────────────
+
+export interface QuestionCategoryOut {
+  id:             number;
+  name:           string;
+  description:    string | null;
+  owner_id:       number;
+  owner_name:     string;
+  /** owner = mine (or admin); edit/view = shared with me */
+  access:         'owner' | 'edit' | 'view';
+  question_count: number;
+  type_counts:    Record<QuestionType, number>;
+  /** trắc nghiệm questions with no answer yet (imported from a file that doesn't mark it) */
+  unanswered:     number;
+  created_at:     string;
+  updated_at:     string;
+}
+
+/** mcq = trắc nghiệm (Phần I-II trên phiếu), tf = Đúng/Sai (Phần III, 4 ý), short = trả lời ngắn (Phần IV) */
+export type QuestionType = 'mcq' | 'tf' | 'short';
+
+export interface QuestionOption {
+  text:     string;
+  /** YoungMix "#A." — keeps its position when options are shuffled. */
+  fixed:    boolean;
+  /** Đúng/Sai statements only: is this statement true? */
+  correct?: boolean | null;
+}
+
+export interface QuestionPayload {
+  qtype:           QuestionType;
+  content:         string;
+  options:         QuestionOption[];
+  /** mcq: index of the correct option (0 = A). */
+  answer:          number;
+  /** short: the number as bubbled on the sheet, e.g. "-1,5". */
+  answer_text?:    string | null;
+  shuffle_options: boolean;
+}
+
+export interface QuestionOut extends QuestionPayload {
+  id:          number;
+  category_id: number;
+  created_at:  string;
+  updated_at:  string;
+}
+
+export interface QuestionImportResult {
+  dry_run:    boolean;
+  found:      number;
+  new:        number;
+  duplicates: number;
+  /** trắc nghiệm with no answer that would land in the bank (new, or the bank's copy has none) */
+  unanswered: number;
+  /** which câu were skipped as duplicates, and what each one repeats */
+  duplicate_list: string[];
+  /** formulas kept but the server can't draw them for the web (no LibreOffice) */
+  formula_note?: string | null;
+  /** câu already in the bank without an answer, given one by this import */
+  answered:   number;
+  /** those `unanswered` ones, to pick A/B/C/D before importing */
+  unanswered_list: UnansweredQuestion[];
+  /** every trắc nghiệm of the file, with the answer it marks (-1: none) — the file đáp án */
+  mcq_all:    UnansweredQuestion[];
+  warnings:   string[];
+}
+
+/** A trắc nghiệm question of a file; `i` = its index in the file (answers_json key). */
+export interface UnansweredQuestion {
+  i:       number;
+  /** its place among the file's trắc nghiệm (1 = first): the "#" shown, and what an
+   *  answer file / a VJU answer key ("Phần I-II, câu n") is matched by */
+  mcq_no:  number;
+  /** the answer the file marks, -1 = none */
+  answer:  number;
+  where:   string;
+  number:  string;
+  content: string;
+  options: string[];
+}
+
+export interface QuestionCategoryShareOut {
+  id:         number;
+  user_id:    number;
+  email:      string;
+  name:       string;
+  permission: 'view' | 'edit';
+  created_at: string;
+}
+
+async function rawOrThrow(res: Response): Promise<Response> {
+  if (res.ok) return res;
+  const body = await res.json().catch(() => ({}));
+  const detail = (body as { detail?: unknown }).detail;
+  throw new ApiError(res.status, typeof detail === 'string' ? detail : res.statusText);
+}
+
+export const questionBankApi = {
+  listCategories: () =>
+    request<QuestionCategoryOut[]>('/api/v1/question-bank/categories'),
+  createCategory: (name: string, description?: string) =>
+    request<QuestionCategoryOut>('/api/v1/question-bank/categories', { method: 'POST', body: JSON.stringify({ name, description }) }),
+  updateCategory: (id: number, name: string, description?: string) =>
+    request<QuestionCategoryOut>(`/api/v1/question-bank/categories/${id}`, { method: 'PUT', body: JSON.stringify({ name, description }) }),
+  deleteCategory: (id: number) =>
+    request<void>(`/api/v1/question-bank/categories/${id}`, { method: 'DELETE' }),
+  copyCategory: (id: number) =>
+    request<QuestionCategoryOut>(`/api/v1/question-bank/categories/${id}/copy`, { method: 'POST' }),
+
+  listShares: (categoryId: number) =>
+    request<QuestionCategoryShareOut[]>(`/api/v1/question-bank/categories/${categoryId}/shares`),
+  share: (categoryId: number, email: string, permission: 'view' | 'edit') =>
+    request<QuestionCategoryShareOut[]>(`/api/v1/question-bank/categories/${categoryId}/shares`, { method: 'POST', body: JSON.stringify({ email, permission }) }),
+  unshare: (categoryId: number, shareId: number) =>
+    request<void>(`/api/v1/question-bank/categories/${categoryId}/shares/${shareId}`, { method: 'DELETE' }),
+
+  listQuestions: (categoryId: number, q?: string) =>
+    request<QuestionOut[]>(`/api/v1/question-bank/categories/${categoryId}/questions${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  createQuestion: (categoryId: number, payload: QuestionPayload) =>
+    request<QuestionOut>(`/api/v1/question-bank/categories/${categoryId}/questions`, { method: 'POST', body: JSON.stringify(payload) }),
+  updateQuestion: (id: number, payload: QuestionPayload) =>
+    request<QuestionOut>(`/api/v1/question-bank/questions/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteQuestion: (id: number) =>
+    request<void>(`/api/v1/question-bank/questions/${id}`, { method: 'DELETE' }),
+  /** Quick pick of the correct option (-1 = none yet). */
+  setAnswer: (id: number, answer: number) =>
+    request<QuestionOut>(`/api/v1/question-bank/questions/${id}/answer`, { method: 'PUT', body: JSON.stringify({ answer }) }),
+
+  importFile: async (categoryId: number, file: File, dryRun: boolean,
+                     answers?: Record<number, number>): Promise<QuestionImportResult> => {
+    const fd = new FormData();
+    fd.append('file', file);
+    if (answers && Object.keys(answers).length) fd.append('answers_json', JSON.stringify(answers));
+    const res = await requestRaw(`/api/v1/question-bank/categories/${categoryId}/import?dry_run=${dryRun}`, { method: 'POST', body: fd });
+    return (await rawOrThrow(res)).json();
+  },
+  exportFile: async (categoryId: number, format: 'txt' | 'docx'): Promise<Blob> => {
+    const res = await requestRaw(`/api/v1/question-bank/categories/${categoryId}/export?format=${format}`);
+    return (await rawOrThrow(res)).blob();
+  },
+};
+
+// ── Per-account saved state (answer keys) — see services/userStateSync.ts ───
+
+export const userStateApi = {
+  get: () => request<Record<string, unknown>>('/api/v1/me/state'),
+  /** rawJson is the localStorage string as-is ('null' deletes the key). */
+  put: (key: string, rawJson: string, keepalive = false) =>
+    request<void>(`/api/v1/me/state/${encodeURIComponent(key)}`, { method: 'PUT', body: rawJson, keepalive }),
+};
+
+// ── Trộn đề (bộ đề = shuffled mã đề) ─────────────────────────────────────────
+
+export type PartCounts = Record<QuestionType, number>;
+
+export interface VersionAnswerKey {
+  mcq:   string[];     // "A".."D" per trắc nghiệm question
+  tf:    string[][];   // ["Đ","S","Đ","S"] per Đúng/Sai question
+  short: string[];     // "-1,5" per trả lời ngắn question
+}
+
+export interface ExamPaperVersionOut {
+  id:         number;
+  code:       string;
+  in_exam:    boolean;
+  answer_key: VersionAnswerKey;
+}
+
+export interface ExamPaperOut {
+  id:         number;
+  name:       string;
+  source:     'bank' | 'file';
+  owner_id:   number;
+  exam_id:    number | null;
+  exam_name:  string | null;
+  settings:   Record<string, unknown>;
+  counts:     PartCounts;
+  /** false = đề chỉ để in: không chấm được bằng phiếu Mẫu 40, không gắn kỳ thi được */
+  gradable:   boolean;
+  sheet_problem: string | null;
+  versions:   ExamPaperVersionOut[];
+  created_at: string;
+  updated_at: string;
+  notes?:     string[];
+}
+
+export interface MixOptions {
+  name:              string;
+  num_versions:      number;
+  start_code:        string;
+  shuffle_questions: boolean;
+  shuffle_options:   boolean;
+  exam_id:           number | null;
+  /** true (mặc định) = chấm bằng phiếu Mẫu 40: tối đa 40/8/6 câu, 4 đáp án A–D */
+  for_sheet?:        boolean;
+}
+
+export interface ParsedFileInfo {
+  available:        PartCounts;    // dùng được trên phiếu Mẫu 40
+  available_all:    PartCounts;    // đề chỉ để in
+  limits:           PartCounts;
+  too_many_options: number;
+  too_many_options_list: string[];   // "Câu 21 (dòng 109) "…": 5 đáp án"
+  warnings:         string[];
+  /** one Word file → the mã đề are built from it, formulas and pictures kept */
+  keeps_format:     boolean;
+  /** trắc nghiệm questions with no answer marked — the teacher picks them on the page */
+  unanswered:       UnansweredQuestion[];
+  /** every trắc nghiệm of the file(s), with the answer it marks (-1: none) — the file đáp án */
+  mcq_all:          UnansweredQuestion[];
+  /** exact repeats of an earlier câu, left out of the mix: which and what they repeat */
+  duplicate_list:   string[];
+  /** formulas kept but the server can't draw them for the web (no LibreOffice) */
+  formula_note?:    string | null;
+}
+
+export const examPapersApi = {
+  list: (examId?: number) =>
+    request<ExamPaperOut[]>(`/api/v1/exam-papers${examId != null ? `?exam_id=${examId}` : ''}`),
+  get: (id: number) =>
+    request<ExamPaperOut>(`/api/v1/exam-papers/${id}`),
+  fromBank: (opts: MixOptions & { category_ids: number[]; counts: PartCounts }) =>
+    request<ExamPaperOut>('/api/v1/exam-papers/from-bank', { method: 'POST', body: JSON.stringify(opts) }),
+  /** Đọc thử file đề: số câu dùng được mỗi phần (chưa tạo gì). */
+  parseFile: async (files: File[]): Promise<ParsedFileInfo> => {
+    const fd = new FormData();
+    for (const f of files) fd.append('file', f);
+    const res = await requestRaw('/api/v1/exam-papers/parse-file', { method: 'POST', body: fd });
+    return (await rawOrThrow(res)).json();
+  },
+  /** counts: lấy ngẫu nhiên bấy nhiêu câu mỗi phần; bỏ trống = lấy hết. */
+  /** Several files = their questions pooled into one đề. */
+  fromFile: async (files: File[], opts: MixOptions & { counts?: PartCounts; answers?: Record<number, number> }): Promise<ExamPaperOut> => {
+    const fd = new FormData();
+    for (const f of files) fd.append('file', f);
+    if (opts.counts) for (const [qt, n] of Object.entries(opts.counts)) fd.append(`count_${qt}`, String(n));
+    fd.append('name', opts.name);
+    fd.append('num_versions', String(opts.num_versions));
+    fd.append('start_code', opts.start_code);
+    fd.append('shuffle_questions', String(opts.shuffle_questions));
+    fd.append('shuffle_options', String(opts.shuffle_options));
+    if (opts.exam_id != null) fd.append('exam_id', String(opts.exam_id));
+    if (opts.for_sheet != null) fd.append('for_sheet', String(opts.for_sheet));
+    if (opts.answers && Object.keys(opts.answers).length) fd.append('answers_json', JSON.stringify(opts.answers));
+    const res = await requestRaw('/api/v1/exam-papers/from-file', { method: 'POST', body: fd });
+    return (await rawOrThrow(res)).json();
+  },
+  update: (id: number, fields: { name?: string; exam_id?: number | null }) =>
+    request<ExamPaperOut>(`/api/v1/exam-papers/${id}`, { method: 'PUT', body: JSON.stringify(fields) }),
+  setInExam: (id: number, versionId: number, inExam: boolean) =>
+    request<ExamPaperOut>(`/api/v1/exam-papers/${id}/versions/${versionId}`, { method: 'PUT', body: JSON.stringify({ in_exam: inExam }) }),
+  delete: (id: number) =>
+    request<void>(`/api/v1/exam-papers/${id}`, { method: 'DELETE' }),
+  /** Answer key per mã đề for grading a kỳ thi (labels of the "Mẫu 40 câu" sheet). */
+  examAnswerKey: (examId: number) =>
+    request<{ byMaDe: Record<string, Record<string, string>>; papers: string[]; versions: string[] }>(`/api/v1/exam-papers/exam-answer-key/${examId}`),
+  download: async (path: string): Promise<Blob> => {
+    const res = await requestRaw(`/api/v1/exam-papers/${path}`);
+    return (await rawOrThrow(res)).blob();
+  },
+};

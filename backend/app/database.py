@@ -178,6 +178,43 @@ def _seed_admin_user() -> None:
         )
 
 
+def _migrate_question_columns() -> None:
+    """
+    2026-09-29: `questions` gained qtype + answer_text (Đúng/Sai and trả lời
+    ngắn questions). Adds them to a table created before that, keeping every
+    existing row as a "mcq" question. Unlike the older helpers above, a
+    failure here is logged instead of silently swallowed.
+    """
+    NEW_COLUMNS: list[tuple[str, str]] = [
+        ("qtype",       "VARCHAR(10) NOT NULL DEFAULT 'mcq'"),
+        ("answer_text", "VARCHAR(10)"),
+    ]
+    import logging
+    import sqlalchemy as _sa
+    try:
+        with engine.connect() as conn:
+            existing = {row[1] for row in conn.execute(_sa.text("PRAGMA table_info(questions)"))}
+            if not existing:
+                return   # table not created yet — create_all handles it
+            for col, typ in NEW_COLUMNS:
+                if col not in existing:
+                    conn.execute(_sa.text(f"ALTER TABLE questions ADD COLUMN {col} {typ}"))
+                    conn.commit()
+    except Exception as exc:
+        logging.getLogger(__name__).error("[MIGRATE] questions columns failed: %s", exc)
+
+
+def _seed_shared_templates() -> None:
+    """Install the shared "Mẫu 40 câu" template on a DB that doesn't have it
+    (fresh dev clone / new server). Existing rows are left untouched."""
+    from app.services.shared_templates import ensure_shared_templates
+    db = SessionLocal()
+    try:
+        ensure_shared_templates(db)
+    finally:
+        db.close()
+
+
 def init_db() -> None:
     """Create all tables, run incremental migrations, and seed initial data."""
     # Import models so they are registered on Base before create_all
@@ -187,4 +224,6 @@ def init_db() -> None:
     _migrate_template_columns()
     _migrate_batch_result_columns()
     _migrate_user_columns()
+    _migrate_question_columns()
     _seed_admin_user()
+    _seed_shared_templates()

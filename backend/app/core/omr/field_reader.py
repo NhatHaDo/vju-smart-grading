@@ -544,6 +544,22 @@ def aggregate_signed_decimal(
             })
 
     # ── Digits ───────────────────────────────────────────────────────────────
+    # 2026-09-30: an answer shorter than the number of columns ("75" in a
+    # 4-column box) leaves the trailing columns blank — that's just unused
+    # space, not a missing digit; it used to read as "75__" + NEEDS_REVIEW
+    # and never match the key. Blank columns before the first digit are
+    # dropped too, but only without a decimal mark: the "," bubbles count
+    # columns from the left, so with one the leading columns matter.
+    def _unused(r: FieldResult | None) -> bool:
+        return r is None or (r.status == FieldStatus.BLANK and r.selected_value is None)
+
+    digit_results = list(digit_results)
+    while digit_results and _unused(digit_results[-1]):
+        digit_results.pop()
+    if _is_blank(dec_result):
+        while digit_results and _unused(digit_results[0]):
+            digit_results.pop(0)
+
     digit_chars: list[str] = []
     for r in digit_results:
         if r is None or r.selected_value is None:

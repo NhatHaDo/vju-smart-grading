@@ -346,3 +346,11 @@ body {
   }
   .page-header-actions > * { flex-shrink: 0; }
 }
+
+/* ─── QuestionBankPage — mobile stacking ───────────────────────────────────
+   Category list above the questions instead of a squeezed side column. */
+@media (max-width: 768px) {
+  .qb-body       { flex-direction: column !important; overflow-y: auto; }
+  .qb-categories { width: auto !important; max-height: 220px; border-right: none !important; border-bottom: 1px solid #E5E7EB; }
+  .qb-questions  { overflow-y: visible !important; padding: 14px 16px !important; }
+}

@@ -1454,3 +1454,21 @@
 }
 .demo-float { animation: floatRight 3.8s ease-in-out infinite !important; }
 
+
+/* 2026-09-30: "hoa anh đào rơi chỗ chữ trắng này bị khó nhìn" — keep the
+   petals faint behind the white hero text (left on desktop, top on phones)
+   and full strength around the demo card; a soft shadow lifts the text. */
+.landing-hero > canvas {
+  -webkit-mask-image: linear-gradient(to right, rgba(0, 0, 0, 0.12) 0%, rgba(0, 0, 0, 0.12) 52%, #000 70%);
+          mask-image: linear-gradient(to right, rgba(0, 0, 0, 0.12) 0%, rgba(0, 0, 0, 0.12) 52%, #000 70%);
+}
+@media (max-width: 900px) {
+  .landing-hero > canvas {
+    -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.12) 0%, rgba(0, 0, 0, 0.12) 52%, #000 70%);
+            mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.12) 0%, rgba(0, 0, 0, 0.12) 52%, #000 70%);
+  }
+}
+.landing-hero h1,
+.landing-hero-copy > p {
+  text-shadow: 0 2px 14px rgba(110, 0, 20, 0.28);
+}

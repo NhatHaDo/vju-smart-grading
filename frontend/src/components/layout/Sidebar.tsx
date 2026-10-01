@@ -11,10 +11,10 @@ import {
   BarChart2,
   BarChart3,
   Key,
-  FileText,
-  ScanLine,
   Bug,
   TableProperties,
+  Library,
+  Shuffle,
 } from 'lucide-react';
 import { useAuth } from '../../app/providers';
 import type { Role } from '../../types/auth';
@@ -37,6 +37,8 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   { to: '/app',              icon: <LayoutGrid   size={20} />, label: 'Dashboard',           end: true, group: 1 },
+  { to: '/app/question-bank', icon: <Library     size={20} />, label: 'Ngân hàng câu hỏi', group: 1 },
+  { to: '/app/exam-papers',  icon: <Shuffle      size={20} />, label: 'Trộn đề', group: 1 },
   { to: '/app/exams',        icon: <BookOpen     size={20} />, label: 'Kỳ thi', group: 1 },
   { to: '/app/upload',       icon: <Upload       size={20} />, label: 'Upload & Chấm', group: 1 },
   { to: '/app/quick-grade',  icon: <Zap          size={20} />, label: 'Chấm nhanh', group: 1 },
@@ -49,8 +51,9 @@ export const NAV_ITEMS: NavItem[] = [
   // nav destination was redundant. Route still exists (harmless if bookmarked)
   // but is no longer a first-class nav item.
   { to: '/app/answer-key',   icon: <Key          size={20} />, label: 'Answer Key', group: 3 },
-  { to: '/app/templates',    icon: <FileText     size={20} />, label: 'Template phiếu', group: 3, roles: ['admin'] },
-  { to: '/app/template-coordinate', icon: <ScanLine size={20} />, label: 'Tạo Template Tọa Độ', group: 3, roles: ['admin'] },
+  // 2026-09-30: "Template phiếu" + "Tạo Template Tọa Độ" hidden from the menu
+  // (the shared Mẫu 40 template is now installed automatically). Routes
+  // /app/templates and /app/template-coordinate still work for admins.
 ];
 
 export const BOTTOM_ITEMS: NavItem[] = [

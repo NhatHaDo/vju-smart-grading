@@ -1,6 +1,7 @@
 /**
  * LandingPage.tsx — VJU Smart Grading public landing page
- * Adapted from vju-omr-web LandingPage.jsx — UI only, no auth logic
+ * Adapted from vju-omr-web LandingPage.jsx (UI only, no auth logic).
+ * 2026-09-30: copy updated to today's app (ngân hàng câu hỏi, trộn đề, chấm nhanh).
  */
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -9,22 +10,22 @@ import './LandingPage.css';
 
 /* ── data ───────────────────────────────────────────────────── */
 const features = [
-  { title: 'Nhận dạng OMR thông minh',   text: 'Tự động nhận diện vùng tô trên phiếu trả lời theo mẫu VJU.',                                      icon: 'scan',     tone: 'red'   },
-  { title: 'Chấm điểm tức thì',           text: 'So khớp đáp án, tính điểm và tổng hợp kết quả ngay sau khi upload.',                              icon: 'bolt',     tone: 'green' },
-  { title: 'Thống kê & phân tích',         text: 'Dashboard trực quan hỗ trợ theo dõi điểm, số phiếu và trường hợp cần kiểm tra.',                  icon: 'chart',    tone: 'red'   },
-  { title: 'Kiểm tra lỗi tự động',         text: 'Phát hiện phiếu tô sai, tô nhiều đáp án, bỏ trống hoặc dấu tô không chắc chắn.',                 icon: 'review',   tone: 'green' },
-  { title: 'Quản lý Answer Key',           text: 'Tạo và quản lý đáp án cho nhiều mã đề, nhiều kỳ thi khác nhau.',                                   icon: 'shield',   tone: 'red'   },
-  { title: 'Xuất kết quả linh hoạt',       text: 'Tải bảng điểm Excel/CSV và lưu trữ kết quả theo từng kỳ thi.',                                    icon: 'download', tone: 'green' },
+  { title: 'Ngân hàng câu hỏi',          text: 'Trắc nghiệm, Đúng/Sai, trả lời ngắn. Import từ Word hoặc Moodle, chia sẻ cho đồng nghiệp.', icon: 'bank',    tone: 'red'   },
+  { title: 'Trộn đề nhiều mã',           text: 'Trộn từ file đề hoặc từ ngân hàng, đảo câu và đáp án, xuất từng mã đề và đáp án ra Word.', icon: 'shuffle', tone: 'green' },
+  { title: 'Đáp án tự điền theo mã đề',  text: 'Gắn bộ đề vào kỳ thi, đáp án của từng mã đề được điền sẵn khi chấm, không phải nhập tay.', icon: 'key',     tone: 'red'   },
+  { title: 'Chấm hàng loạt',             text: 'Tải lên ảnh hoặc PDF phiếu thi (JPG, PNG, HEIC, PDF), chọn cả thư mục, chấm trong vài giây.', icon: 'scan',    tone: 'green' },
+  { title: 'Chấm nhanh bằng điện thoại', text: 'Giơ phiếu trước camera là có điểm ngay, tự nhận ra mã đề để dùng đúng đáp án.',             icon: 'camera',  tone: 'red'   },
+  { title: 'Kết quả và thống kê',        text: 'Kiểm tra phiếu tô mờ, tô nhiều ô, sửa trực tiếp, xuất bảng điểm Excel theo từng kỳ thi.',    icon: 'chart',   tone: 'green' },
 ];
 
 const steps = [
-  { label: 'BƯỚC 01', title: 'Upload phiếu thi',          text: 'Chụp ảnh hoặc scan phiếu trả lời của học sinh, upload hàng loạt.', icon: 'upload', tone: 'red'   },
-  { label: 'BƯỚC 02', title: 'OMR xử lý tự động',         text: 'Căn chỉnh phiếu, nhận dạng từng ô tô, so sánh đáp án và tính điểm.', icon: 'bolt', tone: 'green' },
-  { label: 'BƯỚC 03', title: 'Xem kết quả & thống kê',    text: 'Dashboard điểm từng phiếu, phân phối điểm và các trường hợp cần xem.', icon: 'chart', tone: 'red' },
-  { label: 'BƯỚC 04', title: 'Xuất & Lưu trữ',            text: 'Tải bảng điểm Excel/CSV, lưu kết quả dài hạn theo kỳ thi.', icon: 'check', tone: 'green' },
+  { label: 'BƯỚC 01', title: 'Soạn câu hỏi',           text: 'Thêm câu hỏi vào ngân hàng hoặc dùng luôn file đề Word, Moodle có sẵn.',            icon: 'bank',    tone: 'red'   },
+  { label: 'BƯỚC 02', title: 'Trộn đề và in',           text: 'Chọn số câu, số mã đề, tải về các mã đề và đáp án để in cho sinh viên.',          icon: 'shuffle', tone: 'green' },
+  { label: 'BƯỚC 03', title: 'Chấm phiếu',              text: 'Tải ảnh phiếu lên hoặc dùng camera điện thoại, đáp án theo mã đề điền tự động.',   icon: 'camera',  tone: 'red'   },
+  { label: 'BƯỚC 04', title: 'Xem kết quả, xuất Excel', text: 'Xem điểm từng phiếu, kiểm tra các phiếu cần xem lại và xuất bảng điểm.',          icon: 'check',   tone: 'green' },
 ];
 
-type IconName = 'scan'|'bolt'|'chart'|'review'|'shield'|'download'|'upload'|'check';
+type IconName = 'scan'|'bolt'|'chart'|'review'|'shield'|'download'|'upload'|'check'|'bank'|'shuffle'|'key'|'camera';
 const iconPaths: Record<IconName, React.ReactNode> = {
   scan:     <><path d="M7 3H5a2 2 0 0 0-2 2v2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 12h8"/></>,
   bolt:     <path d="M13 2 4 14h7l-1 8 10-13h-7l0-7Z"/>,
@@ -34,6 +35,10 @@ const iconPaths: Record<IconName, React.ReactNode> = {
   download: <><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></>,
   upload:   <><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 21h14"/></>,
   check:    <><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></>,
+  bank:     <><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></>,
+  shuffle:  <><path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4"/><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/><path d="m18 14 4 4-4 4"/></>,
+  key:      <><circle cx="7.5" cy="15.5" r="4.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></>,
+  camera:   <><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3Z"/><circle cx="12" cy="13" r="3"/></>,
 };
 function FIcon({ name }: { name: string }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">{iconPaths[name as IconName]}</svg>;
@@ -159,15 +164,15 @@ export default function LandingPage() {
           <div className="landing-hero-inner" style={{ position: 'relative', zIndex: 1 }}>
             <div className="landing-hero-copy">
               <div className="landing-badge">⚡ VJU Smart Grading System</div>
-              <h1>Chấm phiếu thi trắc nghiệm tự động & thông minh</h1>
+              <h1>Ra đề, trộn đề và chấm phiếu tự động</h1>
               <p>
-                Hệ thống hỗ trợ chấm phiếu trắc nghiệm cho Trường Đại học Việt Nhật,
-                tự động nhận dạng phiếu, chấm điểm, kiểm tra lỗi và thống kê kết quả chỉ trong vài giây.
+                Hệ thống khảo thí trắc nghiệm của Trường Đại học Việt Nhật: soạn và trộn đề nhiều mã,
+                chấm phiếu bằng ảnh hoặc camera điện thoại với đáp án tự điền theo mã đề, xuất kết quả Excel.
               </p>
               <div className="landing-pills">
-                <span>Chấm tự động bằng OMR</span>
-                <span>Kiểm tra lỗi bán tự động</span>
-                <span>Xuất kết quả Excel/CSV</span>
+                <span>Ngân hàng câu hỏi và trộn đề</span>
+                <span>Chấm bằng ảnh hoặc camera</span>
+                <span>Xuất bảng điểm Excel</span>
               </div>
               <div className="landing-hero-actions">
                 <button className="landing-btn landing-btn-secondary landing-primary" onClick={goApp}>
@@ -187,11 +192,11 @@ export default function LandingPage() {
               </div>
               <div className="landing-demo-stats">
                 <div><strong>12</strong><span>Kỳ thi</span></div>
+                <div><strong>4</strong><span>Mã đề</span></div>
                 <div><strong>2,847</strong><span>Phiếu đã chấm</span></div>
-                <div><strong>99.2%</strong><span>Chính xác</span></div>
               </div>
               <div className="landing-demo-progress">
-                <div><span>Kỳ thi CNTT K2025</span><b>87%</b></div>
+                <div><span>Giữa kì Tin học đại cương</span><b>87%</b></div>
                 {/* animated fill bar */}
                 <i className="demo-bar-fill" />
               </div>
@@ -207,18 +212,18 @@ export default function LandingPage() {
 
         {/* ── Stats ── */}
         <section className="landing-stats reveal-group">
-          <div><strong>50,000+</strong><span>Phiếu đã chấm</span></div>
-          <div><strong>99.2%</strong><span>Độ chính xác</span></div>
-          <div><strong>&lt;3s</strong><span>Giây mỗi phiếu</span></div>
-          <div><strong>100+</strong><span>Giảng viên tin dùng</span></div>
+          <div><strong>3</strong><span>Loại câu hỏi</span></div>
+          <div><strong>24</strong><span>Mã đề mỗi lần trộn</span></div>
+          <div><strong>&lt;3s</strong><span>Mỗi phiếu</span></div>
+          <div><strong>7</strong><span>Định dạng ảnh, PDF</span></div>
         </section>
 
         {/* ── Features ── */}
         <section id="features" className="landing-section">
           <div className="landing-section-heading reveal">
             <span>Tính năng nổi bật</span>
-            <h2>Mọi thứ bạn cần để <em>chấm phiếu</em></h2>
-            <p>Từ upload ảnh đến xuất bảng điểm, toàn bộ quy trình trong một hệ thống thống nhất.</p>
+            <h2>Mọi thứ cho một <em>kỳ thi trắc nghiệm</em></h2>
+            <p>Soạn câu hỏi, trộn đề, chấm phiếu, xem kết quả: cả quy trình trong một hệ thống.</p>
           </div>
           <div className="landing-feature-grid reveal-group">
             {features.map(f => (
@@ -233,19 +238,19 @@ export default function LandingPage() {
 
         {/* ── Showcase — image cards ── */}
         <section id="showcase" style={{ padding: '0 24px 72px', maxWidth: 1200, margin: '0 auto' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 20 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: 20 }}>
             {[
               {
                 img: 'https://images.unsplash.com/photo-1612198188060-c7c2a3b66eae?w=900&q=80',
-                tag: 'OMR & NHẬN DẠNG',
-                title: 'Nhận dạng phiếu thi cực nhanh',
-                desc: 'Công nghệ computer vision nhận diện từng ô trả lời chính xác tới từng pixel.',
+                tag: 'TRỘN ĐỀ',
+                title: 'Trộn đề từ ngân hàng câu hỏi',
+                desc: 'Bốc ngẫu nhiên câu hỏi, đảo câu và đáp án cho từng mã đề, tải về file Word để in.',
               },
               {
                 img: 'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=900&q=80',
-                tag: 'KẾT QUẢ & BÁO CÁO',
-                title: 'Báo cáo chi tiết tức thì',
-                desc: 'Thống kê điểm số, phân tích câu hỏi khó, xuất Excel và PDF chỉ trong 1 click.',
+                tag: 'CHẤM PHIẾU',
+                title: 'Chấm phiếu và thống kê tức thì',
+                desc: 'Nhận dạng từng ô tô trên phiếu, chấm theo đúng mã đề, thống kê điểm và xuất Excel.',
               },
             ].map((item, i) => (
               <div
@@ -293,7 +298,7 @@ export default function LandingPage() {
           <div className="landing-section-heading reveal">
             <span>CÁCH HOẠT ĐỘNG</span>
             <h2>Chỉ <em>4 bước</em> đơn giản</h2>
-            <p>Không cần cài đặt phức tạp. Chấm phiếu nhanh chóng và chính xác ngay trên trình duyệt.</p>
+            <p>Không cần cài đặt. Dùng ngay trên trình duyệt máy tính hoặc điện thoại.</p>
           </div>
           <div className="landing-steps reveal-group">
             {steps.map(s => (
@@ -330,7 +335,7 @@ export default function LandingPage() {
                 style={{ width: 72, height: 72, objectFit: 'contain', display: 'block' }} />
             </div>
             <h2>Sẵn sàng chấm phiếu thông minh hơn?</h2>
-            <p>Tiết kiệm thời gian chấm bài, giảm sai sót thủ công và quản lý kết quả tập trung.</p>
+            <p>Tiết kiệm thời gian ra đề và chấm bài, giảm sai sót thủ công, quản lý kết quả tập trung.</p>
             <div>
               <button className="landing-btn landing-btn-secondary landing-primary is-light" onClick={goApp}>
                 Bắt đầu ngay hôm nay <span>›</span>
@@ -357,11 +362,11 @@ export default function LandingPage() {
           </div>
           <div>
             <h4>Hệ thống</h4>
-            <button onClick={goLogin}>Dashboard</button>
+            <button onClick={goLogin}>Ngân hàng câu hỏi</button>
+            <button onClick={goLogin}>Trộn đề</button>
             <button onClick={goLogin}>Upload &amp; Chấm phiếu</button>
-            <button onClick={goLogin}>Xem kết quả</button>
-            <button onClick={goLogin}>Kiểm tra lỗi</button>
-            <button onClick={goLogin}>Answer Key</button>
+            <button onClick={goLogin}>Chấm nhanh</button>
+            <button onClick={goLogin}>Kết quả &amp; Excel</button>
           </div>
           <div>
             <h4>Hỗ trợ</h4>
@@ -371,7 +376,7 @@ export default function LandingPage() {
           </div>
         </div>
         <div className="landing-footer-bottom">
-          <span>© 2026 VJU Smart Grading — Vietnam Japan University. All rights reserved.</span>
+          <span>© 2026 VJU Smart Grading · Vietnam Japan University. All rights reserved.</span>
           <span className="landing-jp">日越大学</span>
         </div>
       </footer>

@@ -7,7 +7,7 @@
  */
 
 import type { BatchGradeState, OmrGradeResult, AnswerKeyStore, TemplateSchema } from '../types/grading';
-import { computeScore, SECTION_MAP, resolveAnswerKeyForMaDe, getMaDeValue, VJU_PRESET_SCHEMA } from '../types/grading';
+import { answersMatch, computeScore, SECTION_MAP, resolveAnswerKeyForMaDe, getMaDeValue, VJU_PRESET_SCHEMA } from '../types/grading';
 
 // ── localStorage loaders ──────────────────────────────────────────────────────
 
@@ -200,7 +200,7 @@ export function computeSubjectStats(
           const correct = questionIds.filter(qId => {
             const student = ans[qId];
             const expected = key.answers[qId];
-            return student && expected && student === expected;
+            return !!student && !!expected && answersMatch(student, expected);
           }).length;
           return (correct / totalQ) * 10;
         })
@@ -272,7 +272,7 @@ export function computeHardQuestions(
       const student = (r.answers ?? {})[qId] ?? null;
       if (!correctAns)           continue;   // this row's đề has no answer entered — skip, don't count as blank
       if (!student)              blank++;
-      else if (student === correctAns) correct++;
+      else if (answersMatch(student, correctAns)) correct++;
       else                       wrong++;
     }
     const total = correct + wrong + blank;
