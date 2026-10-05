@@ -36,7 +36,6 @@ import {
   saveAnswerKeyDraft,
   clearAnswerKeyDraft,
   PINNED_TEMPLATES,
-  PINNED_TEMPLATE_40_ID,
   VJU_SBD4_PREVIEW_IMAGE,
   VJU_SBD8_PREVIEW_IMAGE,
   loadAnswerKeyLibrary,
