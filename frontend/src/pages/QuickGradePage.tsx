@@ -24,15 +24,21 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Zap, X, Hand, Camera as CameraIcon, ArrowLeft, AlertTriangle, CheckCircle2, ListChecks, Settings2 } from 'lucide-react';
+import { Zap, X, Hand, Camera as CameraIcon, ArrowLeft, AlertTriangle, CheckCircle2, ListChecks, Settings2, LayoutTemplate } from 'lucide-react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import PageHeader from '../components/layout/PageHeader';
-import { examPapersApi, examsApi } from '../services/apiClient';
+import { customFormsApi, examPapersApi, examsApi } from '../services/apiClient';
 import type { ExamOut } from '../types/exam';
 import {
   loadAnswerKey,
+  loadAnswerKeyDraft,
   loadLastUsedTemplate,
+  saveLastUsedTemplate,
+  templateStoreKeyFor,
+  PINNED_TEMPLATES,
+  VJU_SBD4_PREVIEW_IMAGE,
+  VJU_SBD8_PREVIEW_IMAGE,
   isMultiMaDe,
   TEMPLATE_VARIANT_LABEL,
   DEFAULT_SCORING,
@@ -97,15 +103,68 @@ function resolveOverlayUrl(path: string | null | undefined): string | null {
   return `/${relative}`;
 }
 
-// ── Setup screen (chọn xong đáp án đang dùng, bấm Bắt đầu) ─────────────────
+// ── Setup screen (chọn mẫu phiếu + kỳ thi, bấm Bắt đầu) ─────────────────────
+
+/** One answer sheet the teacher can grade with: VJU SBD 4/8 số, the shared
+ *  ones (Mẫu 40, Phiếu Bộ GD) and the teacher's own custom templates. */
+interface SheetOption {
+  key:      string;
+  mode:     'vju' | 'custom';
+  id:       number | null;
+  variant?: TemplateVariant;
+  name:     string;
+  image:    string | null;
+}
+
+function sameSheet(o: SheetOption, tpl: LastUsedTemplate | null, variant: TemplateVariant): boolean {
+  if (!tpl || tpl.mode === 'vju') return o.mode === 'vju' && o.variant === variant;
+  return o.mode === 'custom' && o.id === tpl.id;
+}
+
+/** 2026-10-05: "sao cái chấm nhanh này giao diện nnay khó dùng. làm cho nó giao
+ *  diện chọn mẫu phiếu giống cái kia" — pick the sheet right here, as cards
+ *  with the sheet's picture like Upload & Chấm, instead of a detour through
+ *  Answer Key. */
+function SheetCards({ options, tpl, variant, onPick, disabled }: {
+  options: SheetOption[]; tpl: LastUsedTemplate | null; variant: TemplateVariant;
+  onPick: (o: SheetOption) => void; disabled?: boolean;
+}) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10 }}>
+      {options.map(o => {
+        const on = sameSheet(o, tpl, variant);
+        return (
+          <button key={o.key} type="button" disabled={disabled} onClick={() => onPick(o)}
+            style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, padding: 6, textAlign: 'left',
+              border: `2px solid ${on ? '#C8102E' : '#E5E7EB'}`, borderRadius: 12, background: on ? '#FEF2F2' : '#fff',
+              cursor: disabled ? 'default' : 'pointer', fontFamily: 'inherit', opacity: disabled && !on ? 0.5 : 1 }}>
+            <div style={{ height: 110, borderRadius: 8, overflow: 'hidden', background: '#F3F4F6',
+              display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {o.image
+                ? <img src={o.image} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top' }} />
+                : <LayoutTemplate size={30} color="#9CA3AF" />}
+            </div>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: on ? '#C8102E' : '#1F2937', lineHeight: 1.5, padding: '0 2px 1px',
+              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+              {o.name}
+            </div>
+            {on && <CheckCircle2 size={18} color="#fff" fill="#C8102E" style={{ position: 'absolute', top: 10, right: 10 }} />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function SetupScreen({
-  store, tpl, variant, setVariant, onStart, exams, examId, onSelectExam, examInfo,
+  store, tpl, variant, sheets, onPickSheet, onEditAnswers, onStart, exams, examId, onSelectExam, examInfo,
 }: {
   store: AnswerKeyStore | null;
   tpl: LastUsedTemplate | null;
   variant: TemplateVariant;
-  setVariant: (v: TemplateVariant) => void;
+  sheets: SheetOption[];
+  onPickSheet: (o: SheetOption) => void;
+  onEditAnswers: () => void;
   onStart: () => void;
   exams: ExamOut[];
   examId: number | null;
@@ -113,7 +172,6 @@ function SetupScreen({
   /** Set when the chosen kỳ thi has bộ đề trộn attached (null = none / loading). */
   examInfo: { loading: boolean; papers: string[]; versions: string[]; sheetName?: string } | null;
 }) {
-  const navigate = useNavigate();
   const mode = tpl?.mode ?? 'vju';
   const hasAnswers = !!store && (
     Object.keys(store.answers ?? {}).length > 0 || isMultiMaDe(store)
@@ -124,19 +182,19 @@ function SetupScreen({
   const templateLabel = mode === 'custom'
     ? (tpl?.name ?? 'Custom template')
     : TEMPLATE_VARIANT_LABEL[variant];
+  const fromPapers = examId != null && !!examInfo && !examInfo.loading && examInfo.versions.length > 0;
 
   return (
-    <div style={{ padding: 24, maxWidth: 640, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ padding: 24, maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: '#FEECEC', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <Zap size={20} color="#C8102E" />
           </div>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 15, color: '#1E1E1E' }}>Đáp án đang dùng</div>
-            <div style={{ fontSize: 12, color: '#6B7280' }}>Chấm nhanh dùng ngay đáp án đã lưu ở Answer Key — không chọn lại.</div>
-          </div>
+          <div style={{ fontWeight: 700, fontSize: 15, color: '#1E1E1E' }}>Chọn mẫu phiếu</div>
         </div>
+
+        <SheetCards options={sheets} tpl={tpl} variant={variant} onPick={onPickSheet} />
 
         {/* 2026-09-29 (bước 6.3): pick a kỳ thi → if it has bộ đề trộn
            attached (Trộn đề page), the answer key of each mã đề is used
@@ -154,59 +212,35 @@ function SetupScreen({
           {examId != null && examInfo?.loading && <span style={{ fontSize: 12, color: '#9CA3AF' }}>Đang tải đáp án…</span>}
           {examId != null && examInfo && !examInfo.loading && examInfo.versions.length === 0 && (
             <span style={{ fontSize: 12, color: '#B45309' }}>
-              Kỳ thi này chưa gắn bộ đề trộn nào nên đang dùng đáp án đã lưu ở Answer Key. Gắn bộ đề ở trang <b>Trộn đề</b>.
+              Kỳ thi này chưa có bộ đề trộn cho phiếu đang chọn, nên dùng đáp án đã lưu ở Answer Key.
             </span>
           )}
-          {examId != null && examInfo && !examInfo.loading && examInfo.versions.length > 0 && (
+          {fromPapers && (
             <span style={{ fontSize: 12.5, color: '#15803D' }}>
-              ✓ Đáp án tự động từ bộ đề <b>{examInfo.papers.join(', ')}</b>: {examInfo.versions.length} mã đề ({examInfo.versions.join(', ')}), {examInfo.sheetName ?? 'Mẫu 40 câu TN + Đúng/Sai'}
+              ✓ Đáp án tự động từ bộ đề <b>{examInfo!.papers.join(', ')}</b>: {examInfo!.versions.length} mã đề ({examInfo!.versions.join(', ')})
             </span>
           )}
         </div>
 
         {!hasAnswers ? (
-          <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 10, padding: '12px 14px', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-            <AlertTriangle size={16} color="#C2410C" style={{ flexShrink: 0, marginTop: 1 }} />
-            <div style={{ fontSize: 13, color: '#9A3412', lineHeight: 1.5 }}>
-              Chưa có đáp án nào được lưu. Vào <strong>Answer Key</strong> nhập đáp án trước, quay lại đây sẽ dùng được ngay.
+          <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 10, padding: '12px 14px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <AlertTriangle size={16} color="#C2410C" style={{ flexShrink: 0 }} />
+            <div style={{ flex: '1 1 200px', fontSize: 13, color: '#9A3412', lineHeight: 1.5 }}>
+              <strong>{templateLabel}</strong> chưa có đáp án. Nhập đáp án rồi quay lại đây là chấm được ngay.
             </div>
+            <Button size="sm" icon={<Settings2 size={14} />} onClick={onEditAnswers}>Nhập đáp án</Button>
           </div>
         ) : (
-          <div style={{ background: '#F9FAFB', border: '1px solid #EEF0F2', borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ fontSize: 13, color: '#374151' }}>
+          <div style={{ background: '#F9FAFB', border: '1px solid #EEF0F2', borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 200px', fontSize: 13, color: '#374151' }}>
               <strong>{templateLabel}</strong> — {questionCount} câu đã có đáp án
               {maDeCount > 0 && <> · {maDeCount} mã đề</>}
             </div>
+            {!fromPapers && (
+              <Button size="sm" variant="secondary" icon={<Settings2 size={14} />} onClick={onEditAnswers}>Sửa đáp án</Button>
+            )}
           </div>
         )}
-
-        {mode === 'vju' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 12, color: '#6B7280', fontWeight: 600 }}>Mẫu phiếu VJU:</span>
-            <div style={{ display: 'inline-flex', background: '#F3F4F6', borderRadius: 9999, padding: 3, gap: 2 }}>
-              {(['sbd4', 'sbd8'] as TemplateVariant[]).map(v => (
-                <button
-                  key={v}
-                  onClick={() => setVariant(v)}
-                  style={{
-                    border: 'none', borderRadius: 9999, padding: '6px 12px', fontSize: 12, fontWeight: 700,
-                    cursor: 'pointer', fontFamily: 'inherit',
-                    background: variant === v ? '#C8102E' : 'transparent',
-                    color: variant === v ? '#fff' : '#374151',
-                  }}
-                >
-                  {v === 'sbd4' ? 'SBD 4 số' : 'SBD 8 số'}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <Button variant="secondary" icon={<Settings2 size={15} />} onClick={() => navigate('/app/answer-key')}>
-            Đổi đáp án / mẫu phiếu
-          </Button>
-        </div>
       </Card>
 
       <Button
@@ -228,6 +262,18 @@ function SetupScreen({
   );
 }
 
+/** A kỳ thi's bộ đề trộn as an answer key: one set per mã đề. */
+function paperStore(k: { versions: string[]; byMaDe: Record<string, Record<string, string>> }): AnswerKeyStore {
+  const scoring   = loadAnswerKey()?.scoring ?? { ...DEFAULT_SCORING };
+  const updatedAt = new Date().toISOString();
+  return {
+    answers: {},
+    scoring,
+    updatedAt,
+    byMaDe: Object.fromEntries(k.versions.map(code => [code, { answers: k.byMaDe[code], scoring, updatedAt }])),
+  };
+}
+
 // ── Trang chính ─────────────────────────────────────────────────────────────
 
 export default function QuickGradePage() {
@@ -241,20 +287,72 @@ export default function QuickGradePage() {
   const [examId, setExamId] = useState<number | null>(null);
   const [examInfo, setExamInfo] = useState<{ loading: boolean; papers: string[]; versions: string[]; sheetName?: string } | null>(null);
 
+  const [customSheets, setCustomSheets] = useState<SheetOption[]>([]);
+
   useEffect(() => {
     setStore(loadAnswerKey());
-    setTpl(loadLastUsedTemplate());
+    const last = loadLastUsedTemplate();
+    setTpl(last);
     examsApi.list().then(setExams).catch(() => setExams([]));
+    customFormsApi.list()
+      .then(({ forms }) => setCustomSheets(forms
+        .filter(f => !PINNED_TEMPLATES.some(pt => pt.id === f.id))
+        .map(f => ({ key: `custom:${f.id}`, mode: 'custom' as const, id: f.id, name: f.name, image: null }))))
+      .catch(() => setCustomSheets([]));
   }, []);
+
+  const sheets: SheetOption[] = useMemo(() => [
+    { key: 'vju:sbd4', mode: 'vju', id: null, variant: 'sbd4', name: TEMPLATE_VARIANT_LABEL.sbd4, image: VJU_SBD4_PREVIEW_IMAGE },
+    { key: 'vju:sbd8', mode: 'vju', id: null, variant: 'sbd8', name: TEMPLATE_VARIANT_LABEL.sbd8, image: VJU_SBD8_PREVIEW_IMAGE },
+    ...PINNED_TEMPLATES.map(pt => ({ key: `custom:${pt.id}`, mode: 'custom' as const, id: pt.id, name: pt.label, image: pt.previewImage ?? null })),
+    ...customSheets,
+  ], [customSheets]);
+
+  /** The answers saved for a sheet: its own Answer Key slot, or the active
+   *  key when that sheet is the one last used (= the key belongs to it). */
+  const savedKeyFor = (t: LastUsedTemplate): AnswerKeyStore | null => {
+    const last = loadLastUsedTemplate();
+    const key = templateStoreKeyFor(t.mode, t.id);
+    if (last && templateStoreKeyFor(last.mode, last.id) === key) return loadAnswerKey();
+    return loadAnswerKeyDraft(key);
+  };
 
   // Re-đọc mỗi khi quay lại trang (ví dụ sau khi qua Answer Key sửa rồi bấm Back)
   // — only when no kỳ thi is driving the answer key.
+  const tplRef = useRef(tpl);
+  tplRef.current = tpl;
   useEffect(() => {
     if (examId != null) return;
-    const onFocus = () => { setStore(loadAnswerKey()); setTpl(loadLastUsedTemplate()); };
+    const onFocus = () => { if (tplRef.current) setStore(savedKeyFor(tplRef.current)); };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, [examId]);
+  }, [examId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** A sheet card picked: its own answers — the kỳ thi's bộ đề mixed for
+   *  that sheet when a kỳ thi is chosen, else the ones saved for it. */
+  const pickSheet = (o: SheetOption) => {
+    const t: LastUsedTemplate = { mode: o.mode, id: o.id, name: o.mode === 'custom' ? o.name : null };
+    setTpl(t);
+    if (o.variant) setVariant(o.variant);
+    if (examId == null || o.mode !== 'custom' || o.id == null) {
+      setStore(savedKeyFor(t));
+      if (examId != null) setExamInfo({ loading: false, papers: [], versions: [] });
+      return;
+    }
+    setExamInfo({ loading: true, papers: [], versions: [] });
+    examPapersApi.examAnswerKey(examId, o.id)
+      .then(k => {
+        setExamInfo({ loading: false, papers: k.papers, versions: k.versions });
+        setStore(k.versions.length ? paperStore(k) : savedKeyFor(t));
+      })
+      .catch(() => { setExamInfo({ loading: false, papers: [], versions: [] }); setStore(savedKeyFor(t)); });
+  };
+
+  /** Answer Key opens on the chosen sheet (it starts on the last used one). */
+  const editAnswers = () => {
+    if (tpl) saveLastUsedTemplate(tpl);
+    navigate('/app/answer-key');
+  };
 
   // Kỳ thi chosen → use its bộ đề trộn answer keys (one set per mã đề, on the
   // "Mẫu 40 câu" sheet). No bộ đề attached → fall back to the saved key.
@@ -262,8 +360,7 @@ export default function QuickGradePage() {
     setExamId(id);
     if (id == null) {
       setExamInfo(null);
-      setStore(loadAnswerKey());
-      setTpl(loadLastUsedTemplate());
+      if (tpl) setStore(savedKeyFor(tpl));
       return;
     }
     setExamInfo({ loading: true, papers: [], versions: [] });
@@ -271,19 +368,10 @@ export default function QuickGradePage() {
       .then(k => {
         setExamInfo({ loading: false, papers: k.papers, versions: k.versions, sheetName: sheetTemplate(k.sheets, k.sheetNames).name });
         if (k.versions.length === 0) {
-          setStore(loadAnswerKey());
-          setTpl(loadLastUsedTemplate());
+          if (tpl) setStore(savedKeyFor(tpl));
           return;
         }
-        const scoring   = loadAnswerKey()?.scoring ?? { ...DEFAULT_SCORING };
-        const updatedAt = new Date().toISOString();
-        const fromPapers: AnswerKeyStore = {
-          answers: {},
-          scoring,
-          updatedAt,
-          byMaDe: Object.fromEntries(k.versions.map(code => [code, { answers: k.byMaDe[code], scoring, updatedAt }])),
-        };
-        setStore(fromPapers);
+        setStore(paperStore(k));
         // the sheet the bộ đề were mixed for
         const t = sheetTemplate(k.sheets, k.sheetNames);
         setTpl({ mode: t.mode, id: t.id, name: t.name });
@@ -303,7 +391,9 @@ export default function QuickGradePage() {
           store={store}
           tpl={tpl}
           variant={variant}
-          setVariant={setVariant}
+          sheets={sheets}
+          onPickSheet={pickSheet}
+          onEditAnswers={editAnswers}
           onStart={() => setSessionActive(true)}
           exams={exams}
           examId={examId}
