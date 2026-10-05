@@ -249,7 +249,9 @@ body {
   }
   .result-detail-body {
     grid-template-columns: 1fr !important;
-    grid-template-rows: auto minmax(340px, 48vh) !important;
+    /* 2026-10-05: the sheet photo first on a phone (it used to come after all
+       78 câu), then score + answers */
+    grid-template-rows: minmax(320px, 46vh) auto !important;
     overflow-y: auto !important;
   }
   .result-detail-left {
@@ -260,6 +262,8 @@ body {
   }
   .result-detail-right {
     padding: 8px !important;
+    order: -1;
+    border-bottom: 1px solid #F3F4F6;
   }
   .result-detail-actionbar {
     flex-wrap: wrap !important;
@@ -353,4 +357,46 @@ body {
   .qb-body       { flex-direction: column !important; overflow-y: auto; }
   .qb-categories { width: auto !important; max-height: 220px; border-right: none !important; border-bottom: 1px solid #E5E7EB; }
   .qb-questions  { overflow-y: visible !important; padding: 14px 16px !important; }
+}
+
+/* ─── Kết quả: cards on phones, table elsewhere (2026-10-05) ───────────────
+   On a narrow screen the results table pushed Điểm, mã đề and Xem/Xoá off
+   to the right; below 640px each phiếu is a card (RealCard) instead. */
+.results-cards { display: none; }
+@media (max-width: 640px) {
+  .results-cards { display: flex; }
+  .results-table-wrap { display: none; }
+}
+
+/* Kết quả: compact summary tiles on phones (2026-10-05 — they took 1.5 screens) */
+@media (max-width: 640px) {
+  .results-stat-grid {
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 6px !important;
+  }
+  .results-stat-grid > * { padding: 8px 10px !important; }
+  .results-stat-label { font-size: 9px !important; margin-bottom: 2px !important; letter-spacing: 0 !important; }
+  .results-stat-value { font-size: 17px !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .results-stat-sub { display: none; }
+}
+
+/* Answer Key: "Lưu & Bắt đầu chấm" pinned above the bottom tab bar on phones (2026-10-05) */
+.ak-sticky-bar, .ak-sticky-spacer { display: none; }
+@media (max-width: 768px) {
+  .ak-sticky-bar {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+    z-index: 90;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 12px;
+    background: #fff;
+    border-top: 1px solid #EBEBEB;
+    box-shadow: 0 -2px 10px rgba(0,0,0,0.08);
+  }
+  .ak-sticky-spacer { display: block; order: 99; height: 56px; }
 }

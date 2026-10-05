@@ -1,0 +1,1064 @@
+[
+ {
+  "type": "omr",
+  "key": "sbd",
+  "blockName": "sbd",
+  "label": "Số Báo Danh",
+  "fieldType": "QTYPE_INT",
+  "box": [
+   745,
+   85,
+   893,
+   394
+  ],
+  "origin": [
+   755.0,
+   95.5
+  ],
+  "physicalRows": 10,
+  "physicalCols": 6,
+  "labelPrefix": "sbd",
+  "labelStart": 1,
+  "fieldLabels": "sbd1..6",
+  "bubblesGap": 30,
+  "labelsGap": 22,
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false
+ },
+ {
+  "type": "omr",
+  "key": "made",
+  "blockName": "made",
+  "label": "Mã Đề",
+  "fieldType": "QTYPE_INT",
+  "box": [
+   909,
+   84,
+   989,
+   394
+  ],
+  "origin": [
+   919.1,
+   95.8
+  ],
+  "physicalRows": 10,
+  "physicalCols": 3,
+  "labelPrefix": "made",
+  "labelStart": 1,
+  "fieldLabels": "made1..3",
+  "bubblesGap": 30,
+  "labelsGap": 21,
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false
+ },
+ {
+  "type": "omr",
+  "key": "tn1",
+  "blockName": "tn1",
+  "label": "Trắc nghiệm ABCD ( 1-10 )",
+  "fieldType": "QTYPE_MCQ4",
+  "box": [
+   71,
+   503,
+   249,
+   752
+  ],
+  "origin": [
+   80.4,
+   510.5
+  ],
+  "physicalRows": 10,
+  "physicalCols": 4,
+  "labelPrefix": "trc_nghim_abcd",
+  "labelStart": 1,
+  "fieldLabels": "trc_nghim_abcd1..10",
+  "bubblesGap": 47,
+  "labelsGap": 24,
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "autoFit": false,
+  "includeInAnswerKey": true,
+  "excludeFromAnswerKey": false
+ },
+ {
+  "type": "omr",
+  "key": "tn11",
+  "blockName": "tn11",
+  "label": "Trắc nghiệm ABCD ( 11-20 )",
+  "fieldType": "QTYPE_MCQ4",
+  "box": [
+   305,
+   503,
+   484,
+   753
+  ],
+  "origin": [
+   314.8,
+   510.8
+  ],
+  "physicalRows": 10,
+  "physicalCols": 4,
+  "labelPrefix": "trc_nghim_abcd",
+  "labelStart": 11,
+  "fieldLabels": "trc_nghim_abcd11..20",
+  "bubblesGap": 47,
+  "labelsGap": 24,
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "autoFit": false,
+  "includeInAnswerKey": true,
+  "excludeFromAnswerKey": false
+ },
+ {
+  "type": "omr",
+  "key": "tn21",
+  "blockName": "tn21",
+  "label": "Trắc nghiệm ABCD ( 21-30 )",
+  "fieldType": "QTYPE_MCQ4",
+  "box": [
+   539,
+   503,
+   717,
+   753
+  ],
+  "origin": [
+   548.6,
+   510.7
+  ],
+  "physicalRows": 10,
+  "physicalCols": 4,
+  "labelPrefix": "trc_nghim_abcd",
+  "labelStart": 21,
+  "fieldLabels": "trc_nghim_abcd21..30",
+  "bubblesGap": 47,
+  "labelsGap": 24,
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "autoFit": false,
+  "includeInAnswerKey": true,
+  "excludeFromAnswerKey": false
+ },
+ {
+  "type": "omr",
+  "key": "tn31",
+  "blockName": "tn31",
+  "label": "Trắc nghiệm ABCD ( 31-40 )",
+  "fieldType": "QTYPE_MCQ4",
+  "box": [
+   773,
+   503,
+   953,
+   753
+  ],
+  "origin": [
+   783.8,
+   510.7
+  ],
+  "physicalRows": 10,
+  "physicalCols": 4,
+  "labelPrefix": "trc_nghim_abcd",
+  "labelStart": 31,
+  "fieldLabels": "trc_nghim_abcd31..40",
+  "bubblesGap": 47,
+  "labelsGap": 24,
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "autoFit": false,
+  "includeInAnswerKey": true,
+  "excludeFromAnswerKey": false
+ },
+ {
+  "type": "omr",
+  "key": "ds1",
+  "blockName": "ds1",
+  "label": "Đúng sai ( Câu 1)",
+  "fieldType": "",
+  "bubbleValues": "Đ,S",
+  "direction": "horizontal",
+  "box": [
+   73,
+   845,
+   150,
+   943
+  ],
+  "origin": [
+   79.0,
+   850.6
+  ],
+  "physicalRows": 4,
+  "physicalCols": 2,
+  "labelPrefix": "ng_sai_cu",
+  "labelStart": 1,
+  "fieldLabels": "ng_sai_cu1..4",
+  "bubblesGap": 47,
+  "labelsGap": 23,
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "autoFit": false,
+  "includeInAnswerKey": true,
+  "excludeFromAnswerKey": false
+ },
+ {
+  "type": "omr",
+  "key": "ds2",
+  "blockName": "ds2",
+  "label": "Đúng sai ( Câu 2)",
+  "fieldType": "",
+  "bubbleValues": "Đ,S",
+  "direction": "horizontal",
+  "box": [
+   168,
+   845,
+   244,
+   943
+  ],
+  "origin": [
+   173.8,
+   850.6
+  ],
+  "physicalRows": 4,
+  "physicalCols": 2,
+  "labelPrefix": "ng_sai_cu",
+  "labelStart": 5,
+  "fieldLabels": "ng_sai_cu5..8",
+  "bubblesGap": 46,
+  "labelsGap": 23,
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "autoFit": false,
+  "includeInAnswerKey": true,
+  "excludeFromAnswerKey": false
+ },
+ {
+  "type": "omr",
+  "key": "ds3",
+  "blockName": "ds3",
+  "label": "Đúng sai ( Câu 3)",
+  "fieldType": "",
+  "bubbleValues": "Đ,S",
+  "direction": "horizontal",
+  "box": [
+   310,
+   845,
+   385,
+   943
+  ],
+  "origin": [
+   315.2,
+   850.6
+  ],
+  "physicalRows": 4,
+  "physicalCols": 2,
+  "labelPrefix": "ng_sai_cu",
+  "labelStart": 9,
+  "fieldLabels": "ng_sai_cu9..12",
+  "bubblesGap": 46,
+  "labelsGap": 23,
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "autoFit": false,
+  "includeInAnswerKey": true,
+  "excludeFromAnswerKey": false
+ },
+ {
+  "type": "omr",
+  "key": "ds4",
+  "blockName": "ds4",
+  "label": "Đúng sai ( Câu 4)",
+  "fieldType": "",
+  "bubbleValues": "Đ,S",
+  "direction": "horizontal",
+  "box": [
+   402,
+   845,
+   479,
+   943
+  ],
+  "origin": [
+   408.0,
+   850.6
+  ],
+  "physicalRows": 4,
+  "physicalCols": 2,
+  "labelPrefix": "ng_sai_cu",
+  "labelStart": 13,
+  "fieldLabels": "ng_sai_cu13..16",
+  "bubblesGap": 47,
+  "labelsGap": 23,
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "autoFit": false,
+  "includeInAnswerKey": true,
+  "excludeFromAnswerKey": false
+ },
+ {
+  "type": "omr",
+  "key": "ds5",
+  "blockName": "ds5",
+  "label": "Đúng sai ( Câu 5)",
+  "fieldType": "",
+  "bubbleValues": "Đ,S",
+  "direction": "horizontal",
+  "box": [
+   542,
+   845,
+   619,
+   943
+  ],
+  "origin": [
+   548.8,
+   850.6
+  ],
+  "physicalRows": 4,
+  "physicalCols": 2,
+  "labelPrefix": "ng_sai_cu",
+  "labelStart": 17,
+  "fieldLabels": "ng_sai_cu17..20",
+  "bubblesGap": 46,
+  "labelsGap": 23,
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "autoFit": false,
+  "includeInAnswerKey": true,
+  "excludeFromAnswerKey": false
+ },
+ {
+  "type": "omr",
+  "key": "ds6",
+  "blockName": "ds6",
+  "label": "Đúng sai ( Câu 6)",
+  "fieldType": "",
+  "bubbleValues": "Đ,S",
+  "direction": "horizontal",
+  "box": [
+   637,
+   845,
+   715,
+   943
+  ],
+  "origin": [
+   643.0,
+   850.6
+  ],
+  "physicalRows": 4,
+  "physicalCols": 2,
+  "labelPrefix": "ng_sai_cu",
+  "labelStart": 21,
+  "fieldLabels": "ng_sai_cu21..24",
+  "bubblesGap": 48,
+  "labelsGap": 23,
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "autoFit": false,
+  "includeInAnswerKey": true,
+  "excludeFromAnswerKey": false
+ },
+ {
+  "type": "omr",
+  "key": "ds7",
+  "blockName": "ds7",
+  "label": "Đúng sai ( Câu 7)",
+  "fieldType": "",
+  "bubbleValues": "Đ,S",
+  "direction": "horizontal",
+  "box": [
+   778,
+   845,
+   855,
+   943
+  ],
+  "origin": [
+   784.0,
+   850.6
+  ],
+  "physicalRows": 4,
+  "physicalCols": 2,
+  "labelPrefix": "ng_sai_cu",
+  "labelStart": 25,
+  "fieldLabels": "ng_sai_cu25..28",
+  "bubblesGap": 47,
+  "labelsGap": 23,
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "autoFit": false,
+  "includeInAnswerKey": true,
+  "excludeFromAnswerKey": false
+ },
+ {
+  "type": "omr",
+  "key": "ds8",
+  "blockName": "ds8",
+  "label": "Đúng sai ( Câu 8)",
+  "fieldType": "",
+  "bubbleValues": "Đ,S",
+  "direction": "horizontal",
+  "box": [
+   872,
+   845,
+   949,
+   943
+  ],
+  "origin": [
+   878.0,
+   850.6
+  ],
+  "physicalRows": 4,
+  "physicalCols": 2,
+  "labelPrefix": "ng_sai_cu",
+  "labelStart": 29,
+  "fieldLabels": "ng_sai_cu29..32",
+  "bubblesGap": 47,
+  "labelsGap": 23,
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "autoFit": false,
+  "includeInAnswerKey": true,
+  "excludeFromAnswerKey": false
+ },
+ {
+  "type": "omr",
+  "box": [
+   62,
+   1049,
+   193,
+   1345
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281786622",
+  "compositeLabel": "Phần TN số ( Câu 1)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281786622_sign",
+  "label": "Phần TN số ( Câu 1) — dấu",
+  "compositeRole": "sign",
+  "fieldType": "",
+  "bubbleValues": "-",
+  "direction": "vertical",
+  "fieldLabels": [
+   "custom_1785281786622_sign"
+  ],
+  "origin": [
+   71,
+   1057.0
+  ],
+  "bubblesGap": 24,
+  "labelsGap": 32
+ },
+ {
+  "type": "omr",
+  "box": [
+   62,
+   1049,
+   193,
+   1345
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281786622",
+  "compositeLabel": "Phần TN số ( Câu 1)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281786622_dec",
+  "label": "Phần TN số ( Câu 1) — dấu phẩy",
+  "compositeRole": "decimal",
+  "fieldType": "",
+  "bubbleValues": "1,2",
+  "direction": "horizontal",
+  "fieldLabels": [
+   "custom_1785281786622_dec"
+  ],
+  "origin": [
+   103,
+   1079.0
+  ],
+  "bubblesGap": 32,
+  "labelsGap": 24
+ },
+ {
+  "type": "omr",
+  "box": [
+   62,
+   1049,
+   193,
+   1345
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281786622",
+  "compositeLabel": "Phần TN số ( Câu 1)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281786622_digits",
+  "label": "Phần TN số ( Câu 1) — chữ số",
+  "compositeRole": "digits",
+  "fieldType": "QTYPE_INT",
+  "fieldLabels": [
+   "custom_1785281786622_d1",
+   "custom_1785281786622_d2",
+   "custom_1785281786622_d3",
+   "custom_1785281786622_d4"
+  ],
+  "origin": [
+   70.8,
+   1104.5
+  ],
+  "bubblesGap": 24,
+  "labelsGap": 32,
+  "physicalRows": 10,
+  "physicalCols": 4
+ },
+ {
+  "type": "omr",
+  "box": [
+   213,
+   1049,
+   345,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281844407",
+  "compositeLabel": "Phần TN số ( Câu 2)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281844407_sign",
+  "label": "Phần TN số ( Câu 2) — dấu",
+  "compositeRole": "sign",
+  "fieldType": "",
+  "bubbleValues": "-",
+  "direction": "vertical",
+  "fieldLabels": [
+   "custom_1785281844407_sign"
+  ],
+  "origin": [
+   220,
+   1057.0
+  ],
+  "bubblesGap": 24,
+  "labelsGap": 33
+ },
+ {
+  "type": "omr",
+  "box": [
+   213,
+   1049,
+   345,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281844407",
+  "compositeLabel": "Phần TN số ( Câu 2)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281844407_dec",
+  "label": "Phần TN số ( Câu 2) — dấu phẩy",
+  "compositeRole": "decimal",
+  "fieldType": "",
+  "bubbleValues": "1,2",
+  "direction": "horizontal",
+  "fieldLabels": [
+   "custom_1785281844407_dec"
+  ],
+  "origin": [
+   253,
+   1081.0
+  ],
+  "bubblesGap": 33,
+  "labelsGap": 24
+ },
+ {
+  "type": "omr",
+  "box": [
+   213,
+   1049,
+   345,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281844407",
+  "compositeLabel": "Phần TN số ( Câu 2)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281844407_digits",
+  "label": "Phần TN số ( Câu 2) — chữ số",
+  "compositeRole": "digits",
+  "fieldType": "QTYPE_INT",
+  "fieldLabels": [
+   "custom_1785281844407_d1",
+   "custom_1785281844407_d2",
+   "custom_1785281844407_d3",
+   "custom_1785281844407_d4"
+  ],
+  "origin": [
+   220.3,
+   1104.3
+  ],
+  "bubblesGap": 24,
+  "labelsGap": 33,
+  "physicalRows": 10,
+  "physicalCols": 4
+ },
+ {
+  "type": "omr",
+  "box": [
+   363,
+   1049,
+   494,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281890315",
+  "compositeLabel": "Phần TN số ( Câu 3)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281890315_sign",
+  "label": "Phần TN số ( Câu 3) — dấu",
+  "compositeRole": "sign",
+  "fieldType": "",
+  "bubbleValues": "-",
+  "direction": "vertical",
+  "fieldLabels": [
+   "custom_1785281890315_sign"
+  ],
+  "origin": [
+   372,
+   1057.0
+  ],
+  "bubblesGap": 24,
+  "labelsGap": 32
+ },
+ {
+  "type": "omr",
+  "box": [
+   363,
+   1049,
+   494,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281890315",
+  "compositeLabel": "Phần TN số ( Câu 3)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281890315_dec",
+  "label": "Phần TN số ( Câu 3) — dấu phẩy",
+  "compositeRole": "decimal",
+  "fieldType": "",
+  "bubbleValues": "1,2",
+  "direction": "horizontal",
+  "fieldLabels": [
+   "custom_1785281890315_dec"
+  ],
+  "origin": [
+   404,
+   1079.0
+  ],
+  "bubblesGap": 32,
+  "labelsGap": 24
+ },
+ {
+  "type": "omr",
+  "box": [
+   363,
+   1049,
+   494,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281890315",
+  "compositeLabel": "Phần TN số ( Câu 3)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281890315_digits",
+  "label": "Phần TN số ( Câu 3) — chữ số",
+  "compositeRole": "digits",
+  "fieldType": "QTYPE_INT",
+  "fieldLabels": [
+   "custom_1785281890315_d1",
+   "custom_1785281890315_d2",
+   "custom_1785281890315_d3",
+   "custom_1785281890315_d4"
+  ],
+  "origin": [
+   371.5,
+   1104.5
+  ],
+  "bubblesGap": 24,
+  "labelsGap": 32,
+  "physicalRows": 10,
+  "physicalCols": 4
+ },
+ {
+  "type": "omr",
+  "box": [
+   513,
+   1049,
+   645,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281940677",
+  "compositeLabel": "Phần TN số ( Câu 4)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281940677_sign",
+  "label": "Phần TN số ( Câu 4) — dấu",
+  "compositeRole": "sign",
+  "fieldType": "",
+  "bubbleValues": "-",
+  "direction": "vertical",
+  "fieldLabels": [
+   "custom_1785281940677_sign"
+  ],
+  "origin": [
+   521,
+   1057.0
+  ],
+  "bubblesGap": 24,
+  "labelsGap": 33
+ },
+ {
+  "type": "omr",
+  "box": [
+   513,
+   1049,
+   645,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281940677",
+  "compositeLabel": "Phần TN số ( Câu 4)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281940677_dec",
+  "label": "Phần TN số ( Câu 4) — dấu phẩy",
+  "compositeRole": "decimal",
+  "fieldType": "",
+  "bubbleValues": "1,2",
+  "direction": "horizontal",
+  "fieldLabels": [
+   "custom_1785281940677_dec"
+  ],
+  "origin": [
+   554,
+   1081.0
+  ],
+  "bubblesGap": 33,
+  "labelsGap": 24
+ },
+ {
+  "type": "omr",
+  "box": [
+   513,
+   1049,
+   645,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281940677",
+  "compositeLabel": "Phần TN số ( Câu 4)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281940677_digits",
+  "label": "Phần TN số ( Câu 4) — chữ số",
+  "compositeRole": "digits",
+  "fieldType": "QTYPE_INT",
+  "fieldLabels": [
+   "custom_1785281940677_d1",
+   "custom_1785281940677_d2",
+   "custom_1785281940677_d3",
+   "custom_1785281940677_d4"
+  ],
+  "origin": [
+   521.1,
+   1104.6
+  ],
+  "bubblesGap": 24,
+  "labelsGap": 33,
+  "physicalRows": 10,
+  "physicalCols": 4
+ },
+ {
+  "type": "omr",
+  "box": [
+   664,
+   1049,
+   795,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281992851",
+  "compositeLabel": "Phần TN số ( Câu 5)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281992851_sign",
+  "label": "Phần TN số ( Câu 5) — dấu",
+  "compositeRole": "sign",
+  "fieldType": "",
+  "bubbleValues": "-",
+  "direction": "vertical",
+  "fieldLabels": [
+   "custom_1785281992851_sign"
+  ],
+  "origin": [
+   673,
+   1057.0
+  ],
+  "bubblesGap": 24,
+  "labelsGap": 32
+ },
+ {
+  "type": "omr",
+  "box": [
+   664,
+   1049,
+   795,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281992851",
+  "compositeLabel": "Phần TN số ( Câu 5)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281992851_dec",
+  "label": "Phần TN số ( Câu 5) — dấu phẩy",
+  "compositeRole": "decimal",
+  "fieldType": "",
+  "bubbleValues": "1,2",
+  "direction": "horizontal",
+  "fieldLabels": [
+   "custom_1785281992851_dec"
+  ],
+  "origin": [
+   705,
+   1081.0
+  ],
+  "bubblesGap": 32,
+  "labelsGap": 24
+ },
+ {
+  "type": "omr",
+  "box": [
+   664,
+   1049,
+   795,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785281992851",
+  "compositeLabel": "Phần TN số ( Câu 5)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785281992851_digits",
+  "label": "Phần TN số ( Câu 5) — chữ số",
+  "compositeRole": "digits",
+  "fieldType": "QTYPE_INT",
+  "fieldLabels": [
+   "custom_1785281992851_d1",
+   "custom_1785281992851_d2",
+   "custom_1785281992851_d3",
+   "custom_1785281992851_d4"
+  ],
+  "origin": [
+   673.0,
+   1104.4
+  ],
+  "bubblesGap": 24,
+  "labelsGap": 32,
+  "physicalRows": 10,
+  "physicalCols": 4
+ },
+ {
+  "type": "omr",
+  "box": [
+   815,
+   1049,
+   945,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785282088710",
+  "compositeLabel": "Phần TN số ( Câu 6)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785282088710_sign",
+  "label": "Phần TN số ( Câu 6) — dấu",
+  "compositeRole": "sign",
+  "fieldType": "",
+  "bubbleValues": "-",
+  "direction": "vertical",
+  "fieldLabels": [
+   "custom_1785282088710_sign"
+  ],
+  "origin": [
+   823,
+   1057.0
+  ],
+  "bubblesGap": 24,
+  "labelsGap": 32
+ },
+ {
+  "type": "omr",
+  "box": [
+   815,
+   1049,
+   945,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785282088710",
+  "compositeLabel": "Phần TN số ( Câu 6)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785282088710_dec",
+  "label": "Phần TN số ( Câu 6) — dấu phẩy",
+  "compositeRole": "decimal",
+  "fieldType": "",
+  "bubbleValues": "1,2",
+  "direction": "horizontal",
+  "fieldLabels": [
+   "custom_1785282088710_dec"
+  ],
+  "origin": [
+   855,
+   1081.0
+  ],
+  "bubblesGap": 32,
+  "labelsGap": 24
+ },
+ {
+  "type": "omr",
+  "box": [
+   815,
+   1049,
+   945,
+   1346
+  ],
+  "bubbleDimensions": [
+   18,
+   18
+  ],
+  "compositeGroup": "custom_1785282088710",
+  "compositeLabel": "Phần TN số ( Câu 6)",
+  "autoFit": false,
+  "includeInAnswerKey": false,
+  "excludeFromAnswerKey": false,
+  "key": "custom_1785282088710_digits",
+  "label": "Phần TN số ( Câu 6) — chữ số",
+  "compositeRole": "digits",
+  "fieldType": "QTYPE_INT",
+  "fieldLabels": [
+   "custom_1785282088710_d1",
+   "custom_1785282088710_d2",
+   "custom_1785282088710_d3",
+   "custom_1785282088710_d4"
+  ],
+  "origin": [
+   822.7,
+   1104.5
+  ],
+  "bubblesGap": 24,
+  "labelsGap": 32,
+  "physicalRows": 10,
+  "physicalCols": 4
+ }
+]

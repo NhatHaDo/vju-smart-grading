@@ -136,6 +136,10 @@ class VJUTemplate:
     # When the runtime image_source matches a key here, that set of positions
     # is used instead of marker_centers_in_template.
     marker_centers_by_source: dict[str, dict[str, list[int]]] | None = None
+    # Optional (2026-10-05): where the handwritten "Họ và tên" + "Ngày sinh"
+    # lines sit on this sheet, [x1, y1, x2, y2] at pageDimensions — the
+    # picture cut out for the Kết quả page. None → engine's Mẫu 40 default.
+    name_dob_crop_box: tuple[int, int, int, int] | None = None
 
 
 # ── Public API ────────────────────────────────────────────────────────────
@@ -237,6 +241,8 @@ def load_template(template_path: str | Path) -> VJUTemplate:
         marker_centers_by_source=marker_centers_by_source,
         composite_answer_fields=composite_answer_fields,
         composite_sub_labels=composite_sub_labels,
+        name_dob_crop_box=(tuple(int(v) for v in raw["nameDobCropBox"])
+                           if len(raw.get("nameDobCropBox") or []) == 4 else None),
     )
     return template
 

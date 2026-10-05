@@ -36,6 +36,16 @@ MAU40_MARKER = "40tn_dungsai"   # also used by omr.py to pick signature detectio
 MAU40_SRC_TPL,  MAU40_SRC_AREAS  = SRC_DIR / "sheet_40tn_dungsai.template.json",  SRC_DIR / "sheet_40tn_dungsai.areas.json"
 MAU40_DEST_TPL, MAU40_DEST_AREAS = DEST_DIR / "shared_40tn_dungsai.template.json", DEST_DIR / "shared_40tn_dungsai.areas.json"
 
+# 2026-10-05: "tạo và chấm cho a thử bộ phiếu này" — the Bộ GD answer sheet
+# (Số báo danh 6 số, Mã đề 3 số, 40 TN + 8 Đúng/Sai + 6 trả lời ngắn). Same
+# sections as Mẫu 40 but a different layout, so Mẫu 40 misreads it. Measured
+# on the blank printed form (bubble centres after the 4-corner warp), checked
+# against 17 filled phone photos.
+BGD_NAME   = "Phiếu Bộ GD: 40 TN + 8 Đúng/Sai + 6 trả lời ngắn (SBD 6 số, mã đề 3 số)"
+BGD_MARKER = "bgd_40tn"
+BGD_SRC_TPL,  BGD_SRC_AREAS  = SRC_DIR / "sheet_bgd_40tn.template.json",  SRC_DIR / "sheet_bgd_40tn.areas.json"
+BGD_DEST_TPL, BGD_DEST_AREAS = DEST_DIR / "shared_bgd_40tn.template.json", DEST_DIR / "shared_bgd_40tn.areas.json"
+
 
 def find_mau40(db: Session) -> Template | None:
     """The oldest custom template that is Mẫu 40 — matched by its file name,
@@ -48,9 +58,45 @@ def find_mau40(db: Session) -> Template | None:
             .order_by(Template.id).first())
 
 
+def find_bgd(db: Session) -> Template | None:
+    for t in db.query(Template).filter(Template.type == "custom").order_by(Template.id):
+        if BGD_MARKER in (t.file_path or ""):
+            return t
+    return None
+
+
 def find_pinned_template_ids(db: Session) -> dict[str, int | None]:
     t = find_mau40(db)
-    return {"mau40": t.id if t else None}
+    b = find_bgd(db)
+    return {"mau40": t.id if t else None, "bgd": b.id if b else None}
+
+
+def install_bgd(db: Session, update_existing: bool = True) -> tuple[Template, bool]:
+    """Same as install_mau40, for the Bộ GD sheet."""
+    if not BGD_SRC_TPL.exists() or not BGD_SRC_AREAS.exists():
+        raise FileNotFoundError(f"Thiếu file nguồn trong {SRC_DIR}")
+    existing = find_bgd(db)
+    if existing is not None and not update_existing:
+        return existing, False
+    DEST_DIR.mkdir(parents=True, exist_ok=True)
+    BGD_DEST_TPL.write_text(BGD_SRC_TPL.read_text(encoding="utf-8"), encoding="utf-8")
+    BGD_DEST_AREAS.write_text(BGD_SRC_AREAS.read_text(encoding="utf-8"), encoding="utf-8")
+    page_w, page_h = (json.loads(BGD_DEST_TPL.read_text(encoding="utf-8")).get("pageDimensions") or [1000, 1414])[:2]
+    if existing is None:
+        tpl = Template(
+            name=BGD_NAME, type="custom", version="1.0",
+            file_path=str(BGD_DEST_TPL), areas_path=str(BGD_DEST_AREAS),
+            page_width=page_w, page_height=page_h,
+            owner_user_id=None, is_default=True,
+        )
+        db.add(tpl)
+        db.commit()
+        db.refresh(tpl)
+        return tpl, True
+    existing.file_path, existing.areas_path = str(BGD_DEST_TPL), str(BGD_DEST_AREAS)
+    existing.page_width, existing.page_height, existing.is_default = page_w, page_h, True
+    db.commit()
+    return existing, False
 
 
 def install_mau40(db: Session, update_existing: bool = True) -> tuple[Template, bool]:
@@ -92,15 +138,19 @@ def install_mau40(db: Session, update_existing: bool = True) -> tuple[Template, 
 
 
 def ensure_shared_templates(db: Session) -> None:
-    """Called at startup: install Mẫu 40 only if this DB doesn't have it yet.
-    An existing row (e.g. production's) is never modified here."""
-    try:
-        tpl, created = install_mau40(db, update_existing=False)
-        if created:
-            _log.info("[SEED] Installed shared template %r (id=%d)", MAU40_NAME, tpl.id)
-    except Exception as exc:   # never block startup over this
-        db.rollback()
-        _log.warning("[SEED] Could not install shared template %r: %s", MAU40_NAME, exc)
+    """Called at startup. Mẫu 40 is installed only if this DB doesn't have it
+    yet (an existing row, e.g. production's, is never modified here). The Bộ
+    GD sheet is refreshed from the committed files every time: it has no owner,
+    so nobody edits it from the app, and a fix to its files must reach every
+    database that already installed an older copy."""
+    for name, install, refresh in ((MAU40_NAME, install_mau40, False), (BGD_NAME, install_bgd, True)):
+        try:
+            tpl, created = install(db, update_existing=refresh)
+            if created:
+                _log.info("[SEED] Installed shared template %r (id=%d)", name, tpl.id)
+        except Exception as exc:   # never block startup over this
+            db.rollback()
+            _log.warning("[SEED] Could not install shared template %r: %s", name, exc)
 
 
 def mau40_short_labels(db: Session) -> list[str]:

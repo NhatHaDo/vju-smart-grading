@@ -473,3 +473,112 @@ def test_mix_from_file_drops_exact_repeats(client):
     assert any("bỏ 1 câu trùng" in n for n in p["notes"])
     for v in p["versions"]:
         assert len(v["answer_key"]["mcq"]) == 2
+
+
+def _install_sheets(client, tmp_path, monkeypatch):
+    """The shared Mẫu 40 + Bộ GD sheets in the test DB; returns (db, mau40 id, bgd id)."""
+    from app.database import get_db
+    from app.services import shared_templates as st
+    for attr, fname in (("MAU40_DEST_TPL", "shared_40tn_dungsai.template.json"),
+                        ("MAU40_DEST_AREAS", "shared_40tn_dungsai.areas.json"),
+                        ("BGD_DEST_TPL", "shared_bgd_40tn.template.json"),
+                        ("BGD_DEST_AREAS", "shared_bgd_40tn.areas.json")):
+        monkeypatch.setattr(st, attr, tmp_path / fname)
+    monkeypatch.setattr(st, "DEST_DIR", tmp_path)
+    db = next(client.app.dependency_overrides[get_db]())
+    st.ensure_shared_templates(db)
+    return db, st.find_mau40(db).id, st.find_bgd(db).id
+
+
+def _bank_with_mcq(client, h, n=3):
+    cat = client.post("/api/v1/question-bank/categories", json={"name": "Phiếu"}, headers=h).json()
+    for i in range(n):
+        client.post(f"/api/v1/question-bank/categories/{cat['id']}/questions",
+                    json={"content": f"Câu {i}?", "options": [{"text": "a"}, {"text": "b"}, {"text": "c"}, {"text": "d"}], "answer": 1},
+                    headers=h)
+    return cat
+
+
+def test_bo_de_remembers_its_answer_sheet(client, tmp_path, monkeypatch):
+    """anh Tú: "cái này a chỉ chọn đc mỗi mẫu phiếu 40 câu thôi à" — a bộ đề
+    can be mixed for the Bộ GD sheet too; the choice comes back on the bộ đề
+    and on the kỳ thi's answer key."""
+    _, mau40, bgd = _install_sheets(client, tmp_path, monkeypatch)
+    h = client.headers_for(1)
+    cat = _bank_with_mcq(client, h)
+    exam = client.post("/api/v1/exams", json={"name": "Kỳ thi phiếu Bộ GD", "subject": "Tin"}, headers=h).json()
+    body = {"name": "Đề BGD", "category_ids": [cat["id"]], "counts": {"mcq": 3, "tf": 0, "short": 0},
+            "num_versions": 2, "start_code": "101", "exam_id": exam["id"], "sheet": bgd}
+    paper = client.post("/api/v1/exam-papers/from-bank", json=body, headers=h).json()
+    assert paper["sheet"] == bgd and paper["sheet_name"] == "Phiếu Bộ GD"
+    key = client.get(f"/api/v1/exam-papers/exam-answer-key/{exam['id']}", headers=h).json()
+    assert key["sheets"] == [bgd] and key["versions"] == ["101", "102"]
+    assert set(key["byMaDe"]["101"]) == {"trc_nghim_abcd1", "trc_nghim_abcd2", "trc_nghim_abcd3"}
+    # grading with the other sheet gets nothing from this bộ đề
+    assert client.get(f"/api/v1/exam-papers/exam-answer-key/{exam['id']}?sheet={mau40}", headers=h).json()["versions"] == []
+    assert client.get(f"/api/v1/exam-papers/exam-answer-key/{exam['id']}?sheet={bgd}", headers=h).json()["versions"] == ["101", "102"]
+    # the names sent before 2026-10-05 still work; the Bộ GD sheet has 3 mã đề columns
+    assert client.post("/api/v1/exam-papers/from-bank", json={**body, "name": "Đề VJU", "exam_id": None, "sheet": "mau40"},
+                       headers=h).json()["sheet"] == mau40
+    r = client.post("/api/v1/exam-papers/from-bank", json={**body, "exam_id": None, "start_code": "1001"}, headers=h)
+    assert r.status_code == 422 and "tối đa 3 chữ số" in r.json()["detail"]
+    # default stays Mẫu 40; chỉ in đề has no sheet
+    del body["sheet"]
+    assert client.post("/api/v1/exam-papers/from-bank", json={**body, "name": "Mặc định", "exam_id": None},
+                       headers=h).json()["sheet"] == mau40
+    assert client.post("/api/v1/exam-papers/from-bank", json={**body, "name": "In", "exam_id": None, "for_sheet": False},
+                       headers=h).json()["sheet"] is None
+
+
+def test_any_answer_sheet_can_be_picked(client, tmp_path, monkeypatch):
+    """"cái này có nhiều mẫu phiếu lắm mà": the teacher's own custom template
+    is offered too, and what a bộ đề may hold comes from the sheet itself —
+    here a copy of the Bộ GD sheet without its Mã đề box (only 1 mã đề)."""
+    import json as _json
+    from app.models.template import Template
+    from app.services import shared_templates as st
+    db, mau40, bgd = _install_sheets(client, tmp_path, monkeypatch)
+    areas = [a for a in _json.loads(st.BGD_SRC_AREAS.read_text(encoding="utf-8")) if a.get("blockName") != "made"]
+    (tmp_path / "own.areas.json").write_text(_json.dumps(areas), encoding="utf-8")
+    (tmp_path / "own.template.json").write_text(st.BGD_SRC_TPL.read_text(encoding="utf-8"), encoding="utf-8")
+    own = Template(name="Phiếu của tôi", type="custom", version="1.0", owner_user_id=1, is_default=False,
+                   file_path=str(tmp_path / "own.template.json"), areas_path=str(tmp_path / "own.areas.json"))
+    db.add(own)
+    db.commit()
+
+    h = client.headers_for(1)
+    sheets = client.get("/api/v1/exam-papers/sheets", headers=h).json()
+    assert [s["id"] for s in sheets] == [mau40, bgd, own.id]
+    assert sheets[0]["limits"] == {"mcq": 40, "tf": 8, "short": 6} and sheets[0]["code_digits"] == 4
+    assert sheets[1]["code_digits"] == 3 and sheets[2]["code_digits"] is None and sheets[2]["mcq_options"] == 4
+    # another teacher doesn't see it, and can't mix for it
+    assert [s["id"] for s in client.get("/api/v1/exam-papers/sheets", headers=client.headers_for(2)).json()] == [mau40, bgd]
+
+    cat = _bank_with_mcq(client, h)
+    body = {"name": "Phiếu riêng", "category_ids": [cat["id"]], "counts": {"mcq": 3, "tf": 0, "short": 0},
+            "num_versions": 2, "start_code": "101", "sheet": own.id}
+    r = client.post("/api/v1/exam-papers/from-bank", json=body, headers=h)
+    assert r.status_code == 422 and "chỉ trộn được 1 mã đề" in r.json()["detail"]
+    paper = client.post("/api/v1/exam-papers/from-bank", json={**body, "num_versions": 1}, headers=h).json()
+    assert paper["sheet"] == own.id and paper["sheet_name"] == "Phiếu của tôi" and paper["gradable"]
+    cat2 = _bank_with_mcq(client, client.headers_for(2))
+    r = client.post("/api/v1/exam-papers/from-bank", json={**body, "category_ids": [cat2["id"]], "num_versions": 1},
+                    headers=client.headers_for(2))
+    assert r.status_code == 422
+
+
+def test_grading_key_follows_the_sheet():
+    """A sheet with A–E trắc nghiệm takes 5-option câu; the đáp án goes into
+    that sheet's own field keys."""
+    from app.services.exam_mixer import Snapshot, grading_key, sheet_problem
+    from app.services.sheet_layouts import SheetLayout
+    lay = SheetLayout(id=9, name="A–E", mcq=["q1", "q2"], mcq_options=5, tf=["t1", "t2", "t3", "t4"], short=["s1"],
+                      code_digits=2)
+    snaps = [Snapshot("mcq", "x", [{"text": str(i)} for i in range(5)], answer=4),
+             Snapshot("tf", "y", [{"text": "a", "correct": True}, {"text": "b"}, {"text": "c", "correct": True}, {"text": "d"}]),
+             Snapshot("short", "z", [], answer_text="-1,5")]
+    assert sheet_problem(snaps, "12", lay) is None
+    assert sheet_problem(snaps, "12") is not None          # Mẫu 40: only A–D
+    key = grading_key(snaps, lay)
+    assert key["q1"] == "E" and key["s1"] == "-1.5" and [key[f"t{i}"] for i in range(1, 5)] == ["Đ", "S", "Đ", "S"]
+    assert sheet_problem(snaps * 3, "12", lay) is not None  # 3 trắc nghiệm on a 2-câu sheet

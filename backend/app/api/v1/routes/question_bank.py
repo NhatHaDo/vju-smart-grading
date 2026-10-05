@@ -30,7 +30,8 @@ from app.services.question_io import (
     export_aiken,
     export_docx,
     mcq_rows,
-    parse_aiken,
+    decode_text,
+    parse_txt,
     parse_docx,
 )
 
@@ -152,13 +153,10 @@ async def import_questions(
         # a question with no answer marked is imported anyway: pick it on the page
         parsed, warnings = parse_docx(data, allow_unanswered=True)
     elif name.endswith(".txt"):
-        try:
-            text = data.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            text = data.decode("cp1258", errors="replace")
-        parsed, warnings = parse_aiken(text)
+        # written like the Word file, or a Moodle (Aiken) export
+        parsed, warnings = parse_txt(decode_text(data), allow_unanswered=True)
     else:
-        raise HTTPException(400, "Chỉ hỗ trợ file .txt (định dạng Aiken/Moodle) hoặc .docx (Word)")
+        raise HTTPException(400, "Chỉ hỗ trợ file .txt hoặc .docx (Word)")
 
     # đáp án picked on the page for trắc nghiệm the file doesn't mark: {"12": 2}
     try:

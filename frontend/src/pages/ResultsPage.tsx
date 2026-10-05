@@ -439,6 +439,76 @@ function RealRow({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, 
   );
 }
 
+/** One result as a card, for phones (2026-10-05: on a narrow screen the
+ *  table pushed Điểm, mã đề and Xem/Xoá off to the right). Same data and
+ *  actions as RealRow; the table stays as it is on wider screens. */
+function RealCard({ idx, r, merged, corrected, sc, missingKeyForMaDe, maDeValue, onOpen, onDelete, identityFields, selected, onToggleSelect, proctors }: {
+  idx: number; r: OmrGradeResult;
+  merged: { student_info: OmrGradeResult['student_info']; answers: Record<string, string | null> };
+  corrected: boolean;
+  sc: { correct: number; wrong: number; blank: number; total: number } | null;
+  missingKeyForMaDe?: boolean; maDeValue?: string | null;
+  onOpen: () => void; onDelete: () => void;
+  identityFields: import('../types/grading').TemplateInfoField[];
+  selected: boolean; onToggleSelect: () => void;
+  proctors: ProctorInfo | null;
+}) {
+  const warn = hasWarnings(r) || !!missingKeyForMaDe || hasInfoMultiMark(r);
+  const missingSigs = missingSignatures(r, proctors);
+  const info = merged.student_info;
+  const crop = nameDobCropUrl(r.debug?.name_dob_crop_path);
+  return (
+    <div onClick={onOpen}
+      style={{ border: `1.5px solid ${selected ? '#FCA5A5' : warn ? '#FECACA' : '#E5E7EB'}`, borderRadius: 12, padding: 12,
+        background: selected ? '#FEF2F2' : warn ? '#FFF7F7' : '#fff', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        <input type="checkbox" checked={selected} onClick={e => e.stopPropagation()} onChange={onToggleSelect}
+          style={{ accentColor: '#C8102E', width: 18, height: 18, marginTop: 2, flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#1E1E1E', wordBreak: 'break-word' }}>
+            <span style={{ color: '#9CA3AF', fontWeight: 600 }}>{idx}. </span>{r.input?.filename ?? '—'}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 10px', marginTop: 3, fontSize: 12 }}>
+            {identityFields.map(f => (
+              <span key={f.key}><span style={{ color: '#9CA3AF' }}>{f.displayName}: </span>
+                <b style={{ color: '#C8102E', fontFamily: 'monospace' }}>{info?.[f.key] ?? '—'}</b></span>
+            ))}
+          </div>
+        </div>
+        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+          {sc !== null
+            ? <><div style={{ fontSize: 22, fontWeight: 800, color: '#1E1E1E', lineHeight: 1 }}>{sc.total}</div>
+                <div style={{ fontSize: 10.5, color: '#9CA3AF', marginTop: 2 }}>điểm</div></>
+            : missingKeyForMaDe
+              ? <span style={{ fontSize: 11, fontWeight: 700, color: '#CA8A04' }}>Chưa có đáp án<br />Đề {maDeValue ?? '?'}</span>
+              : null}
+        </div>
+      </div>
+      {crop && (
+        <img src={crop} alt="Họ và tên / Ngày sinh"
+          style={{ width: '100%', height: 'auto', maxHeight: 64, objectFit: 'contain', objectPosition: 'left', borderRadius: 6, border: '1px solid #E5E7EB', background: '#fff' }}
+          onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12 }}>
+        {sc !== null && <>
+          <span style={{ color: '#065F46', fontWeight: 700 }}>Đúng {sc.correct}</span>
+          <span style={{ color: '#991B1B', fontWeight: 700 }}>Sai {sc.wrong}</span>
+          <span style={{ color: '#6B7280' }}>Trống {sc.blank}</span>
+        </>}
+        {warn && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#C8102E', fontWeight: 700 }}><AlertTriangle size={12} /> Cần xem</span>}
+        {corrected && <span style={{ fontSize: 10.5, color: '#10B981', fontWeight: 700, background: '#D1FAE5', borderRadius: 4, padding: '1px 5px' }}>Đã sửa tay</span>}
+        {missingSigs.length > 0 && <span style={{ fontSize: 10.5, color: '#B45309', fontWeight: 700, background: '#FEF3C7', borderRadius: 4, padding: '1px 5px' }}>Thiếu chữ ký</span>}
+        {r._error && <span style={{ fontSize: 10.5, color: '#EF4444', fontWeight: 700 }}>Lỗi: {r._error.slice(0, 60)}</span>}
+        <span style={{ flex: 1 }} />
+        <button onClick={e => { e.stopPropagation(); onDelete(); }}
+          style={{ border: '1.5px solid #FECACA', borderRadius: 9999, padding: '5px 12px', background: '#fff', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4, color: '#EF4444' }}>
+          <Trash2 size={12} /> Xoá
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── DB Save status banner ──────────────────────────────────────────────────
 
 type DbSaveStatus = 'idle' | 'saving' | 'saved' | 'failed' | 'auth_failed';
@@ -1199,9 +1269,9 @@ export default function ResultsPage() {
               ]),
             ].map((s, i) => (
               <Card key={i} style={{ borderTop: '3px solid #C8102E' }}>
-                <div style={{ fontSize: 10, color: '#6B7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>{s.label}</div>
-                <div style={{ fontSize: (s as { small?: boolean }).small ? 18 : 26, fontWeight: 800, color: '#1E1E1E' }}>{s.value}</div>
-                <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 3 }}>{s.sub}</div>
+                <div className="results-stat-label" style={{ fontSize: 10, color: '#6B7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>{s.label}</div>
+                <div className="results-stat-value" style={{ fontSize: (s as { small?: boolean }).small ? 18 : 26, fontWeight: 800, color: '#1E1E1E' }}>{s.value}</div>
+                <div className="results-stat-sub" style={{ fontSize: 11, color: '#9CA3AF', marginTop: 3 }}>{s.sub}</div>
               </Card>
             ))}
           </div>
@@ -1209,10 +1279,10 @@ export default function ResultsPage() {
 
         {/* Warning banner */}
         {warnCount > 0 && !reviewOnly && (
-          <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-              <AlertTriangle size={16} />
-              <strong>{warnCount} phiếu có cảnh báo</strong> — kiểm tra trước khi tải Excel!
+          <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flex: '1 1 200px', minWidth: 0 }}>
+              <AlertTriangle size={16} style={{ flexShrink: 0 }} />
+              <span><strong>{warnCount} phiếu có cảnh báo</strong> — kiểm tra trước khi tải Excel!</span>
             </div>
             <Button size="sm" variant="outline" onClick={startReview}>Kiểm tra ngay →</Button>
           </div>
@@ -1301,7 +1371,31 @@ export default function ResultsPage() {
                 <Button size="sm" variant="outline" icon={<X size={13} />} onClick={() => setSearchQuery('')} style={{ marginTop: 10 }}>Xoá tìm kiếm</Button>
               </div>
             ) : (
-            <div style={{ overflowX: 'auto' }}>
+            <>
+            {/* phones: one card per phiếu (see RealCard); the table below is hidden there */}
+            <div className="results-cards" style={{ flexDirection: 'column', gap: 10, padding: '4px 0 8px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: '#6B7280', padding: '0 2px' }}>
+                <input type="checkbox"
+                  checked={searchedRows.length > 0 && searchedRows.every(({ r }) => selectedKeys.has(rowKey(r)))}
+                  onChange={toggleSelectAllVisible} style={{ accentColor: '#C8102E', width: 16, height: 16 }} />
+                Chọn tất cả · bấm vào phiếu để xem chi tiết, sửa
+              </label>
+              {searchedRows.map(({ r, merged, corr, sc, missingKeyForMaDe, maDeValue, proctors }, i) => (
+                <RealCard
+                  key={r.db_id ?? r.input?.filename ?? i}
+                  idx={i + 1} r={r} merged={merged} corrected={correctionHasChanges(corr, r, resolveRowSchema(r).infoFields)} sc={sc}
+                  identityFields={(isAllMode ? resolveRowSchema(r).infoFields : activeInfoFields).slice(0, 2)}
+                  missingKeyForMaDe={missingKeyForMaDe}
+                  maDeValue={maDeValue}
+                  proctors={proctors}
+                  onOpen={() => setModalRow(r)}
+                  onDelete={() => handleDeleteRow(r.input?.filename ?? '', r.db_id)}
+                  selected={selectedKeys.has(rowKey(r))}
+                  onToggleSelect={() => toggleSelectRow(rowKey(r))}
+                />
+              ))}
+            </div>
+            <div className="results-table-wrap" style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: '#C8102E' }}>
@@ -1351,6 +1445,7 @@ export default function ResultsPage() {
                 </tbody>
               </table>
             </div>
+            </>
             )}
           </Card>
         ) : dataSource !== 'init' ? (

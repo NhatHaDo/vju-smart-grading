@@ -68,21 +68,31 @@ class Snapshot:
                         d.get("src"), d.get("perm"))
 
 
-def usable(q: ParsedQuestion, for_sheet: bool = True) -> bool:
-    return not (for_sheet and q.qtype == "mcq" and len(q.options) > MAX_MCQ_OPTIONS)
+def _rules(sheet) -> tuple[str, dict[str, int], int, int | None]:
+    """(name, part limits, most options per trắc nghiệm, mã đề digit columns)
+    of the answer sheet — `sheet` is a SheetLayout (sheet_layouts.py); None =
+    the Mẫu 40 câu sheet, as before 2026-10-05."""
+    if sheet is None:
+        return "phiếu Mẫu 40 câu trắc nghiệm", PART_LIMITS, MAX_MCQ_OPTIONS, 4
+    return f"phiếu \"{sheet.name}\"", sheet.limits, sheet.mcq_options, sheet.code_digits
 
 
-def check_counts(available: dict[str, int], counts: dict[str, int], for_sheet: bool = True) -> None:
+def usable(q: ParsedQuestion, for_sheet: bool = True, sheet=None) -> bool:
+    return not (for_sheet and q.qtype == "mcq" and len(q.options) > _rules(sheet)[2])
+
+
+def check_counts(available: dict[str, int], counts: dict[str, int], for_sheet: bool = True, sheet=None) -> None:
     """Raise MixError if the requested numbers can't go on the sheet / aren't there."""
     if sum(counts.values()) == 0:
         raise MixError("Chọn ít nhất 1 câu hỏi")
+    sheet_name, limits, _, _ = _rules(sheet)
     for qt in QTYPES:
         want = counts.get(qt, 0)
         name = f"Phần {PART_OF[qt]} ({PART_NAME[qt].lower()})"
         if want < 0:
             raise MixError(f"{name}: số câu không hợp lệ")
-        if for_sheet and want > PART_LIMITS[qt]:
-            raise MixError(f"{name}: phiếu Mẫu 40 câu trắc nghiệm chỉ có {PART_LIMITS[qt]} câu nhưng đang chọn {want}. "
+        if for_sheet and want > limits[qt]:
+            raise MixError(f"{name}: {sheet_name} chỉ có {limits[qt]} câu nhưng đang chọn {want}. "
                            "Chọn \"Chỉ in đề\" nếu đề chỉ để in")
         if want > MAX_FREE_PER_PART:
             raise MixError(f"{name}: tối đa {MAX_FREE_PER_PART} câu nhưng đang chọn {want}")
@@ -90,14 +100,15 @@ def check_counts(available: dict[str, int], counts: dict[str, int], for_sheet: b
             raise MixError(f"{name}: chỉ có {available.get(qt, 0)} câu dùng được nhưng đang chọn {want}")
 
 
-def sheet_problem(snaps: list["Snapshot"], code: str = "0") -> str | None:
-    """Why this version can't be graded on the "Mẫu 40 câu" sheet (None = it can)."""
+def sheet_problem(snaps: list["Snapshot"], code: str = "0", sheet=None) -> str | None:
+    """Why this version can't be graded on the answer sheet (None = it can)."""
+    _, limits, max_opts, _ = _rules(sheet)
     for qt in QTYPES:
         n = sum(1 for s in snaps if s.qtype == qt)
-        if n > PART_LIMITS[qt]:
-            return f"Phần {PART_OF[qt]} có {n} câu, phiếu chỉ có {PART_LIMITS[qt]}"
-    if any(s.qtype == "mcq" and len(s.options) > MAX_MCQ_OPTIONS for s in snaps):
-        return "có câu trắc nghiệm hơn 4 đáp án, phiếu chỉ có A–D"
+        if n > limits[qt]:
+            return f"Phần {PART_OF[qt]} có {n} câu, phiếu chỉ có {limits[qt]}"
+    if any(s.qtype == "mcq" and len(s.options) > max_opts for s in snaps):
+        return f"có câu trắc nghiệm hơn {max_opts} đáp án, phiếu chỉ có {LETTERS[0]}–{LETTERS[max_opts - 1]}"
     if any(s.qtype == "mcq" and (s.answer is None or s.answer < 0) for s in snaps):
         return "có câu chưa có đáp án"
     if not code.isdigit():
@@ -109,13 +120,15 @@ _CODE_OK = re.compile(r"^[\w][\w .\-]*$")
 MAX_CODE_LEN = 10
 
 
-def version_codes(spec: str, n: int, for_sheet: bool = True) -> list[str]:
+def version_codes(spec: str, n: int, for_sheet: bool = True, sheet=None) -> list[str]:
     """The mã đề of a new bộ đề, from what the teacher typed:
       - a list "A, B, C, D" / "Đề 1; Đề 2" → exactly those (n is ignored);
       - one code → n codes counting up from it: "101" → 101, 102, …
         (leading zeros kept: "001" → "002"), "MD01" → MD02, "A" → B, C, …
     On the "Mẫu 40 câu" sheet the mã đề is bubbled as digits, so for_sheet
-    codes must be numbers of at most 3 digits (4 if the teacher starts with 4)."""
+    codes must be numbers of at most 3 digits (4 if the teacher starts with 4),
+    and never more digits than the sheet's Mã đề field has columns. A sheet
+    without a Mã đề field can't tell mã đề apart: 1 mã đề only."""
     spec = (spec or "").strip()
     if not spec:
         raise MixError("Nhập mã đề (vd 101, A, Đề 1, hoặc danh sách A, B, C, D)")
@@ -144,12 +157,18 @@ def version_codes(spec: str, n: int, for_sheet: bool = True) -> list[str]:
     if len({c.casefold() for c in codes}) != len(codes):
         raise MixError("Các mã đề bị trùng nhau")
     if for_sheet:
+        sheet_name, _, _, digits = _rules(sheet)
+        if digits is None:
+            if len(codes) > 1:
+                raise MixError(f"{sheet_name[0].upper()}{sheet_name[1:]} không có ô Mã đề nên chỉ trộn được 1 mã đề. "
+                               "Chọn \"Chỉ in đề\" để in nhiều mã đề")
+            return codes
         if not all(c.isdigit() for c in codes):
-            raise MixError("Chấm bằng phiếu Mẫu 40 câu trắc nghiệm thì mã đề phải là số (vd 101) vì phiếu chỉ tô được chữ số. "
+            raise MixError(f"Chấm bằng {sheet_name} thì mã đề phải là số (vd 101) vì phiếu chỉ tô được chữ số. "
                            "Chọn \"Chỉ in đề\" để dùng mã đề chữ")
-        width = max(len(codes[0]), 3)
-        if any(len(c) > min(width, 4) for c in codes):
-            raise MixError("Mã đề vượt quá số chữ số trên phiếu (tối đa 3–4 chữ số), hãy chọn mã đề nhỏ hơn")
+        width = min(max(len(codes[0]), min(3, digits)), digits)
+        if any(len(c) > width for c in codes):
+            raise MixError(f"Mã đề vượt quá số chữ số trên phiếu (tối đa {digits} chữ số), hãy chọn mã đề nhỏ hơn")
     return codes
 
 
@@ -244,6 +263,23 @@ def answer_key(snaps: list[Snapshot]) -> dict[str, list]:
 # Phần III (Đúng/Sai)     → ng_sai_cu1..32, 4 per câu  ("Đ" / "S")
 # Phần IV (trả lời ngắn)  → the 6 signed-decimal fields, in sheet order; the OMR reads them
 #            with a "." decimal point ("-1.5"), so the key uses "." too.
+
+def grading_key(snaps: list[Snapshot], sheet) -> dict[str, str]:
+    """The answer key of a version in the grading labels of its answer sheet
+    (SheetLayout: trắc nghiệm, Đúng/Sai 4 per câu, trả lời ngắn field keys)."""
+    key = answer_key(snaps)
+    out: dict[str, str] = {}
+    for label, letter in zip(sheet.mcq, key["mcq"]):
+        if letter != "?":             # not known → not graded
+            out[label] = letter
+    for i, statements in enumerate(key["tf"]):
+        for j, v in enumerate(statements):
+            if i * 4 + j < len(sheet.tf):
+                out[sheet.tf[i * 4 + j]] = v
+    for label, value in zip(sheet.short, key["short"]):
+        out[label] = value.replace(",", ".")
+    return out
+
 
 def grading_key_mau40(snaps: list[Snapshot], short_labels: list[str]) -> dict[str, str]:
     key = answer_key(snaps)

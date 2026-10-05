@@ -336,29 +336,19 @@ function ImportModal({ category, onClose, onDone }: {
         {busy && !preview && <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>Đang đọc file…</div>}
       </div>
 
-      <details style={{ marginTop: 12, fontSize: 13, color: '#374151' }}>
-        <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Hướng dẫn định dạng file</summary>
-        <div style={{ marginTop: 8, lineHeight: 1.6 }}>
-          <b>File .txt (Aiken, xuất từ Moodle)</b> chỉ chứa câu trắc nghiệm:
-          <pre style={{ background: '#F9FAFB', padding: 8, borderRadius: 6, margin: '4px 0 10px', fontSize: 12 }}>
-{`Which is the fastest cache in a computer?
-A) L1
-B) L2
-C) L3
-D) L4
-ANSWER: A`}</pre>
-          <b>File Word .docx</b> có đủ 3 phần như phiếu trả lời (<a href="/samples/de-mau-3-phan.docx" download style={{ color: '#C8102E', fontWeight: 600 }}>tải file đề mẫu</a>):
-          <ul style={{ margin: '4px 0', paddingLeft: 18 }}>
-            <li>Dòng tiêu đề <b>PHẦN I-II</b> / <b>PHẦN III</b> / <b>PHẦN IV</b> chia loại câu, như trên phiếu (không có tiêu đề = trắc nghiệm). File đánh số kiểu Bộ GD (Phần I, II, III) vẫn đọc đúng</li>
-            <li>Câu hỏi bắt đầu bằng "Câu 1.", "Câu 2."… (hoặc "Question 1.")</li>
-            <li><b>Phần I-II, trắc nghiệm:</b> đáp án "A.", "B.", "C.", "D." (nhiều đáp án trên một dòng thì cách nhau bằng Tab). Đáp án đúng: <span style={{ color: '#E00' }}>tô đỏ</span> hoặc <u>gạch chân</u> chữ "A.", hoặc thêm dòng <code>Đáp án: B</code>. "#A." là giữ cố định vị trí đáp án đó khi trộn</li>
-            <li><b>Phần III, Đúng/Sai:</b> 4 ý "a)", "b)", "c)", "d)". Các ý <b>Đúng</b>: <span style={{ color: '#E00' }}>tô đỏ</span> hoặc <u>gạch chân</u>, hoặc thêm dòng <code>Đáp án: Đ S Đ S</code></li>
-            <li><b>Phần IV, trả lời ngắn:</b> thêm dòng <code>Đáp án: -1,5</code> (tối đa 4 ký tự: dấu -, chữ số, dấu phẩy)</li>
-            <li>Dòng &lt;g0&gt;/&lt;g1&gt; trước nhóm câu: không trộn đáp án; &lt;g2&gt;/&lt;g3&gt;: trộn đáp án</li>
-            <li>Công thức (MathType, Equation), hình ảnh: được giữ nguyên, hiện trên web và khi xuất Word, trộn đề. Bảng chưa hỗ trợ</li>
-          </ul>
-        </div>
-      </details>
+      {/* 2026-10-05 (anh Tú): "k cần hướng dẫn dài như vậy, cho người ta tải
+          file mẫu về (2 nút 2 mẫu) là đc" and ".txt với .word để cùng định
+          dạng" — both samples hold the same đề written the same way. */}
+      <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 13, color: '#374151' }}>
+        <span>Tải file mẫu rồi điền theo đúng cách viết trong file:</span>
+        {[{ href: '/samples/mau-de.docx', label: 'File mẫu Word (.docx)' }, { href: '/samples/mau-de.txt', label: 'File mẫu .txt' }].map(x => (
+          <a key={x.href} href={x.href} download
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 8,
+              border: '1.5px solid #C8102E', color: '#C8102E', fontWeight: 600, textDecoration: 'none', fontSize: 13 }}>
+            <Download size={14} /> {x.label}
+          </a>
+        ))}
+      </div>
 
       {preview && (
         <div style={{ marginTop: 14, fontSize: 14 }}>
@@ -396,7 +386,8 @@ ANSWER: A`}</pre>
 
 // ── Share modal ──────────────────────────────────────────────────────────────
 
-const PERMISSION_LABEL = { view: 'Chỉ xem', edit: 'Được sửa' } as const;
+// 2026-10-05 (anh Tú): "kp chỉ xem mà là 'Được sử dụng' và 'Được chỉnh sửa'"
+const PERMISSION_LABEL = { view: 'Được sử dụng', edit: 'Được chỉnh sửa' } as const;
 
 function ShareModal({ category, onClose }: { category: QuestionCategoryOut; onClose: () => void }) {
   const [shares, setShares] = useState<QuestionCategoryShareOut[] | null>(null);
@@ -431,16 +422,16 @@ function ShareModal({ category, onClose }: { category: QuestionCategoryOut; onCl
     <Modal open onClose={onClose} title={`Chia sẻ "${category.name}"`} width={560}
       footer={<Button variant="secondary" onClick={onClose}>Đóng</Button>}>
       <div style={{ fontSize: 13, color: '#6B7280', marginBottom: 12, lineHeight: 1.5 }}>
-        Người được chia sẻ thấy danh mục này trong ngân hàng của họ. <b>Chỉ xem</b>: xem, export, sao chép về ngân hàng riêng.
-        <b> Được sửa</b>: thêm, sửa, xóa, import câu hỏi. Chỉ bạn đổi tên, xóa hoặc chia sẻ được danh mục.
+        Người được chia sẻ thấy danh mục này trong ngân hàng của họ. <b>Được sử dụng</b>: xem, trộn đề, export, sao chép về ngân hàng riêng.
+        <b> Được chỉnh sửa</b>: như trên, và được thêm, sửa, xóa, import câu hỏi. Chỉ bạn đổi tên, xóa hoặc chia sẻ được danh mục.
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <input style={{ ...inputStyle, flex: '1 1 220px', width: 'auto' }} type="email" placeholder="Email giảng viên, vd: gv@vju.ac.vn"
           value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} />
         <select value={permission} onChange={e => setPermission(e.target.value as 'view' | 'edit')}
           style={{ ...inputStyle, width: 'auto' }}>
-          <option value="view">Chỉ xem</option>
-          <option value="edit">Được sửa</option>
+          <option value="view">{PERMISSION_LABEL.view}</option>
+          <option value="edit">{PERMISSION_LABEL.edit}</option>
         </select>
         <Button loading={busy} disabled={!email.trim()} onClick={add}>Chia sẻ</Button>
       </div>
@@ -459,8 +450,8 @@ function ShareModal({ category, onClose }: { category: QuestionCategoryOut; onCl
           </div>
           <select value={s.permission} onChange={e => update(s, e.target.value as 'view' | 'edit')}
             style={{ ...inputStyle, width: 'auto', padding: '5px 8px', fontSize: 13 }}>
-            <option value="view">Chỉ xem</option>
-            <option value="edit">Được sửa</option>
+            <option value="view">{PERMISSION_LABEL.view}</option>
+            <option value="edit">{PERMISSION_LABEL.edit}</option>
           </select>
           <button type="button" title="Bỏ chia sẻ" onClick={() => remove(s)}
             style={{ border: 'none', background: 'none', color: '#9CA3AF', cursor: 'pointer', padding: 4, display: 'flex' }}>
@@ -591,7 +582,7 @@ export default function QuestionBankPage() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <PageHeader
         title="Ngân hàng câu hỏi"
-        subtitle="Câu hỏi theo danh mục (trắc nghiệm, Đúng/Sai, trả lời ngắn). Import, export bằng Word hoặc .txt (Moodle)"
+        subtitle="Câu hỏi theo danh mục (trắc nghiệm, Đúng/Sai, trả lời ngắn). Import, export bằng Word hoặc .txt"
         actions={
           <Button size="sm" icon={<FolderPlus size={13} />} onClick={() => setCategoryModal({ initial: null })}>
             Thêm danh mục

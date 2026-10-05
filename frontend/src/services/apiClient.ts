@@ -450,7 +450,7 @@ export interface CustomFormDetail {
 export const customFormsApi = {
   /** DB ids of the shared "pinned" templates — they differ per database. */
   pinned: () =>
-    request<{ mau40: number | null }>('/api/v1/custom-forms/pinned'),
+    request<{ mau40: number | null; bgd?: number | null }>('/api/v1/custom-forms/pinned'),
 
   list: () =>
     request<{ forms: CustomFormMeta[] }>('/api/v1/custom-forms'),
@@ -659,6 +659,9 @@ export interface ExamPaperOut {
   /** false = đề chỉ để in: không chấm được bằng phiếu Mẫu 40, không gắn kỳ thi được */
   gradable:   boolean;
   sheet_problem: string | null;
+  /** answer sheet it is graded on (template id + name); null = chỉ in đề */
+  sheet?:      AnswerSheet | null;
+  sheet_name?: string | null;
   versions:   ExamPaperVersionOut[];
   created_at: string;
   updated_at: string;
@@ -672,8 +675,25 @@ export interface MixOptions {
   shuffle_questions: boolean;
   shuffle_options:   boolean;
   exam_id:           number | null;
-  /** true (mặc định) = chấm bằng phiếu Mẫu 40: tối đa 40/8/6 câu, 4 đáp án A–D */
+  /** true (mặc định) = chấm bằng phiếu: tối đa 40/8/6 câu, 4 đáp án A–D */
   for_sheet?:        boolean;
+  /** which answer sheet (when for_sheet): a template id from examPapersApi.sheets(); omitted = Mẫu 40 */
+  sheet?:            AnswerSheet;
+}
+
+/** An answer sheet a bộ đề can be graded on: the template id (2026-10-05: any
+ *  sheet in the system, not only Mẫu 40 / Phiếu Bộ GD). */
+export type AnswerSheet = number;
+
+/** What a bộ đề on that sheet may hold (read from the sheet's own answer fields). */
+export interface AnswerSheetSpec {
+  id:          number;
+  name:        string;
+  limits:      PartCounts;
+  /** most options a trắc nghiệm câu may have (4 = A–D) */
+  mcq_options: number;
+  /** digit columns of its Mã đề box; null = no Mã đề box (1 mã đề only) */
+  code_digits: number | null;
 }
 
 export interface ParsedFileInfo {
@@ -722,6 +742,7 @@ export const examPapersApi = {
     fd.append('shuffle_options', String(opts.shuffle_options));
     if (opts.exam_id != null) fd.append('exam_id', String(opts.exam_id));
     if (opts.for_sheet != null) fd.append('for_sheet', String(opts.for_sheet));
+    if (opts.sheet != null) fd.append('sheet', String(opts.sheet));
     if (opts.answers && Object.keys(opts.answers).length) fd.append('answers_json', JSON.stringify(opts.answers));
     const res = await requestRaw('/api/v1/exam-papers/from-file', { method: 'POST', body: fd });
     return (await rawOrThrow(res)).json();
@@ -733,8 +754,13 @@ export const examPapersApi = {
   delete: (id: number) =>
     request<void>(`/api/v1/exam-papers/${id}`, { method: 'DELETE' }),
   /** Answer key per mã đề for grading a kỳ thi (labels of the "Mẫu 40 câu" sheet). */
-  examAnswerKey: (examId: number) =>
-    request<{ byMaDe: Record<string, Record<string, string>>; papers: string[]; versions: string[] }>(`/api/v1/exam-papers/exam-answer-key/${examId}`),
+  /** sheet: only the bộ đề mixed for that answer sheet (omit = all of them). */
+  examAnswerKey: (examId: number, sheet?: AnswerSheet) =>
+    request<{ byMaDe: Record<string, Record<string, string>>; papers: string[]; versions: string[]; sheets?: AnswerSheet[];
+              sheetNames?: Record<string, string> }>(
+      `/api/v1/exam-papers/exam-answer-key/${examId}${sheet != null ? `?sheet=${sheet}` : ''}`),
+  /** Answer sheets a bộ đề can be mixed for: the shared ones, then the teacher's own. */
+  sheets: () => request<AnswerSheetSpec[]>('/api/v1/exam-papers/sheets'),
   download: async (path: string): Promise<Blob> => {
     const res = await requestRaw(`/api/v1/exam-papers/${path}`);
     return (await rawOrThrow(res)).blob();

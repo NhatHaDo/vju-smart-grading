@@ -18,17 +18,47 @@ import Button from '../components/common/Button';
 import Modal from '../components/modals/Modal';
 import PageHeader from '../components/layout/PageHeader';
 import { ApiError, examPapersApi, examsApi, questionBankApi } from '../services/apiClient';
-import type { ExamPaperOut, MixOptions, ParsedFileInfo, PartCounts, QuestionCategoryOut, QuestionType } from '../services/apiClient';
+import type { AnswerSheetSpec, ExamPaperOut, MixOptions, ParsedFileInfo, PartCounts, QuestionCategoryOut, QuestionType } from '../services/apiClient';
 import type { ExamOut } from '../types/exam';
 import { FileNote, LOSSY, UnansweredPicker } from '../components/common/UnansweredPicker';
 import { filesSignature, loadPicked, savePicked, useDraft } from '../services/draftStore';
 import { saveAs } from 'file-saver';
 
-const PARTS: { key: QuestionType; label: string; limit: number }[] = [
-  { key: 'mcq',   label: 'Phần I-II: Trắc nghiệm', limit: 40 },   // named as on the VJU sheet
-  { key: 'tf',    label: 'Phần III: Đúng/Sai',     limit: 8 },
-  { key: 'short', label: 'Phần IV: Trả lời ngắn',  limit: 6 },
+const PARTS: { key: QuestionType; label: string }[] = [
+  { key: 'mcq',   label: 'Phần I-II: Trắc nghiệm' },   // named as on the VJU sheet
+  { key: 'tf',    label: 'Phần III: Đúng/Sai' },
+  { key: 'short', label: 'Phần IV: Trả lời ngắn' },
 ];
+
+// ── Answer sheets (2026-10-05) ───────────────────────────────────────────────
+// "t muốn dropdown cái này … cái này có nhiều mẫu phiếu lắm mà": every sheet in
+// the system can be picked; how many câu each part may have, how many đáp án
+// a trắc nghiệm câu may have and how many digits the mã đề has all come from
+// the sheet (GET /exam-papers/sheets). Until the list arrives: Mẫu 40.
+
+const MAU40_SPEC: AnswerSheetSpec = {
+  id: 0, name: 'Phiếu Mẫu 40 câu (VJU)', limits: { mcq: 40, tf: 8, short: 6 }, mcq_options: 4, code_digits: 4,
+};
+let sheetsCache: AnswerSheetSpec[] | null = null;
+
+function useSheets(): AnswerSheetSpec[] {
+  const [list, setList] = useState<AnswerSheetSpec[]>(sheetsCache ?? []);
+  useEffect(() => {
+    let alive = true;
+    examPapersApi.sheets()
+      .then(r => { sheetsCache = r; if (alive) setList(r); })
+      .catch(() => { /* keep Mẫu 40 */ });
+    return () => { alive = false; };
+  }, []);
+  return list;
+}
+
+/** The chosen sheet's spec (the first one when the choice is gone). */
+function specOf(sheets: AnswerSheetSpec[], id: number | null): AnswerSheetSpec {
+  return sheets.find(s => s.id === id) ?? sheets[0] ?? MAU40_SPEC;
+}
+
+const LETTERS = 'ABCDEFGH';
 
 const inputStyle: React.CSSProperties = {
   width: '100%', boxSizing: 'border-box', border: '1.5px solid #D1D5DB', borderRadius: 8,
@@ -56,7 +86,8 @@ function safeName(s: string) {
 // ── Mã đề: "101" / "A" / "Đề 1" counting up, or a list "A, B, C, D" ────────
 // Mirrors exam_mixer.version_codes on the server (which has the last word).
 
-function versionCodes(spec: string, n: number, forSheet: boolean): { codes: string[]; error?: string } {
+function versionCodes(spec: string, n: number, forSheet: boolean,
+                      codeDigits: number | null = 4): { codes: string[]; error?: string } {
   const s = spec.trim();
   if (!s) return { codes: [], error: 'Nhập mã đề (vd 101, A, Đề 1, hoặc danh sách A, B, C, D)' };
   let codes: string[];
@@ -81,11 +112,18 @@ function versionCodes(spec: string, n: number, forSheet: boolean): { codes: stri
   if (bad) return { codes, error: `Mã đề "${bad}" không hợp lệ (tối đa 10 ký tự, chỉ gồm chữ, số, dấu cách, - _ .)` };
   if (new Set(codes.map(c => c.toLowerCase())).size !== codes.length) return { codes, error: 'Các mã đề bị trùng nhau' };
   if (forSheet) {
+    if (codeDigits == null) {      // the sheet has no Mã đề box
+      return codes.length > 1
+        ? { codes, error: 'Phiếu này không có ô Mã đề nên chỉ trộn được 1 mã đề. Chọn "Chỉ in đề" để in nhiều mã đề' }
+        : { codes };
+    }
     if (!codes.every(c => /^\d+$/.test(c))) {
       return { codes, error: 'Phiếu chỉ tô được mã đề là số. Chọn "Chỉ in đề" để dùng mã đề chữ' };
     }
-    const width = Math.min(Math.max(codes[0].length, 3), 4);
-    if (codes.some(c => c.length > width)) return { codes, error: 'Mã đề vượt quá số chữ số trên phiếu, hãy chọn mã đề nhỏ hơn' };
+    const width = Math.min(Math.max(codes[0].length, Math.min(3, codeDigits)), codeDigits);
+    if (codes.some(c => c.length > width)) {
+      return { codes, error: `Mã đề vượt quá số chữ số trên phiếu (tối đa ${codeDigits} chữ số), hãy chọn mã đề nhỏ hơn` };
+    }
   }
   return { codes };
 }
@@ -100,14 +138,14 @@ function randomCodes(n: number): string {
 /** "Số mã đề" + "Mã đề" (two grid cells). Mã đề: one code counting up
  *  ("101", "A", "Đề 1"), the teacher's own list ("132, 209, 357"), or a
  *  random list from the dice button. */
-function VersionCodeFields({ numVersions, setNumVersions, spec, setSpec, forSheet }: {
+function VersionCodeFields({ numVersions, setNumVersions, spec, setSpec, forSheet, codeDigits }: {
   numVersions: number; setNumVersions: (n: number) => void;
-  spec: string; setSpec: (s: string) => void; forSheet: boolean;
+  spec: string; setSpec: (s: string) => void; forSheet: boolean; codeDigits: number | null;
 }) {
   const [lastRandom, setLastRandom] = useState('');
   const isList = /[,;]/.test(spec);
   const isRandom = isList && spec === lastRandom;
-  const { codes, error } = versionCodes(spec, numVersions, forSheet);
+  const { codes, error } = versionCodes(spec, numVersions, forSheet, codeDigits);
   const roll = (n: number) => { const r = randomCodes(n); setLastRandom(r); setSpec(r); };
   return (
     <>
@@ -152,7 +190,7 @@ const parsedCache = new Map<string, ParsedFileInfo>();
 
 /** `draftKey`: keep the counts across page switches (useDraft). Picked
  *  answers are always kept per file (draftStore: savePicked). */
-function useFileCounts(files: File[], forSheet: boolean, draftKey?: string) {
+function useFileCounts(files: File[], forSheet: boolean, sheet: AnswerSheetSpec, draftKey?: string) {
   const filesKey = filesSignature(files);
   const picksKey = filesKey && `mix:${filesKey}`;
   const [raw, setRaw] = useState<ParsedFileInfo | null>(() => parsedCache.get(filesKey) ?? null);
@@ -185,29 +223,35 @@ function useFileCounts(files: File[], forSheet: boolean, draftKey?: string) {
   // picks survive a reload: choosing the same file again brings them back
   useEffect(() => { savePicked(picksKey, picked); }, [picked]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // A picked answer makes that question usable on the sheet too (≤ 4 options)
-  const pickedUsable = raw ? raw.unanswered.filter(u => picked[u.i] != null && u.options.length <= 4).length : 0;
+  // Trắc nghiệm usable on the sheet: an answer (in the file or picked here)
+  // and no more options than the sheet has bubbles
+  const maxOpts = sheet.mcq_options;
+  const mcqOnSheet = raw ? raw.mcq_all.filter(r => r.options.length <= maxOpts && (r.answer >= 0 || picked[r.i] != null)).length : 0;
   const info: ParsedFileInfo | null = raw && {
-    ...raw, available: { ...raw.available, mcq: raw.available.mcq + pickedUsable },
+    ...raw, available: { ...raw.available, mcq: mcqOnSheet }, limits: sheet.limits,
+    too_many_options: raw.mcq_all.filter(r => r.options.length > maxOpts).length,
+    too_many_options_list: raw.mcq_all.filter(r => r.options.length > maxOpts).map(r =>
+      `${r.where || 'Câu'} "${r.content.slice(0, 60)}${r.content.length > 60 ? '…' : ''}": ${r.options.length} đáp án`),
   };
 
   // Default: as many as the sheet holds, or every question for a đề chỉ để in
   const availKey = info ? `${info.available.mcq}/${info.available.tf}/${info.available.short}` : '';
+  const limitsKey = `${sheet.limits.mcq}/${sheet.limits.tf}/${sheet.limits.short}`;
   useEffect(() => {
     if (!info) return;
-    const basis = `${filesKey}#${availKey}#${forSheet}`;
+    const basis = `${filesKey}#${availKey}#${forSheet}#${limitsKey}`;
     if (basis === countsBasis) return;          // back on the page: keep what was typed
     setCountsBasis(basis);
     const pick = (qt: QuestionType) => forSheet ? Math.min(info.available[qt], info.limits[qt]) : info.available_all[qt];
     setCounts({ mcq: pick('mcq'), tf: pick('tf'), short: pick('short') });
-  }, [raw, availKey, forSheet]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [raw, availKey, forSheet, limitsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const maxOf = (p: typeof PARTS[number]) =>
-    !info ? 0 : forSheet ? Math.min(p.limit, info.available[p.key]) : info.available_all[p.key];
+    !info ? 0 : forSheet ? Math.min(sheet.limits[p.key], info.available[p.key]) : info.available_all[p.key];
   const tooMany = !!info && PARTS.some(p => counts[p.key] > maxOf(p));
   const empty = !!info && counts.mcq + counts.tf + counts.short === 0;
   const fileName = files.length === 1 ? files[0].name : files.length ? `${files.length} file` : '';
-  return { info, counts, setCounts, picked, setPicked, reading, readError, tooMany, empty, forSheet, maxOf, fileName };
+  return { info, counts, setCounts, picked, setPicked, reading, readError, tooMany, empty, forSheet, sheet, maxOf, fileName };
 }
 
 /** Trắc nghiệm questions the file doesn't mark an answer for: pick A/B/C/D
@@ -228,26 +272,43 @@ function partName(p: typeof PARTS[number], forSheet: boolean) {
   return forSheet ? `${part} (${p.key === 'tf' ? kind : kind.toLowerCase()})` : kind;
 }
 
-/** Chấm bằng phiếu Mẫu 40 / chỉ in đề — two-way switch. */
-function ForSheetToggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
-  const opt = (v: boolean, label: string) => (
-    <button type="button" onClick={() => onChange(v)}
-      style={{ flex: 1, border: 'none', borderRadius: 8, padding: '7px 10px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-        fontFamily: 'inherit', background: value === v ? '#fff' : 'transparent', color: value === v ? '#C8102E' : '#6B7280',
-        boxShadow: value === v ? '0 1px 3px rgba(0,0,0,0.12)' : 'none' }}>
-      {label}
-    </button>
-  );
+/** What the chosen sheet holds, in words: "40 trắc nghiệm (A–D), 8 Đúng/Sai, 6 trả lời ngắn, mã đề 3 chữ số". */
+function sheetSummary(sp: AnswerSheetSpec): string {
+  const parts = [
+    sp.limits.mcq ? `${sp.limits.mcq} trắc nghiệm (A–${LETTERS[sp.mcq_options - 1] ?? 'D'})` : '',
+    sp.limits.tf ? `${sp.limits.tf} Đúng/Sai` : '',
+    sp.limits.short ? `${sp.limits.short} trả lời ngắn` : '',
+  ].filter(Boolean);
+  return `Tối đa ${parts.join(', ')}, ${sp.code_digits == null ? 'không có ô mã đề (1 mã đề)' : `mã đề tối đa ${sp.code_digits} chữ số`}`;
+}
+
+/** Which sheet the bộ đề is graded on, or chỉ in đề.
+ *  2026-10-05 (anh Tú): "cái này a chỉ chọn đc mỗi mẫu phiếu 40 câu thôi à";
+ *  then "t muốn dropdown cái này … có nhiều mẫu phiếu lắm mà" — one dropdown
+ *  with every sheet in the system (shared ones first, then the teacher's own). */
+function SheetSelect({ forSheet, onForSheet, sheet, onSheet, sheets }: {
+  forSheet: boolean; onForSheet: (v: boolean) => void;
+  sheet: AnswerSheetSpec; onSheet: (id: number) => void; sheets: AnswerSheetSpec[];
+}) {
+  const list = sheets.length ? sheets : [MAU40_SPEC];
   return (
     <div style={{ margin: '0 0 14px' }}>
-      <div style={{ display: 'flex', gap: 4, background: '#F3F4F6', borderRadius: 10, padding: 3 }}>
-        {opt(true, 'Chấm bằng phiếu Mẫu 40 câu trắc nghiệm')}
-        {opt(false, 'Chỉ in đề')}
-      </div>
-      <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 5 }}>
-        {value ? 'Tối đa 40 trắc nghiệm, 8 Đúng/Sai, 6 trả lời ngắn. Gắn được vào kỳ thi để chấm tự động.'
-               : 'Không giới hạn số câu, tối đa 8 đáp án mỗi câu. Chấm tay hoặc dùng phiếu khác.'}
-      </div>
+      <label style={labelStyle}>Phiếu trả lời</label>
+      <select value={forSheet ? String(sheet.id) : 'print'}
+        onChange={e => {
+          if (e.target.value === 'print') { onForSheet(false); return; }
+          onForSheet(true);
+          onSheet(Number(e.target.value));
+        }}
+        style={{ ...inputStyle, marginTop: 6, fontWeight: 600, color: '#1F2937' }}>
+        {list.map(sp => <option key={sp.id} value={String(sp.id)}>Chấm bằng {sp.name}</option>)}
+        <option value="print">Chỉ in đề (không chấm bằng phiếu)</option>
+      </select>
+      {!forSheet && (
+        <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 5 }}>
+          Không giới hạn số câu, tối đa 8 đáp án mỗi câu. Chấm tay hoặc dùng phiếu khác.
+        </div>
+      )}
     </div>
   );
 }
@@ -258,7 +319,7 @@ function addFiles(prev: File[], list: FileList | File[] | null | undefined): { f
   const ok = picked.filter(f => /\.(docx|txt)$/i.test(f.name));
   const seen = new Set(prev.map(f => `${f.name}/${f.size}`));
   const files = [...prev, ...ok.filter(f => !seen.has(`${f.name}/${f.size}`))];
-  return { files, error: ok.length < picked.length ? 'Chỉ nhận file Word .docx hoặc .txt (Moodle)' : '' };
+  return { files, error: ok.length < picked.length ? 'Chỉ nhận file Word .docx hoặc .txt' : '' };
 }
 
 /** The chosen file(s): each removable, plus "Thêm file" to pool more. */
@@ -282,9 +343,9 @@ function FileList({ files, onRemove, onAdd }: { files: File[]; onRemove: (i: num
             cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}>
           <Plus size={14} /> Thêm file
         </button>
-        <span style={{ fontSize: 12, color: '#9CA3AF' }}>
-          {files.length > 1 ? `Câu hỏi của ${files.length} file được gộp thành một đề` : 'Chọn thêm file để gộp câu hỏi (vd mỗi chương 1 file)'}
-        </span>
+        {files.length > 1 && (
+          <span style={{ fontSize: 12, color: '#9CA3AF' }}>Câu hỏi của {files.length} file được gộp thành một đề</span>
+        )}
       </div>
     </div>
   );
@@ -293,24 +354,26 @@ function FileList({ files, onRemove, onAdd }: { files: File[]; onRemove: (i: num
 /** "Số câu" inputs, one per kind of question the source actually has
  *  (a trắc nghiệm-only bank shows just one "Số câu" box). `available` = all
  *  questions there; `limitAvailable` = those usable on the sheet. */
-function PartCountInputs({ forSheet, counts, setCounts, available, limitAvailable }: {
+function PartCountInputs({ forSheet, limits, counts, setCounts, available, limitAvailable }: {
   forSheet: boolean;
+  limits: PartCounts;
   counts: PartCounts;
   setCounts: React.Dispatch<React.SetStateAction<PartCounts>>;
   available: PartCounts;
   limitAvailable: PartCounts;
 }) {
-  // Chấm bằng phiếu: always the sheet's 3 parts (Phần I-II / III / IV), even
+  // Chấm bằng phiếu: every part the sheet has (Phần I-II / III / IV), even
   // an empty one — that's how the sheet is laid out. Chỉ in đề: only the
   // kinds the source has, and a single "Số câu" box when there's one kind.
-  const parts = forSheet ? PARTS : PARTS.filter(p => available[p.key] > 0);
+  const parts = forSheet ? PARTS.filter(p => limits[p.key] > 0) : PARTS.filter(p => available[p.key] > 0);
   if (parts.length === 0) return <div style={{ fontSize: 13, color: '#9CA3AF' }}>Chưa có câu hỏi nào.</div>;
   const single = !forSheet && parts.length === 1;
   return (
     <div style={single ? {} : { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
       {parts.map(p => {
         const avail = forSheet ? limitAvailable[p.key] : available[p.key];
-        const max = forSheet ? Math.min(p.limit, avail) : avail;
+        const limit = limits[p.key];
+        const max = forSheet ? Math.min(limit, avail) : avail;
         const over = counts[p.key] > max;
         return (
           <div key={p.key}>
@@ -322,13 +385,7 @@ function PartCountInputs({ forSheet, counts, setCounts, available, limitAvailabl
                   background: max === 0 ? '#F9FAFB' : '#fff' }} />
               <span style={{ fontSize: 13, color: over ? '#C8102E' : '#6B7280', whiteSpace: 'nowrap' }}>/ {avail} câu</span>
             </div>
-            {(over || (forSheet && avail > p.limit) || (counts[p.key] > 0 && counts[p.key] < avail)) && (
-              <div style={{ fontSize: 11.5, color: over ? '#C8102E' : '#9CA3AF', marginTop: 3 }}>
-                {[forSheet && avail > p.limit ? `phiếu tối đa ${p.limit}` : '',
-                  !over && counts[p.key] > 0 && counts[p.key] < avail ? 'lấy ngẫu nhiên' : '',
-                  over ? `tối đa ${max}` : ''].filter(Boolean).join(', ')}
-              </div>
-            )}
+            {over && <div style={{ fontSize: 11.5, color: '#C8102E', marginTop: 3 }}>tối đa {max}</div>}
           </div>
         );
       })}
@@ -337,7 +394,7 @@ function PartCountInputs({ forSheet, counts, setCounts, available, limitAvailabl
 }
 
 function FileCountsPicker({ fc }: { fc: ReturnType<typeof useFileCounts> }) {
-  const { info, counts, setCounts, reading, readError, forSheet } = fc;
+  const { info, counts, setCounts, reading, readError, forSheet, sheet } = fc;
   if (reading) return <div style={{ fontSize: 13, color: '#6B7280', margin: '0 0 14px' }}>Đang đọc file…</div>;
   if (readError) return <div style={{ fontSize: 13, color: '#C8102E', margin: '0 0 14px' }}>⚠ {readError}</div>;
   if (!info) return null;
@@ -353,20 +410,15 @@ function FileCountsPicker({ fc }: { fc: ReturnType<typeof useFileCounts> }) {
         <span>Tổng số câu: <b>{read + duplicates.length + unreadable.length}</b></span>
         {duplicates.length > 0 && <span style={{ color: '#6B7280' }}>Câu bị trùng: <b>{duplicates.length}</b></span>}
         {unreadable.length > 0 && <span style={{ color: '#B45309' }}>Câu không đọc được: <b>{unreadable.length}</b></span>}
-        {tooManyOpts.length > 0 && <span style={{ color: '#B45309' }}>Câu có hơn 4 đáp án: <b>{tooManyOpts.length}</b></span>}
+        {tooManyOpts.length > 0 && <span style={{ color: '#B45309' }}>Câu có hơn {sheet.mcq_options} đáp án: <b>{tooManyOpts.length}</b></span>}
       </div>
-      {info.keeps_format && (
-        <div style={{ fontSize: 12.5, color: '#15803D', margin: '0 0 10px' }}>
-          ✓ Giữ nguyên định dạng Word của file gốc: công thức, hình ảnh, bảng.
-        </div>
-      )}
       <FilePicker fc={fc} />
-      <PartCountInputs forSheet={forSheet} counts={counts} setCounts={setCounts}
+      <PartCountInputs forSheet={forSheet} limits={sheet.limits} counts={counts} setCounts={setCounts}
         available={info.available_all} limitAvailable={info.available} />
       <FileNote groups={[
         { title: 'câu bị trùng, bỏ qua để không ra 2 lần trong một mã đề', items: duplicates },
         { title: 'câu không đọc được, bị bỏ qua', items: unreadable },
-        { title: 'câu có hơn 4 đáp án, bị bỏ (chọn "Chỉ in đề" để giữ lại)', items: tooManyOpts },
+        { title: `câu có hơn ${sheet.mcq_options} đáp án, bị bỏ (chọn "Chỉ in đề" để giữ lại)`, items: tooManyOpts },
         { title: 'câu có bảng hoặc hình không đọc được, phần đó sẽ bị mất', items: info.warnings.filter(w => LOSSY.test(w)) },
       ]} />
       {info.formula_note && <div style={{ fontSize: 12.5, color: '#6B7280', marginTop: 8 }}>{info.formula_note}.</div>}
@@ -394,9 +446,12 @@ function CreateModal({ exams, onClose, onCreated }: {
   const [shuffleOptions, setShuffleOptions] = useState(true);
   const [examId, setExamId] = useState<number | null>(null);
   const [forSheet, setForSheet] = useState(true);
+  const [sheetId, setSheetId] = useState<number | null>(null);
+  const sheets = useSheets();
+  const sheet = specOf(sheets, sheetId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const fc = useFileCounts(source === 'file' ? files : [], forSheet);
+  const fc = useFileCounts(source === 'file' ? files : [], forSheet, sheet);
 
   useEffect(() => {
     questionBankApi.listCategories().then(setCategories).catch(e => setError(errMsg(e)));
@@ -411,9 +466,9 @@ function CreateModal({ exams, onClose, onCreated }: {
 
   // Fill the counts in for the teacher whenever the ticked categories (or the
   // sheet/print choice) change: as many as the sheet holds, or all of them.
-  const availableKey = `${available.mcq}/${available.tf}/${available.short}/${forSheet}`;
+  const availableKey = `${available.mcq}/${available.tf}/${available.short}/${forSheet}/${sheet.id}`;
   useEffect(() => {
-    const pick = (p: typeof PARTS[number]) => forSheet ? Math.min(p.limit, available[p.key]) : available[p.key];
+    const pick = (p: typeof PARTS[number]) => forSheet ? Math.min(sheet.limits[p.key], available[p.key]) : available[p.key];
     setCounts({ mcq: pick(PARTS[0]), tf: pick(PARTS[1]), short: pick(PARTS[2]) });
   }, [availableKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -426,11 +481,11 @@ function CreateModal({ exams, onClose, onCreated }: {
   const submit = async () => {
     setError('');
     if (!name.trim()) { setError('Nhập tên bộ đề'); return; }
-    const codeErr = versionCodes(startCode, numVersions, forSheet).error;
+    const codeErr = versionCodes(startCode, numVersions, forSheet, sheet.code_digits).error;
     if (codeErr) { setError(codeErr); return; }
     const opts: MixOptions = { name: name.trim(), num_versions: numVersions, start_code: startCode.trim(),
       shuffle_questions: shuffleQuestions, shuffle_options: shuffleOptions,
-      exam_id: forSheet ? examId : null, for_sheet: forSheet };
+      exam_id: forSheet ? examId : null, for_sheet: forSheet, sheet: sheet.id || undefined };
     setBusy(true);
     try {
       let paper: ExamPaperOut;
@@ -471,7 +526,7 @@ function CreateModal({ exams, onClose, onCreated }: {
         {tab('bank', 'Từ ngân hàng câu hỏi')}
         {tab('file', 'Từ file đề')}
       </div>
-      <ForSheetToggle value={forSheet} onChange={setForSheet} />
+      <SheetSelect forSheet={forSheet} onForSheet={setForSheet} sheet={sheet} onSheet={setSheetId} sheets={sheets} />
 
       <label style={labelStyle}>Tên bộ đề</label>
       <input autoFocus style={{ ...inputStyle, margin: '6px 0 14px' }} value={name} onChange={e => setName(e.target.value)}
@@ -498,7 +553,7 @@ function CreateModal({ exams, onClose, onCreated }: {
           <div style={{ fontSize: 13, color: '#9CA3AF', marginBottom: 14 }}>Tick danh mục ở trên để chọn số câu.</div>
         ) : (
           <div style={{ marginBottom: 14 }}>
-            <PartCountInputs forSheet={forSheet} counts={counts} setCounts={setCounts}
+            <PartCountInputs forSheet={forSheet} limits={sheet.limits} counts={counts} setCounts={setCounts}
               available={available} limitAvailable={available} />
           </div>
         )}
@@ -510,7 +565,7 @@ function CreateModal({ exams, onClose, onCreated }: {
             style={{ border: '2px dashed #FECACA', background: '#FFF9F9', borderRadius: 12, padding: '18px 16px',
               textAlign: 'center', cursor: 'pointer', marginBottom: 8 }}>
             <FileUp size={20} color="#C8102E" />
-            <div style={{ fontSize: 14, fontWeight: 600, marginTop: 4 }}>Chọn file đề .docx hoặc .txt (Moodle), được chọn nhiều file</div>
+            <div style={{ fontSize: 14, fontWeight: 600, marginTop: 4 }}>Chọn file đề .docx hoặc .txt, được chọn nhiều file</div>
           </div>
         ) : (
           <FileList files={files} onRemove={i => setFiles(prev => prev.filter((_, k) => k !== i))} onAdd={() => fileRef.current?.click()} />
@@ -524,7 +579,7 @@ function CreateModal({ exams, onClose, onCreated }: {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10, marginBottom: 12 }}>
         <VersionCodeFields numVersions={numVersions} setNumVersions={setNumVersions}
-          spec={startCode} setSpec={setStartCode} forSheet={forSheet} />
+          spec={startCode} setSpec={setStartCode} forSheet={forSheet} codeDigits={sheet.code_digits} />
         <div>
           <label style={labelStyle}>Gắn vào kỳ thi</label>
           <select value={forSheet ? examId ?? '' : ''} disabled={!forSheet} onChange={e => setExamId(e.target.value ? Number(e.target.value) : null)}
@@ -571,6 +626,17 @@ function PaperCard({ paper, exams, onChanged, onDeleted, onError }: {
   const sourceText = paper.source === 'bank'
     ? `Ngân hàng: ${(settings.category_names ?? []).join(', ') || 'không rõ'}`
     : `File: ${settings.file_name ?? 'không rõ'}`;
+  // 2026-10-05: "mấy cái này làm sao cho gọn và rõ ràng": one tag per fact,
+  // parts with 0 câu left out, the source on its own line (cut if long)
+  const created = new Date(paper.created_at);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const tags = [
+    ...PARTS.filter(p => paper.counts[p.key] > 0)
+      .map(p => `${paper.counts[p.key]} ${p.key === 'mcq' ? 'trắc nghiệm' : p.key === 'tf' ? 'Đúng/Sai' : 'trả lời ngắn'}`),
+    `${paper.versions.length} mã đề`,
+    paper.gradable && paper.sheet_name ? `Chấm bằng ${paper.sheet_name}` : 'Chỉ in đề',
+    `Tạo ${pad(created.getDate())}/${pad(created.getMonth() + 1)}/${created.getFullYear()} ${pad(created.getHours())}:${pad(created.getMinutes())}`,
+  ];
   const inExamCount = paper.versions.filter(v => v.in_exam).length;
 
   return (
@@ -585,9 +651,15 @@ function PaperCard({ paper, exams, onChanged, onDeleted, onError }: {
                   borderRadius: 6, padding: '2px 7px', verticalAlign: 'middle' }}>Giữ định dạng Word</span>
             )}
           </div>
-          <div style={{ fontSize: 12.5, color: '#6B7280', marginTop: 2 }}>
-            {sourceText} · {paper.counts.mcq} TN · {paper.counts.tf} Đ/S · {paper.counts.short} TLN ·{' '}
-            {paper.versions.length} mã đề · tạo {new Date(paper.created_at).toLocaleString('vi-VN', { hour12: false })}
+          <div title={sourceText}
+            style={{ fontSize: 12.5, color: '#6B7280', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {sourceText}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+            {tags.map(t => (
+              <span key={t} style={{ fontSize: 12, fontWeight: 600, color: '#374151', background: '#F3F4F6',
+                borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>{t}</span>
+            ))}
           </div>
         </div>
         <Button size="sm" icon={<Download size={13} />} loading={busy === 'zip'}
@@ -603,7 +675,7 @@ function PaperCard({ paper, exams, onChanged, onDeleted, onError }: {
         <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Kỳ thi:</span>
         {!paper.gradable && paper.exam_id == null ? (
           <span style={{ fontSize: 12.5, color: '#92400E', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 8, padding: '4px 10px' }}>
-            Đề chỉ để in, không chấm được bằng phiếu Mẫu 40 câu trắc nghiệm{paper.sheet_problem ? ` (${paper.sheet_problem})` : ''}
+            Đề chỉ để in, không chấm được bằng phiếu{paper.sheet_problem ? ` (${paper.sheet_problem})` : ''}
           </span>
         ) : (
         <select value={paper.exam_id ?? ''} disabled={busy === 'exam'}
@@ -690,6 +762,8 @@ function PaperCard({ paper, exams, onChanged, onDeleted, onError }: {
 // Khác YoungMix: bộ đề được lưu lại để gắn vào kỳ thi và chấm theo mã đề.
 
 const SAMPLES: { file: string; label: string; hint: string }[] = [
+  { file: 'mau-de.docx',                  label: 'Đề mẫu Word (.docx)', hint: 'Đủ 3 phần như phiếu trả lời, viết đáp án bằng dòng "Đáp án:"' },
+  { file: 'mau-de.txt',                   label: 'Đề mẫu .txt', hint: 'Cùng nội dung, cùng cách viết với đề mẫu Word' },
   { file: 'de-trac-nghiem-don-gian.docx', label: 'Đề trắc nghiệm đơn giản', hint: '10 câu A–D, dùng được cả khi chấm bằng phiếu lẫn chỉ in' },
   { file: 'de-chuan-mau-40.docx',         label: 'Khung đề chuẩn phiếu Mẫu 40 câu trắc nghiệm', hint: 'Đủ 40 trắc nghiệm, 8 Đúng/Sai, 6 trả lời ngắn, chỉ việc thay nội dung' },
   { file: 'de-mau-trac-nghiem-nhom.docx', label: 'Đề có nhóm câu hỏi', hint: 'Phần nghe đứng yên, đoạn đọc hiểu giữ thứ tự câu' },
@@ -732,9 +806,12 @@ function QuickMix({ exams, onCreated }: {
   const [shuffleOptions, setShuffleOptions] = useDraft('quickmix.shuffleOptions', true);
   const [examId, setExamId] = useDraft<number | null>('quickmix.examId', null);
   const [forSheet, setForSheet] = useDraft('quickmix.forSheet', true);
+  const [sheetId, setSheetId] = useDraft<number | null>('quickmix.sheetId', null);
+  const sheets = useSheets();
+  const sheet = specOf(sheets, sheetId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const fc = useFileCounts(files, forSheet, 'quickmix');
+  const fc = useFileCounts(files, forSheet, sheet, 'quickmix');
 
   const autoName = (fs: File[]) =>
     fs.length === 0 ? '' : fs.length === 1 ? fs[0].name.replace(/\.(docx|txt)$/i, '') : `Đề gộp ${fs.length} file`;
@@ -760,7 +837,7 @@ function QuickMix({ exams, onCreated }: {
     if (files.length === 0) return;
     setError('');
     if (!name.trim()) { setError('Nhập tên bộ đề'); return; }
-    const codeErr = versionCodes(startCode, numVersions, forSheet).error;
+    const codeErr = versionCodes(startCode, numVersions, forSheet, sheet.code_digits).error;
     if (codeErr) { setError(codeErr); return; }
     if (!fc.info) { setError(fc.readError || 'Đang đọc file, đợi chút'); return; }
     if (fc.empty) { setError('Nhập số câu cho ít nhất 1 phần'); return; }
@@ -770,7 +847,7 @@ function QuickMix({ exams, onCreated }: {
       const paper = await examPapersApi.fromFile(files, {
         name: name.trim(), num_versions: numVersions, start_code: startCode.trim(),
         shuffle_questions: shuffleQuestions, shuffle_options: shuffleOptions,
-        exam_id: forSheet ? examId : null, for_sheet: forSheet, counts: fc.counts, answers: fc.picked,
+        exam_id: forSheet ? examId : null, for_sheet: forSheet, sheet: sheet.id || undefined, counts: fc.counts, answers: fc.picked,
       });
       saveBlob(await examPapersApi.download(`${paper.id}/zip`), `${safeName(paper.name)}.zip`);
       onCreated(paper);
@@ -800,7 +877,7 @@ function QuickMix({ exams, onCreated }: {
           >
             <FileText size={34} color={dragging ? '#C8102E' : '#FCA5A5'} style={{ margin: '0 auto 8px' }} />
             <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 15, color: '#374151' }}>Kéo thả file đề vào đây</p>
-            <p style={{ margin: '0 0 12px', fontSize: 13, color: '#9CA3AF' }}>Word .docx hoặc Moodle .txt, được chọn nhiều file</p>
+            <p style={{ margin: '0 0 12px', fontSize: 13, color: '#9CA3AF' }}>Word .docx hoặc .txt, được chọn nhiều file</p>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1.5px solid #C8102E', borderRadius: 9999,
               padding: '6px 16px', fontSize: 12.5, fontWeight: 700, color: '#fff', background: '#C8102E' }}>
               <FileUp size={13} /> Chọn file
@@ -809,7 +886,7 @@ function QuickMix({ exams, onCreated }: {
         ) : (
           <>
             <FileList files={files} onRemove={i => setChosen(files.filter((_, k) => k !== i))} onAdd={() => fileRef.current?.click()} />
-            <ForSheetToggle value={forSheet} onChange={setForSheet} />
+            <SheetSelect forSheet={forSheet} onForSheet={setForSheet} sheet={sheet} onSheet={setSheetId} sheets={sheets} />
             <FileCountsPicker fc={fc} />
             <div style={{ marginBottom: 12 }}>
               <label style={labelStyle}>Tên bộ đề</label>
@@ -817,7 +894,7 @@ function QuickMix({ exams, onCreated }: {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
               <VersionCodeFields numVersions={numVersions} setNumVersions={setNumVersions}
-                spec={startCode} setSpec={setStartCode} forSheet={forSheet} />
+                spec={startCode} setSpec={setStartCode} forSheet={forSheet} codeDigits={sheet.code_digits} />
               {forSheet && (
                 <div>
                   <label style={labelStyle}>Gắn vào kỳ thi</label>
@@ -882,12 +959,12 @@ function QuickMix({ exams, onCreated }: {
 
         {forSheet && (
           <div style={{ border: '1px solid #FECACA', background: '#FFF9F9', borderRadius: 10, padding: '10px 12px', marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>Khi chấm bằng phiếu Mẫu 40 câu trắc nghiệm</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>Khi chấm bằng {sheet.name}</div>
             <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 13, color: '#374151', lineHeight: 1.7, listStyle: 'disc' }}>
-              <li>Tối đa 40 trắc nghiệm, 8 Đúng/Sai, 6 trả lời ngắn</li>
-              <li>Mỗi câu trắc nghiệm tối đa 4 đáp án A–D</li>
-              <li>Trả lời ngắn tối đa 4 ký tự (vd <span style={code}>-1,5</span>)</li>
-              <li>Mã đề là số (vd 101), tối đa 4 chữ số</li>
+              <li>{sheetSummary(sheet).replace(/, (mã đề|không có ô).*$/, '')}</li>
+              <li>Mỗi câu trắc nghiệm tối đa {sheet.mcq_options} đáp án A–{LETTERS[sheet.mcq_options - 1] ?? 'D'}</li>
+              {sheet.limits.short > 0 && <li>Trả lời ngắn tối đa 4 ký tự (vd <span style={code}>-1,5</span>)</li>}
+              <li>{sheet.code_digits == null ? 'Phiếu không có ô mã đề: chỉ trộn được 1 mã đề' : `Mã đề là số (vd 101), tối đa ${sheet.code_digits} chữ số`}</li>
             </ul>
           </div>
         )}

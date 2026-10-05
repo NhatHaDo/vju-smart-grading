@@ -172,6 +172,37 @@ def parse_aiken(text: str) -> tuple[list[ParsedQuestion], list[str]]:
     return questions, warnings
 
 
+# ── .txt viết giống Word (2026-10-05) ──────────────────────────────────────
+# anh Tú: ".txt với .word để cùng định dạng" — a .txt đề may now be written
+# exactly like the Word one (PHẦN I-II/III/IV, "Câu 1.", "A.", "Đáp án: B",
+# "Đáp án: Đ S Đ S", <g0>…): each line becomes one Word paragraph and the
+# Word reader does the rest, so both files follow the very same rules. A
+# Moodle export (Aiken, with "ANSWER:" lines) is still read as before.
+
+def decode_text(data: bytes) -> str:
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return data.decode("cp1258", errors="replace")
+
+
+def _txt_to_docx(text: str) -> bytes:
+    from docx import Document
+    doc = Document()
+    for line in text.lstrip("\ufeff").splitlines():
+        doc.add_paragraph(line.rstrip())
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def parse_txt(text: str, allow_unanswered: bool = False) -> tuple[list[ParsedQuestion], list[str]]:
+    """A .txt đề: Aiken (Moodle) when it has ANSWER: lines, else the Word layout."""
+    if any(_AIKEN_ANSWER.match(line.strip()) for line in text.splitlines()):
+        return parse_aiken(text)
+    return parse_docx(_txt_to_docx(text), allow_unanswered)
+
+
 def apply_picked_answers(questions: list[ParsedQuestion], answers_json: str | None) -> None:
     """Đáp án the teacher picked on the page for trắc nghiệm with none marked
     in the file: answers_json = {"<index in questions>": option}. Bad keys or

@@ -30,6 +30,8 @@ import {
   loadLastUsedTemplate,
   type TemplateStoreKey,
   templateStoreKeyFor,
+  loadExamAnswerKey,
+  saveExamAnswerKey,
   loadAnswerKeyDraft,
   saveAnswerKeyDraft,
   clearAnswerKeyDraft,
@@ -37,7 +39,6 @@ import {
   PINNED_TEMPLATE_40_ID,
   VJU_SBD4_PREVIEW_IMAGE,
   VJU_SBD8_PREVIEW_IMAGE,
-  PINNED_TEMPLATE_40_PREVIEW_IMAGE,
   loadAnswerKeyLibrary,
   addToAnswerKeyLibrary,
   upsertAutoLibraryEntry,
@@ -262,7 +263,10 @@ export default function AnswerKeyPage() {
     return null;
   }
 
-  const existing = isGradingMode ? loadAnswerKey() : loadStoreForKey(directTemplateKey);
+  // grading: this kỳ thi + mẫu phiếu's own key (empty for a new one), not
+  // whatever was saved last for another exam — see loadExamAnswerKey
+  const gradingSlotKey = templateStoreKeyFor(templateMode, customTemplateId);
+  const existing = isGradingMode ? loadExamAnswerKey(examId, gradingSlotKey) : loadStoreForKey(directTemplateKey);
   const canSplitByMaDe = schemaHasMaDe(templateSchema);
 
   const [answers,   setAnswers]   = useState<Record<string, string>>(() => existing?.answers ?? {});
@@ -320,20 +324,37 @@ export default function AnswerKeyPage() {
     setPaperKey({ papers: k.papers, versions: k.versions });
   };
   const leavePaperKey = () => {
-    if (!confirm('Không dùng đáp án tự động của bộ đề cho lần chấm này?\n\n'
-      + 'Đáp án bộ đề vẫn để trên màn hình để bạn sửa, hoặc nạp đáp án khác từ Thư viện / Import Excel. '
+    if (!confirm('Không dùng đáp án tự động của bộ đề cho kỳ thi này?\n\n'
+      + (existing?.ownKey
+        ? 'Đáp án đã lưu riêng cho kỳ thi này sẽ được mở lại. '
+        : 'Đáp án bộ đề vẫn để trên màn hình để bạn sửa, hoặc nạp đáp án khác từ Thư viện / Import Excel. ')
       + 'Bộ đề ở trang Trộn đề không bị thay đổi; bấm "Dùng lại đáp án bộ đề" để quay lại.')) return;
+    if (existing?.ownKey) {
+      // back to this kỳ thi's own saved answers (e.g. the 101/102 imported earlier)
+      const own = existing.byMaDe ?? {};
+      setMultiMaDe(isMultiMaDe(existing));
+      setMaDeCodes(Object.keys(own));
+      setActiveMaDe(Object.keys(own)[0] ?? '');
+      setAnswersByMaDe(Object.fromEntries(Object.entries(own).map(([c, set]) => [c, { ...set.answers }])));
+      setAnswers(existing.answers ?? {});
+    }
     setPaperKey(null);
     setSavedAt(null);
   };
+  // 2026-10-05: "sao cái đáp án mã đề … bị fix cứng vậy": a kỳ thi's bộ đề
+  // trộn was locking the đáp án whatever sheet was graded. Now only the bộ đề
+  // mixed for THIS sheet count (Mẫu 40 câu ↔ Phiếu Bộ GD ↔ any other sheet), and a kỳ thi saved
+  // with "Dùng đáp án khác" opens on its own answers (the bộ đề stays one
+  // click away under "Dùng lại đáp án bộ đề").
   useEffect(() => {
     if (!isGradingMode || examId == null) return;
-    if (templateMode !== 'custom' || customTemplateId !== PINNED_TEMPLATE_40_ID) return;
-    examPapersApi.examAnswerKey(examId)
+    if (templateMode !== 'custom' || customTemplateId == null) return;
+    // any sheet: the bộ đề mixed for the template being graded
+    examPapersApi.examAnswerKey(examId, customTemplateId)
       .then(k => {
         if (k.versions.length === 0) return;
         setPaperFetched(k);
-        applyPaperKey(k);
+        if (!existing?.ownKey) applyPaperKey(k);
       })
       .catch(() => { /* no bộ đề → normal manual answer key */ });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -617,6 +638,7 @@ export default function AnswerKeyPage() {
     // Also keep this template's own draft in sync, so switching away and
     // back via the dropdown shows the just-saved answers, not a stale draft.
     if (!isGradingMode) saveAnswerKeyDraft(directTemplateKey, store);
+    else saveExamAnswerKey(examId, gradingSlotKey, { ...store, ownKey: !paperLocked && paperFetched != null });
     setSavedAt(store.updatedAt);
     setSaveFlash(true);
     setTimeout(() => setSaveFlash(false), 2000);
@@ -655,33 +677,93 @@ export default function AnswerKeyPage() {
     saveAs(new Blob([buf], { type: 'application/octet-stream' }), 'vju_answer_key_mau.xlsx');
   };
 
+  // 2026-10-05: "t import excel 101 vào mà … nó ko đổi theo cái t import
+  // vào" / "t import thêm cái khác nó phải tự thêm cái khác chứ": a file
+  // holding ONE đề's answers used to land in whichever tab happened to be
+  // open. Now the mã đề is read from the file name ("Dap_an_Ma_de_101.xlsx",
+  // "de 102.xlsx" …), asked when the name has none, and the answers go to
+  // that tab: a new mã đề is ADDED next to the others, an existing one is
+  // replaced (and the message says so). Several files can be picked at once.
+  // A file with "Đề 101", "Đề 102" sheets (this page's own multi-đề export)
+  // still replaces the whole set.
+  const maDeFromFileName = (name: string): string | null => {
+    // drop the extension and a browser's " (1)" duplicate-download suffix
+    const base = name.replace(/\.[^.]+$/, '').replace(/\s*\(\d+\)$/, '').trim();
+    const m = base.match(/(?:m[aã][\s_-]*)?(?:đ[eềể]|de)(?:[\s_-]*thi)?[\s_-]*(\d{2,6})(?!.*\d)/i)
+      ?? base.match(/^(\d{2,6})$/);   // a file named just "101.xlsx"
+    return m ? m[1] : null;
+  };
+
   const handleImportExcelFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (paperLocked) { e.target.value = ''; return; }
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     e.target.value = '';
-    if (!file) return;
+    if (files.length === 0) return;
     if (!templateSchema) { alert('Chưa xác định được mẫu phiếu — không thể import Excel.'); return; }
+    const allWarnings: string[] = [];
+    const perCode: { code: string; answers: Record<string, string>; file: string }[] = [];
+    let lastScoring: ScoringWeights | null = null;
     try {
-      const { store: parsed, warnings } = await parseAnswerKeyWorkbook(file, templateSchema);
-      if (parsed.byMaDe && Object.keys(parsed.byMaDe).length > 0) {
-        const codes = Object.keys(parsed.byMaDe);
-        const rebuilt: Record<string, Record<string, string>> = {};
-        for (const c of codes) rebuilt[c] = parsed.byMaDe[c]?.answers ?? {};
-        setAnswersByMaDe(rebuilt);
-        setMaDeCodes(codes);
-        setActiveMaDe(codes[0]);
-        setMultiMaDe(true);
-      } else if (multiMaDe) {
-        setAnswersByMaDe(prev => ({ ...prev, [activeMaDe]: parsed.answers }));
-      } else {
-        setAnswers(parsed.answers);
-      }
-      setScoring(parsed.scoring);
-      if (warnings.length > 0) {
-        alert(`Đã import xong, nhưng có ${warnings.length} cảnh báo:\n\n${warnings.slice(0, 10).join('\n')}${warnings.length > 10 ? `\n… và ${warnings.length - 10} dòng khác.` : ''}`);
+      for (const file of files) {
+        const { store: parsed, warnings } = await parseAnswerKeyWorkbook(file, templateSchema);
+        allWarnings.push(...warnings.map(w => (files.length > 1 ? `${file.name}: ${w}` : w)));
+        lastScoring = parsed.scoring;
+        if (parsed.byMaDe && Object.keys(parsed.byMaDe).length > 0) {
+          // a whole multi-đề set: replaces what's on screen
+          const codes = Object.keys(parsed.byMaDe);
+          const rebuilt: Record<string, Record<string, string>> = {};
+          for (const c of codes) rebuilt[c] = parsed.byMaDe[c]?.answers ?? {};
+          setAnswersByMaDe(rebuilt);
+          setMaDeCodes(codes);
+          setActiveMaDe(codes[0]);
+          setMultiMaDe(true);
+          continue;
+        }
+        let code = maDeFromFileName(file.name);
+        if (!code) {
+          code = (window.prompt(
+            `File "${file.name}" là đáp án của mã đề nào? (VD: 101)`
+            + (multiMaDe ? '' : '\nĐể trống nếu đề thi chỉ có một mã đề.'), '') ?? '').trim() || null;
+        }
+        if (code) perCode.push({ code, answers: parsed.answers, file: file.name });
+        else if (multiMaDe) allWarnings.push(`${file.name}: chưa nhập mã đề nên bỏ qua file này.`);
+        else setAnswers(parsed.answers);   // one đề only, no mã đề: the plain answer key
       }
     } catch {
       alert('Không đọc được file Excel này. Kiểm tra lại file (.xlsx) và thử lại.');
+      return;
+    }
+
+    // a mã đề already on the page with answers in it is replaced, the rest are added
+    const had = multiMaDe ? maDeCodes : [];
+    const replaced = perCode.filter(x => had.includes(x.code)
+      && Object.values(answersByMaDe[x.code] ?? {}).some(v => v)).map(x => x.code);
+    if (perCode.length > 0) {
+      const codes = [...had, ...perCode.map(x => x.code).filter(c => !had.includes(c))];
+      setAnswersByMaDe(prev => {
+        const next = { ...prev };
+        for (const x of perCode) next[x.code] = x.answers;
+        return next;
+      });
+      setProctorsByMaDe(prev => {
+        const next = { ...prev };
+        for (const c of codes) next[c] = prev[c] ?? {};
+        return next;
+      });
+      setMaDeCodes(codes);
+      setActiveMaDe(perCode[perCode.length - 1].code);
+      setMultiMaDe(true);
+    }
+    if (lastScoring) setScoring(lastScoring);
+    setSavedAt(null);
+    const done = perCode.length > 0
+      ? `Đã nạp đáp án: ${perCode.map(x => `${x.file} → Đề ${x.code}`).join(', ')}.`
+        + (replaced.length > 0 ? `\nĐề ${replaced.join(', ')} đã có đáp án từ trước, đã được thay bằng file mới.` : '')
+      : 'Đã import xong.';
+    if (allWarnings.length > 0) {
+      alert(`${done}\n\nCó ${allWarnings.length} cảnh báo:\n\n${allWarnings.slice(0, 10).join('\n')}${allWarnings.length > 10 ? `\n… và ${allWarnings.length - 10} dòng khác.` : ''}`);
+    } else if (perCode.length > 0) {
+      alert(done);
     }
   };
 
@@ -858,6 +940,7 @@ export default function AnswerKeyPage() {
     // Save answer key first
     const store = buildStore();
     saveAnswerKey(store);
+    saveExamAnswerKey(examId, gradingSlotKey, { ...store, ownKey: !paperLocked && paperFetched != null });
     autoSaveToLibrary(store);
     setSavedAt(store.updatedAt);
 
@@ -1178,9 +1261,7 @@ export default function AnswerKeyPage() {
                   imageUrl={
                     directTemplateKey === 'vju'
                       ? (templateVariant === 'sbd4' ? VJU_SBD4_PREVIEW_IMAGE : VJU_SBD8_PREVIEW_IMAGE)
-                      : directTemplateKey === templateStoreKeyFor('custom', PINNED_TEMPLATE_40_ID)
-                        ? PINNED_TEMPLATE_40_PREVIEW_IMAGE
-                        : null
+                      : PINNED_TEMPLATES.find(pt => templateStoreKeyFor('custom', pt.id) === directTemplateKey)?.previewImage ?? null
                   }
                   height={460}
                 />
@@ -1683,6 +1764,23 @@ export default function AnswerKeyPage() {
           </div>
         </Card>
 
+        {/* 2026-10-05: on a phone the page is ~7 screens long and "Lưu & Bắt
+           đầu chấm" was only at the very bottom — keep it in a bar pinned above
+           the bottom tab bar while grading (hidden on wider screens, see
+           .ak-sticky-bar in globals.css). */}
+        {isGradingMode && (
+          <>
+            <div className="ak-sticky-bar">
+              <span style={{ fontSize: 12, color: '#6B7280', minWidth: 0 }}>
+                {multiMaDe && activeMaDe ? <>Đề <b style={{ color: '#C8102E' }}>{activeMaDe}</b> · </> : null}
+                <b style={{ color: '#1E1E1E' }}>{filled}/{total}</b> câu
+              </span>
+              {primaryButton}
+            </div>
+            <div className="ak-sticky-spacer" />
+          </>
+        )}
+
         {/* Bottom actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingTop: 8, flexWrap: 'wrap' }}>
           {primaryButton}
@@ -1692,7 +1790,7 @@ export default function AnswerKeyPage() {
           <Button size="sm" variant="outline" icon={<FileSpreadsheet size={14} />} onClick={handleExportExcel}>Xuất Excel</Button>
           <Button size="sm" variant="outline" icon={<Upload size={14} />} disabled={paperLocked} onClick={() => excelInputRef.current?.click()}>Import Excel</Button>
           <Button size="sm" variant="secondary" icon={<FileSpreadsheet size={14} />} onClick={handleSampleExcelDownload}>Tải mẫu Excel</Button>
-          <input ref={excelInputRef} type="file" accept=".xlsx" style={{ display: 'none' }} onChange={handleImportExcelFile} />
+          <input ref={excelInputRef} type="file" accept=".xlsx" multiple style={{ display: 'none' }} onChange={handleImportExcelFile} />
 
           <div style={{ width: 1, height: 28, background: '#E5E7EB', margin: '0 2px' }} />
           <Button size="sm" variant="secondary" icon={<BookmarkPlus size={14} />} onClick={handleSaveToLibrary}>Lưu vào thư viện</Button>

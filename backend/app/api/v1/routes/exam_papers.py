@@ -6,6 +6,7 @@ mã đề for grading. See app/services/exam_mixer.py for the mixing rules.
 import io
 import re
 import zipfile
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
@@ -19,8 +20,8 @@ from app.services.exam_mixer import PART_LIMITS, Snapshot, answer_key_docx, usab
 from app.services.exam_paper_service import ExamPaperService
 from app.services.question_bank_service import _fingerprint
 from app.services import question_assets as qa
-from app.services.question_io import LOST, QTYPES, apply_picked_answers, mcq_rows, parse_aiken, parse_docx
-from app.services.shared_templates import mau40_short_labels
+from app.services.question_io import LOST, QTYPES, apply_picked_answers, decode_text, mcq_rows, parse_docx, parse_txt
+from app.services.sheet_layouts import list_layouts
 
 router = APIRouter(prefix="/exam-papers", tags=["exam-papers"])
 
@@ -47,7 +48,10 @@ class FromBankIn(BaseModel):
     shuffle_questions: bool = True
     shuffle_options:   bool = True
     exam_id:           int | None = None
-    for_sheet:         bool = True     # chấm bằng phiếu Mẫu 40 (giới hạn 40/8/6, A–D)
+    for_sheet:         bool = True     # chấm bằng phiếu (số câu, số đáp án theo phiếu)
+    # the answer sheet: a template id from GET /exam-papers/sheets ("mau40" /
+    # "bgd" = the shared ones, as sent before 2026-10-05); None = Mẫu 40
+    sheet:             int | Literal["mau40", "bgd"] | None = None
 
 
 class PaperUpdate(BaseModel):
@@ -82,7 +86,7 @@ def create_from_bank(body: FromBankIn, svc: ExamPaperService = Depends(_svc)):
         name=body.name, category_ids=body.category_ids, counts=body.counts.model_dump(),
         num_versions=body.num_versions, start_code=body.start_code,
         shuffle_questions=body.shuffle_questions, shuffle_options=body.shuffle_options, exam_id=body.exam_id,
-        for_sheet=body.for_sheet)
+        for_sheet=body.for_sheet, sheet=body.sheet)
     return {**svc.to_dict(paper), "notes": notes}
 
 
@@ -97,11 +101,8 @@ def _parse_one(fname: str, data: bytes):
         # picks their answers on the page (parse-file lists them)
         return parse_docx(data, allow_unanswered=True)
     if fname.lower().endswith(".txt"):
-        try:
-            text = data.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            text = data.decode("cp1258", errors="replace")
-        return parse_aiken(text)
+        # written like the Word file, or a Moodle (Aiken) export
+        return parse_txt(decode_text(data), allow_unanswered=True)
     raise HTTPException(400, f"\"{fname}\": chỉ hỗ trợ file .docx (Word) hoặc .txt (Moodle)")
 
 
@@ -224,6 +225,7 @@ async def create_from_file(
     count_tf: int | None = Form(None, ge=0),
     count_short: int | None = Form(None, ge=0),
     for_sheet: bool = Form(True),
+    sheet: str | None = Form(None),     # template id (see FromBankIn.sheet)
     answers_json: str | None = Form(None),
     svc: ExamPaperService = Depends(_svc),
 ):
@@ -241,7 +243,7 @@ async def create_from_file(
     paper, notes = svc.create_from_questions(
         name=name, questions=questions, file_name=fname, num_versions=num_versions, start_code=start_code,
         shuffle_questions=shuffle_questions, shuffle_options=shuffle_options, exam_id=exam_id, counts=counts,
-        for_sheet=for_sheet, source_docx=source_docx)
+        for_sheet=for_sheet, source_docx=source_docx, sheet=sheet or None)
     if duplicates:
         warnings = warnings + [f"Đã bỏ {len(duplicates)} câu trùng (giống hệt một câu khác trong file)"]
     if note and not source_docx:
@@ -251,11 +253,19 @@ async def create_from_file(
 
 # ── For grading (step 6.2) — declared before /{paper_id} ─────────────────────
 
+@router.get("/sheets")
+def answer_sheets(svc: ExamPaperService = Depends(_svc)):
+    """The answer sheets a bộ đề can be mixed for — the shared ones, then the
+    teacher's own custom templates — with what each holds (sheet_layouts.py)."""
+    return [lay.to_dict() for lay in list_layouts(svc.db, svc.user.id)]
+
+
 @router.get("/exam-answer-key/{exam_id}")
-def exam_answer_key(exam_id: int, db: Session = Depends(get_db), svc: ExamPaperService = Depends(_svc)):
+def exam_answer_key(exam_id: int, sheet: str | None = None, svc: ExamPaperService = Depends(_svc)):
     """Answer key per mã đề of every bộ đề attached to this kỳ thi, in the
-    grading labels of the "Mẫu 40 câu" sheet."""
-    return svc.exam_answer_key(exam_id, mau40_short_labels(db))
+    grading labels of its answer sheet; sheet (template id) = only the bộ đề
+    mixed for it."""
+    return svc.exam_answer_key(exam_id, sheet)
 
 
 # ── One bộ đề ────────────────────────────────────────────────────────────────

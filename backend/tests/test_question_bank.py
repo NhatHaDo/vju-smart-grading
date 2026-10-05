@@ -372,26 +372,36 @@ def test_shared_template_seeded_and_pinned_id(client, tmp_path, monkeypatch):
 
     monkeypatch.setattr(st, "MAU40_DEST_TPL", tmp_path / "shared_40tn_dungsai.template.json")
     monkeypatch.setattr(st, "MAU40_DEST_AREAS", tmp_path / "shared_40tn_dungsai.areas.json")
+    monkeypatch.setattr(st, "BGD_DEST_TPL", tmp_path / "shared_bgd_40tn.template.json")
+    monkeypatch.setattr(st, "BGD_DEST_AREAS", tmp_path / "shared_bgd_40tn.areas.json")
     monkeypatch.setattr(st, "DEST_DIR", tmp_path)
 
     db = next(client.app.dependency_overrides[get_db]())
     # An unrelated custom template takes id 1, so Mẫu 40 gets a different id than prod's
     db.add(Template(name="Khác", type="custom", version="1.0", file_path="x.json", is_default=False))
     db.commit()
-    assert client.get("/api/v1/custom-forms/pinned", headers=client.headers_for(1)).json() == {"mau40": None}
+    assert client.get("/api/v1/custom-forms/pinned", headers=client.headers_for(1)).json() == {"mau40": None, "bgd": None}
 
     st.ensure_shared_templates(db)
     tpl = st.find_mau40(db)
     assert tpl is not None and tpl.is_default and (tmp_path / "shared_40tn_dungsai.template.json").exists()
-    assert client.get("/api/v1/custom-forms/pinned", headers=client.headers_for(2)).json() == {"mau40": tpl.id}
+    bgd = st.find_bgd(db)
+    assert bgd is not None and bgd.is_default and (tmp_path / "shared_bgd_40tn.template.json").exists()
+    assert client.get("/api/v1/custom-forms/pinned", headers=client.headers_for(2)).json() == {"mau40": tpl.id, "bgd": bgd.id}
     assert client.get(f"/api/v1/custom-forms/{tpl.id}", headers=client.headers_for(2)).status_code == 200
 
     # Running again never duplicates or touches the existing row
     tpl.name = "Đổi tên bởi admin"
     db.commit()
     st.ensure_shared_templates(db)
-    assert db.query(Template).filter(Template.type == "custom").count() == 2
+    assert db.query(Template).filter(Template.type == "custom").count() == 3
     assert st.find_mau40(db).name == "Đổi tên bởi admin"   # still found by file name after a rename
+
+    # the Bộ GD sheet is refreshed from the committed files on every start
+    (tmp_path / "shared_bgd_40tn.areas.json").write_text("[]", encoding="utf-8")
+    st.ensure_shared_templates(db)
+    assert (tmp_path / "shared_bgd_40tn.areas.json").read_text(encoding="utf-8") == st.BGD_SRC_AREAS.read_text(encoding="utf-8")
+    assert db.query(Template).filter(Template.type == "custom").count() == 3
 
 
 def test_api_three_question_types(client):

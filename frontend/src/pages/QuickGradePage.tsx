@@ -36,8 +36,7 @@ import {
   isMultiMaDe,
   TEMPLATE_VARIANT_LABEL,
   DEFAULT_SCORING,
-  PINNED_TEMPLATE_40_ID,
-  PINNED_TEMPLATES,
+  sheetTemplate,
   type TemplateVariant,
   type OmrGradeResult,
   type BatchGradeState,
@@ -112,7 +111,7 @@ function SetupScreen({
   examId: number | null;
   onSelectExam: (id: number | null) => void;
   /** Set when the chosen kỳ thi has bộ đề trộn attached (null = none / loading). */
-  examInfo: { loading: boolean; papers: string[]; versions: string[] } | null;
+  examInfo: { loading: boolean; papers: string[]; versions: string[]; sheetName?: string } | null;
 }) {
   const navigate = useNavigate();
   const mode = tpl?.mode ?? 'vju';
@@ -160,7 +159,7 @@ function SetupScreen({
           )}
           {examId != null && examInfo && !examInfo.loading && examInfo.versions.length > 0 && (
             <span style={{ fontSize: 12.5, color: '#15803D' }}>
-              ✓ Đáp án tự động từ bộ đề <b>{examInfo.papers.join(', ')}</b>: {examInfo.versions.length} mã đề ({examInfo.versions.join(', ')}), phiếu Mẫu 40 câu trắc nghiệm
+              ✓ Đáp án tự động từ bộ đề <b>{examInfo.papers.join(', ')}</b>: {examInfo.versions.length} mã đề ({examInfo.versions.join(', ')}), {examInfo.sheetName ?? 'Mẫu 40 câu TN + Đúng/Sai'}
             </span>
           )}
         </div>
@@ -240,7 +239,7 @@ export default function QuickGradePage() {
   const [sessionActive, setSessionActive] = useState(false);
   const [exams, setExams] = useState<ExamOut[]>([]);
   const [examId, setExamId] = useState<number | null>(null);
-  const [examInfo, setExamInfo] = useState<{ loading: boolean; papers: string[]; versions: string[] } | null>(null);
+  const [examInfo, setExamInfo] = useState<{ loading: boolean; papers: string[]; versions: string[]; sheetName?: string } | null>(null);
 
   useEffect(() => {
     setStore(loadAnswerKey());
@@ -270,7 +269,7 @@ export default function QuickGradePage() {
     setExamInfo({ loading: true, papers: [], versions: [] });
     examPapersApi.examAnswerKey(id)
       .then(k => {
-        setExamInfo({ loading: false, papers: k.papers, versions: k.versions });
+        setExamInfo({ loading: false, papers: k.papers, versions: k.versions, sheetName: sheetTemplate(k.sheets, k.sheetNames).name });
         if (k.versions.length === 0) {
           setStore(loadAnswerKey());
           setTpl(loadLastUsedTemplate());
@@ -285,7 +284,9 @@ export default function QuickGradePage() {
           byMaDe: Object.fromEntries(k.versions.map(code => [code, { answers: k.byMaDe[code], scoring, updatedAt }])),
         };
         setStore(fromPapers);
-        setTpl({ mode: 'custom', id: PINNED_TEMPLATE_40_ID, name: PINNED_TEMPLATES[0].label });
+        // the sheet the bộ đề were mixed for
+        const t = sheetTemplate(k.sheets, k.sheetNames);
+        setTpl({ mode: t.mode, id: t.id, name: t.name });
       })
       .catch(() => setExamInfo({ loading: false, papers: [], versions: [] }));
   };

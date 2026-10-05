@@ -35,6 +35,7 @@ from typing import Union
 import cv2
 import numpy as np
 
+from app.core.omr.block_snap import snap_template
 from app.core.omr.bubble_analyzer import (
     CONFIDENT_SURPLUS,
     GLOBAL_DEFAULT_THR,
@@ -243,6 +244,7 @@ class OMREngine:
         signature_box_set: str | None = None,
         enable_illumination_flatten: bool = True,
         ma_de_key: str | None = None,
+        enable_block_snap: bool = True,
     ):
         """
         Args:
@@ -288,6 +290,9 @@ class OMREngine:
         # {"byMaDe": …} answer key find the sheet's mã đề. None → the fixed
         # "MaDe" key / name-based fallback below.
         self.ma_de_key = ma_de_key
+        # nudge each field block onto the printed bubbles after the warp
+        # (curled phone photos), see block_snap.py
+        self.enable_block_snap = enable_block_snap
         self._morph_kernel: tuple[int, int] = (10, 10)
         self._target_size = tuple(template.page_dimensions)  # (w, h)
 
@@ -668,6 +673,10 @@ class OMREngine:
     _NAME_DOB_CROP_BOX = (150, 190, 770, 350)  # (x1, y1, x2, y2) tại pageDimensions 1000×1414
 
     def _get_name_dob_crop_box(self) -> tuple[int, int, int, int] | None:
+        # a template that says where its own name/DOB lines are (the Bộ GD
+        # sheet: its info box is not where Mẫu 40's is) wins
+        if self.template.name_dob_crop_box is not None:
+            return self.template.name_dob_crop_box
         p1 = [l for l in self.template.all_labels if l.startswith("trc_nghim_abcd")]
         if not p1:
             return None
@@ -936,6 +945,13 @@ class OMREngine:
             # prep_method=="markers", not on which template/sheet design
             # was used.
             aligned_image = read_image
+
+        # ── Step 3b: per-block refinement (2026-10-05, block_snap.py) ─────
+        # Only on the warped read path. self.template becomes the shifted
+        # copy, so reading, the overlays and the debug output all use the
+        # same bubble positions; the caller's template object is untouched.
+        if self.enable_block_snap and M_inv is None and prep_method == "markers":
+            self.template, _block_shifts = snap_template(read_image, self.template)
 
         # ── Steps 4-5: Collect all means → global threshold ───────────────
         all_mean_values: list[float] = []

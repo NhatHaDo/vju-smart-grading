@@ -1,0 +1,43 @@
+ĐỀ MẪU TIN HỌC ĐẠI CƯƠNG
+
+PHẦN I-II. TRẮC NGHIỆM
+Câu 1. Bộ nhớ đệm nào nhanh nhất?
+A. L1
+B. L2
+C. L3
+D. L4
+Đáp án: A
+Câu 2. Hệ điều hành nào của Google cho điện thoại?
+A. iOS
+B. Android
+C. Windows
+D. Blackberry
+Đáp án: B
+Câu 3. Đuôi file văn bản thuần là?
+A. .docx
+B. .pdf
+C. .txt
+D. .cab
+Đáp án: C
+
+PHẦN III. ĐÚNG/SAI
+Câu 1. Cho các phát biểu về phần cứng máy tính:
+a) CPU là bộ xử lý trung tâm
+b) RAM lưu dữ liệu vĩnh viễn khi tắt máy
+c) Bộ nhớ đệm L1 nhanh hơn L2
+d) SSD là thiết bị lưu trữ quang học
+Đáp án: Đ S Đ S
+Câu 2. Cho các phát biểu về mạng máy tính:
+a) HTTP là giao thức truyền siêu văn bản
+b) Địa chỉ IPv4 dài 128 bit
+c) DNS phân giải tên miền thành địa chỉ IP
+d) Wi-Fi bắt buộc phải dùng cáp quang
+Đáp án: Đ S Đ S
+
+PHẦN IV. TRẢ LỜI NGẮN
+Câu 1. Ổ cứng 500 GB đã dùng 125 GB. Còn trống bao nhiêu phần trăm?
+Đáp án: 75
+Câu 2. 1 byte gồm bao nhiêu bit?
+Đáp án: 8
+Câu 3. Tính giá trị của -3/2 (viết dạng thập phân).
+Đáp án: -1,5

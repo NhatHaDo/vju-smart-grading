@@ -1,7 +1,14 @@
 /**
- * Sidebar.tsx — Icon-only nav, VJU style
+ * Sidebar.tsx — VJU style nav: icons only, opens up on hover
+ *
+ * 2026-10-05 (anh Tú): "cái menu e làm cái thu ra thu vào như này nè, nhìn như
+ * hiện tại hơi khó" (Cổng đào tạo VJU) → "kiểu di chuột vào thì nó mở rộng
+ * ra, hiện đủ hơn ấy". The 58px icon column keeps its place in the layout;
+ * hovering (or tabbing into) it slides a wider panel out OVER the page with
+ * every label and the group titles, and it folds back when the mouse leaves.
+ * The page itself never shifts.
  */
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   LayoutGrid,
@@ -60,75 +67,55 @@ export const BOTTOM_ITEMS: NavItem[] = [
   { to: '/omr-debug', icon: <Bug size={20} />, label: 'OMR Debug' },
 ];
 
-function SidebarLink({ to, icon, label, end }: NavItem) {
+const COLLAPSED_W = 58;
+const EXPANDED_W  = 236;
+
+function SidebarLink({ to, icon, label, end, expanded }: NavItem & { expanded: boolean }) {
   const [hovered, setHovered] = useState(false);
 
   return (
-    <div style={{ position: 'relative', display: 'flex', justifyContent: 'center' }}>
-      <NavLink
-        to={to}
-        end={end}
-        style={({ isActive }) => ({
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 46,
-          height: 46,
-          borderRadius: 12,
-          margin: '3px 6px',
-          textDecoration: 'none',
-          color: isActive ? '#C8102E' : hovered ? '#C8102E' : '#B0B8C4',
-          background: isActive
-            ? '#FEECEC'
-            : hovered
-            ? '#FEF2F2'
-            : 'transparent',
-          transition: 'background 150ms, color 150ms',
-          boxShadow: isActive ? '0 1px 4px rgba(200,16,46,0.12)' : 'none',
-        })}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-      >
-        {icon}
-      </NavLink>
-
-      {/* Tooltip */}
-      {hovered && (
-        <div
-          style={{
-            position: 'absolute',
-            left: 'calc(100% + 8px)',
-            top: '50%',
-            transform: 'translateY(-50%)',
-            background: '#1E1E1E',
-            color: '#fff',
-            fontSize: 12,
-            fontWeight: 600,
-            padding: '5px 10px',
-            borderRadius: 6,
-            whiteSpace: 'nowrap',
-            pointerEvents: 'none',
-            zIndex: 200,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
-          }}
-        >
-          {label}
-          <div style={{
-            position: 'absolute',
-            right: '100%',
-            top: '50%',
-            transform: 'translateY(-50%)',
-            border: '5px solid transparent',
-            borderRightColor: '#1E1E1E',
-          }} />
-        </div>
-      )}
-    </div>
+    <NavLink
+      to={to}
+      end={end}
+      title={expanded ? undefined : label}
+      style={({ isActive }) => ({
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        height: 46,
+        borderRadius: 12,
+        margin: '3px 6px',
+        padding: '0 13px',
+        textDecoration: 'none',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        fontSize: 14,
+        fontWeight: isActive ? 700 : 600,
+        color: isActive || hovered ? '#C8102E' : expanded ? '#374151' : '#B0B8C4',
+        background: isActive ? '#FEECEC' : hovered ? '#FEF2F2' : 'transparent',
+        transition: 'background 150ms, color 150ms',
+        boxShadow: isActive ? '0 1px 4px rgba(200,16,46,0.12)' : 'none',
+      })}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <span style={{ display: 'flex', flexShrink: 0 }}>{icon}</span>
+      <span style={{ opacity: expanded ? 1 : 0, transition: 'opacity 150ms' }}>{label}</span>
+    </NavLink>
   );
 }
 
-function Divider() {
-  return <div style={{ height: 1, background: '#F0F0F0', margin: '6px 12px' }} />;
+function GroupTitle({ text, expanded }: { text: string; expanded: boolean }) {
+  return (
+    <div style={{ height: 1, background: '#F0F0F0', margin: '6px 12px', position: 'relative' }}>
+      {expanded && (
+        <span style={{ position: 'absolute', left: 8, top: -8, background: '#fff', padding: '0 6px', fontSize: 10.5,
+          fontWeight: 700, letterSpacing: '0.06em', color: '#9CA3AF', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
+          {text}
+        </span>
+      )}
+    </div>
+  );
 }
 
 export default function Sidebar() {
@@ -141,32 +128,51 @@ export default function Sidebar() {
   const group2 = visibleItems.filter(item => item.group === 2);
   const group3 = visibleItems.filter(item => item.group === 3);
 
+  // open on hover after a short pause (a mouse merely crossing it to reach
+  // the page doesn't flash the panel), close as soon as it leaves
+  const [expanded, setExpanded] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const open  = () => { if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(() => setExpanded(true), 120); };
+  const close = () => { if (timer.current) clearTimeout(timer.current); setExpanded(false); };
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
   return (
     <aside
       className="app-sidebar"
-      style={{
-        width: 58,
-        minHeight: '100%',
-        background: '#fff',
-        borderRight: '1px solid #EBEBEB',
-        display: 'flex',
-        flexDirection: 'column',
-        flexShrink: 0,
-        zIndex: 40,
-      }}
+      style={{ width: COLLAPSED_W, minHeight: '100%', flexShrink: 0, position: 'relative', zIndex: 40 }}
     >
-      <nav style={{ flex: 1, paddingTop: 8, display: 'flex', flexDirection: 'column' }}>
-        {group1.map(item => <SidebarLink key={item.to} {...item} />)}
-        <Divider />
-        {group2.map(item => <SidebarLink key={item.to} {...item} />)}
-        {group3.length > 0 && <Divider />}
-        {group3.map(item => <SidebarLink key={item.to} {...item} />)}
-      </nav>
+      <div
+        onMouseEnter={open}
+        onMouseLeave={close}
+        onFocus={() => setExpanded(true)}
+        onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setExpanded(false); }}
+        onClick={close}
+        style={{
+          position: 'absolute', top: 0, bottom: 0, left: 0,
+          width: expanded ? EXPANDED_W : COLLAPSED_W,
+          background: '#fff',
+          borderRight: '1px solid #EBEBEB',
+          boxShadow: expanded ? '6px 0 24px rgba(0,0,0,0.10)' : 'none',
+          transition: 'width 180ms ease, box-shadow 180ms ease',
+          display: 'flex',
+          flexDirection: 'column',
+          overflowX: 'hidden',
+          overflowY: 'auto',
+        }}
+      >
+        <nav style={{ flex: 1, paddingTop: 8, display: 'flex', flexDirection: 'column' }}>
+          {group1.map(item => <SidebarLink key={item.to} {...item} expanded={expanded} />)}
+          <GroupTitle text="Kết quả" expanded={expanded} />
+          {group2.map(item => <SidebarLink key={item.to} {...item} expanded={expanded} />)}
+          {group3.length > 0 && <GroupTitle text="Thiết lập" expanded={expanded} />}
+          {group3.map(item => <SidebarLink key={item.to} {...item} expanded={expanded} />)}
+        </nav>
 
-      <div style={{ paddingBottom: 8, borderTop: '1px solid #F0F0F0' }}>
-        {BOTTOM_ITEMS.map(item => (
-          <SidebarLink key={item.to} {...item} />
-        ))}
+        <div style={{ paddingBottom: 8, borderTop: '1px solid #F0F0F0' }}>
+          {BOTTOM_ITEMS.map(item => (
+            <SidebarLink key={item.to} {...item} expanded={expanded} />
+          ))}
+        </div>
       </div>
     </aside>
   );

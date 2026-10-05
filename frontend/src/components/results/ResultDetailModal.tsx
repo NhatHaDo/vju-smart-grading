@@ -417,7 +417,7 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
         {canEdit && (
           <div className="result-detail-actionbar" style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', background: '#FFF9F9', borderBottom: '1px solid #FECACA' }}>
             <span className="result-detail-actionbar-hint" style={{ fontSize: 12, fontWeight: 700, color: '#C8102E', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Pencil size={13} /> Bấm trực tiếp vào ô câu nào cần sửa bên trái — nhớ bấm "Lưu sửa" sau khi xong
+              <Pencil size={13} /> Bấm trực tiếp vào ô câu nào cần sửa — nhớ bấm "Lưu sửa" sau khi xong
             </span>
             <div className="result-detail-actionbar-spacer" style={{ flex: 1 }} />
             <button onClick={handleSaveEdit} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#C8102E', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>

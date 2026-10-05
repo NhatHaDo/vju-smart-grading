@@ -26,7 +26,9 @@ export default function Modal({ open, onClose, title, children, width = 520, foo
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 100,
+        // 2026-10-05: above the phone's bottom tab bar (.app-bottom-nav, z 100),
+        // which used to sit on top of every dialog and could hide its buttons
+        zIndex: 500,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -56,7 +58,7 @@ export default function Modal({ open, onClose, title, children, width = 520, foo
           boxShadow: '0 20px 40px rgba(0,0,0,0.18)',
           width: '100%',
           maxWidth: width,
-          maxHeight: '90vh',
+          maxHeight: 'min(90vh, 90dvh)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',

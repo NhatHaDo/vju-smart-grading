@@ -122,6 +122,13 @@ INT_MIN_JUMP = 12   # lower than MCQ MIN_JUMP=25; catches 10–12-unit gaps
 # rather than a real second fill. Lowered to 7.
 INT_OUTLIER_TIGHT_MIN_JUMP = 7
 INT_OUTLIER_TIGHT_REST_SPREAD_MAX = 8.0
+# 2026-10-05 (Phiếu Bộ GD photos): an untouched "trả lời ngắn" column read a
+# digit because one blank bubble was 7 units darker than its neighbours
+# (mean 216.6 vs 224-231) on a page whose marked/blank threshold was 165.8:
+# a real fill on that page is far darker. The tight-cluster rule only trusts
+# its small gap when the candidate is at most this far above the page's own
+# threshold (not the GLOBAL_DEFAULT_THR fallback, which says nothing).
+INT_OUTLIER_TIGHT_MAX_ABOVE_GLOBAL = 40.0
 
 # 2026-08-04: a handheld-camera photo with an uneven lighting/shadow gradient
 # across the page can make an ENTIRE genuinely blank INT digit column read as
@@ -617,8 +624,21 @@ def get_local_threshold(
         top2_gap = q_vals[1] - q_vals[0]
         if top2_gap >= outlier_min_jump:
             return _ret((q_vals[0] + q_vals[1]) / 2.0)
+        # 2026-10-05 (Phiếu Bộ GD, sheet 8 câu 34): an untouched row with one
+        # bubble 7 units darker than the rest (216.9 vs 224-229) on a page
+        # whose marked/blank threshold is 157.6 was flagged "cần xem". The
+        # tight-cluster rule (small gap) only trusts that gap when the
+        # candidate is not far lighter than the page's own threshold — same
+        # guard as INT_OUTLIER_TIGHT_MAX_ABOVE_GLOBAL for digit columns. The
+        # wider-gap rule above is left as it was (a ticked "✓" bubble on the
+        # VJU sample sheet, 22.7 darker than its row, still reads).
+        too_light_for_page = (
+            global_thr != GLOBAL_DEFAULT_THR
+            and q_vals[0] > global_thr + INT_OUTLIER_TIGHT_MAX_ABOVE_GLOBAL
+        )
         rest_spread = q_vals[-1] - q_vals[1]
-        if top2_gap >= MCQ_OUTLIER_TIGHT_MIN_JUMP and rest_spread <= MCQ_OUTLIER_TIGHT_REST_SPREAD_MAX:
+        if (top2_gap >= MCQ_OUTLIER_TIGHT_MIN_JUMP and rest_spread <= MCQ_OUTLIER_TIGHT_REST_SPREAD_MAX
+                and not too_light_for_page):
             return _ret((q_vals[0] + q_vals[1]) / 2.0, tight=True)
 
         # No separation anywhere in the strip at all: treat as a genuinely
@@ -800,7 +820,12 @@ def classify_strip_int(
             # every other digit in the column is nearly identical (see
             # INT_OUTLIER_TIGHT_* comment above).
             rest_spread = sorted_m[-1] - sorted_m[1]
-            if top2_gap >= INT_OUTLIER_TIGHT_MIN_JUMP and rest_spread <= INT_OUTLIER_TIGHT_REST_SPREAD_MAX:
+            too_light_for_page = (
+                global_thr != GLOBAL_DEFAULT_THR
+                and sorted_m[0] > global_thr + INT_OUTLIER_TIGHT_MAX_ABOVE_GLOBAL
+            )
+            if (top2_gap >= INT_OUTLIER_TIGHT_MIN_JUMP and rest_spread <= INT_OUTLIER_TIGHT_REST_SPREAD_MAX
+                    and not too_light_for_page):
                 eff_thr = (sorted_m[0] + sorted_m[1]) / 2.0
                 is_tight_outlier = True
             else:

@@ -1,0 +1,764 @@
+{
+  "pageDimensions": [
+    1000,
+    1414
+  ],
+  "bubbleDimensions": [
+    19,
+    19
+  ],
+  "preProcessors": [],
+  "use_markers": false,
+  "marker_type": "",
+  "fieldBlocks": {
+    "sbd": {
+      "origin": [
+        755,
+        95
+      ],
+      "bubblesGap": 30,
+      "labelsGap": 22,
+      "fieldLabels": [
+        "sbd1..6"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "fieldType": "QTYPE_INT"
+    },
+    "made": {
+      "origin": [
+        919,
+        95
+      ],
+      "bubblesGap": 30,
+      "labelsGap": 21,
+      "fieldLabels": [
+        "made1..3"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "fieldType": "QTYPE_INT"
+    },
+    "tn1": {
+      "origin": [
+        80,
+        510
+      ],
+      "bubblesGap": 47,
+      "labelsGap": 24,
+      "fieldLabels": [
+        "trc_nghim_abcd1..10"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "fieldType": "QTYPE_MCQ4"
+    },
+    "tn11": {
+      "origin": [
+        314,
+        510
+      ],
+      "bubblesGap": 47,
+      "labelsGap": 24,
+      "fieldLabels": [
+        "trc_nghim_abcd11..20"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "fieldType": "QTYPE_MCQ4"
+    },
+    "tn21": {
+      "origin": [
+        548,
+        510
+      ],
+      "bubblesGap": 47,
+      "labelsGap": 24,
+      "fieldLabels": [
+        "trc_nghim_abcd21..30"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "fieldType": "QTYPE_MCQ4"
+    },
+    "tn31": {
+      "origin": [
+        783,
+        510
+      ],
+      "bubblesGap": 47,
+      "labelsGap": 24,
+      "fieldLabels": [
+        "trc_nghim_abcd31..40"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "fieldType": "QTYPE_MCQ4"
+    },
+    "ds1": {
+      "origin": [
+        79,
+        850
+      ],
+      "bubblesGap": 47,
+      "labelsGap": 23,
+      "fieldLabels": [
+        "ng_sai_cu1..4"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "Đ",
+        "S"
+      ],
+      "direction": "horizontal",
+      "emptyValue": ""
+    },
+    "ds2": {
+      "origin": [
+        173,
+        850
+      ],
+      "bubblesGap": 46,
+      "labelsGap": 23,
+      "fieldLabels": [
+        "ng_sai_cu5..8"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "Đ",
+        "S"
+      ],
+      "direction": "horizontal",
+      "emptyValue": ""
+    },
+    "ds3": {
+      "origin": [
+        315,
+        850
+      ],
+      "bubblesGap": 46,
+      "labelsGap": 23,
+      "fieldLabels": [
+        "ng_sai_cu9..12"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "Đ",
+        "S"
+      ],
+      "direction": "horizontal",
+      "emptyValue": ""
+    },
+    "ds4": {
+      "origin": [
+        408,
+        850
+      ],
+      "bubblesGap": 47,
+      "labelsGap": 23,
+      "fieldLabels": [
+        "ng_sai_cu13..16"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "Đ",
+        "S"
+      ],
+      "direction": "horizontal",
+      "emptyValue": ""
+    },
+    "ds5": {
+      "origin": [
+        548,
+        850
+      ],
+      "bubblesGap": 46,
+      "labelsGap": 23,
+      "fieldLabels": [
+        "ng_sai_cu17..20"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "Đ",
+        "S"
+      ],
+      "direction": "horizontal",
+      "emptyValue": ""
+    },
+    "ds6": {
+      "origin": [
+        643,
+        850
+      ],
+      "bubblesGap": 48,
+      "labelsGap": 23,
+      "fieldLabels": [
+        "ng_sai_cu21..24"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "Đ",
+        "S"
+      ],
+      "direction": "horizontal",
+      "emptyValue": ""
+    },
+    "ds7": {
+      "origin": [
+        784,
+        850
+      ],
+      "bubblesGap": 47,
+      "labelsGap": 23,
+      "fieldLabels": [
+        "ng_sai_cu25..28"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "Đ",
+        "S"
+      ],
+      "direction": "horizontal",
+      "emptyValue": ""
+    },
+    "ds8": {
+      "origin": [
+        878,
+        850
+      ],
+      "bubblesGap": 47,
+      "labelsGap": 23,
+      "fieldLabels": [
+        "ng_sai_cu29..32"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "Đ",
+        "S"
+      ],
+      "direction": "horizontal",
+      "emptyValue": ""
+    },
+    "custom_1785281786622_sign": {
+      "origin": [
+        71,
+        1057
+      ],
+      "bubblesGap": 24,
+      "labelsGap": 32,
+      "fieldLabels": [
+        "custom_1785281786622_sign"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "-"
+      ],
+      "direction": "vertical",
+      "emptyValue": ""
+    },
+    "custom_1785281786622_dec": {
+      "origin": [
+        103,
+        1079
+      ],
+      "bubblesGap": 32,
+      "labelsGap": 24,
+      "fieldLabels": [
+        "custom_1785281786622_dec"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "1",
+        "2"
+      ],
+      "direction": "horizontal",
+      "emptyValue": ""
+    },
+    "custom_1785281786622_digits": {
+      "origin": [
+        70,
+        1104
+      ],
+      "bubblesGap": 24,
+      "labelsGap": 32,
+      "fieldLabels": [
+        "custom_1785281786622_d1",
+        "custom_1785281786622_d2",
+        "custom_1785281786622_d3",
+        "custom_1785281786622_d4"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "fieldType": "QTYPE_INT"
+    },
+    "custom_1785281844407_sign": {
+      "origin": [
+        220,
+        1057
+      ],
+      "bubblesGap": 24,
+      "labelsGap": 33,
+      "fieldLabels": [
+        "custom_1785281844407_sign"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "-"
+      ],
+      "direction": "vertical",
+      "emptyValue": ""
+    },
+    "custom_1785281844407_dec": {
+      "origin": [
+        253,
+        1081
+      ],
+      "bubblesGap": 33,
+      "labelsGap": 24,
+      "fieldLabels": [
+        "custom_1785281844407_dec"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "1",
+        "2"
+      ],
+      "direction": "horizontal",
+      "emptyValue": ""
+    },
+    "custom_1785281844407_digits": {
+      "origin": [
+        220,
+        1104
+      ],
+      "bubblesGap": 24,
+      "labelsGap": 33,
+      "fieldLabels": [
+        "custom_1785281844407_d1",
+        "custom_1785281844407_d2",
+        "custom_1785281844407_d3",
+        "custom_1785281844407_d4"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "fieldType": "QTYPE_INT"
+    },
+    "custom_1785281890315_sign": {
+      "origin": [
+        372,
+        1057
+      ],
+      "bubblesGap": 24,
+      "labelsGap": 32,
+      "fieldLabels": [
+        "custom_1785281890315_sign"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "-"
+      ],
+      "direction": "vertical",
+      "emptyValue": ""
+    },
+    "custom_1785281890315_dec": {
+      "origin": [
+        404,
+        1079
+      ],
+      "bubblesGap": 32,
+      "labelsGap": 24,
+      "fieldLabels": [
+        "custom_1785281890315_dec"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "1",
+        "2"
+      ],
+      "direction": "horizontal",
+      "emptyValue": ""
+    },
+    "custom_1785281890315_digits": {
+      "origin": [
+        371,
+        1104
+      ],
+      "bubblesGap": 24,
+      "labelsGap": 32,
+      "fieldLabels": [
+        "custom_1785281890315_d1",
+        "custom_1785281890315_d2",
+        "custom_1785281890315_d3",
+        "custom_1785281890315_d4"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "fieldType": "QTYPE_INT"
+    },
+    "custom_1785281940677_sign": {
+      "origin": [
+        521,
+        1057
+      ],
+      "bubblesGap": 24,
+      "labelsGap": 33,
+      "fieldLabels": [
+        "custom_1785281940677_sign"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "-"
+      ],
+      "direction": "vertical",
+      "emptyValue": ""
+    },
+    "custom_1785281940677_dec": {
+      "origin": [
+        554,
+        1081
+      ],
+      "bubblesGap": 33,
+      "labelsGap": 24,
+      "fieldLabels": [
+        "custom_1785281940677_dec"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "1",
+        "2"
+      ],
+      "direction": "horizontal",
+      "emptyValue": ""
+    },
+    "custom_1785281940677_digits": {
+      "origin": [
+        521,
+        1104
+      ],
+      "bubblesGap": 24,
+      "labelsGap": 33,
+      "fieldLabels": [
+        "custom_1785281940677_d1",
+        "custom_1785281940677_d2",
+        "custom_1785281940677_d3",
+        "custom_1785281940677_d4"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "fieldType": "QTYPE_INT"
+    },
+    "custom_1785281992851_sign": {
+      "origin": [
+        673,
+        1057
+      ],
+      "bubblesGap": 24,
+      "labelsGap": 32,
+      "fieldLabels": [
+        "custom_1785281992851_sign"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "-"
+      ],
+      "direction": "vertical",
+      "emptyValue": ""
+    },
+    "custom_1785281992851_dec": {
+      "origin": [
+        705,
+        1081
+      ],
+      "bubblesGap": 32,
+      "labelsGap": 24,
+      "fieldLabels": [
+        "custom_1785281992851_dec"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "1",
+        "2"
+      ],
+      "direction": "horizontal",
+      "emptyValue": ""
+    },
+    "custom_1785281992851_digits": {
+      "origin": [
+        673,
+        1104
+      ],
+      "bubblesGap": 24,
+      "labelsGap": 32,
+      "fieldLabels": [
+        "custom_1785281992851_d1",
+        "custom_1785281992851_d2",
+        "custom_1785281992851_d3",
+        "custom_1785281992851_d4"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "fieldType": "QTYPE_INT"
+    },
+    "custom_1785282088710_sign": {
+      "origin": [
+        823,
+        1057
+      ],
+      "bubblesGap": 24,
+      "labelsGap": 32,
+      "fieldLabels": [
+        "custom_1785282088710_sign"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "-"
+      ],
+      "direction": "vertical",
+      "emptyValue": ""
+    },
+    "custom_1785282088710_dec": {
+      "origin": [
+        855,
+        1081
+      ],
+      "bubblesGap": 32,
+      "labelsGap": 24,
+      "fieldLabels": [
+        "custom_1785282088710_dec"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "bubbleValues": [
+        "1",
+        "2"
+      ],
+      "direction": "horizontal",
+      "emptyValue": ""
+    },
+    "custom_1785282088710_digits": {
+      "origin": [
+        822,
+        1104
+      ],
+      "bubblesGap": 24,
+      "labelsGap": 32,
+      "fieldLabels": [
+        "custom_1785282088710_d1",
+        "custom_1785282088710_d2",
+        "custom_1785282088710_d3",
+        "custom_1785282088710_d4"
+      ],
+      "bubbleDimensions": [
+        18,
+        18
+      ],
+      "fieldType": "QTYPE_INT"
+    }
+  },
+  "customLabels": {
+    "sbd": [
+      "sbd1",
+      "sbd2",
+      "sbd3",
+      "sbd4",
+      "sbd5",
+      "sbd6"
+    ],
+    "made": [
+      "made1",
+      "made2",
+      "made3"
+    ],
+    "custom_1785281786622_digits": [
+      "custom_1785281786622_d1",
+      "custom_1785281786622_d2",
+      "custom_1785281786622_d3",
+      "custom_1785281786622_d4"
+    ],
+    "custom_1785281844407_digits": [
+      "custom_1785281844407_d1",
+      "custom_1785281844407_d2",
+      "custom_1785281844407_d3",
+      "custom_1785281844407_d4"
+    ],
+    "custom_1785281890315_digits": [
+      "custom_1785281890315_d1",
+      "custom_1785281890315_d2",
+      "custom_1785281890315_d3",
+      "custom_1785281890315_d4"
+    ],
+    "custom_1785281940677_digits": [
+      "custom_1785281940677_d1",
+      "custom_1785281940677_d2",
+      "custom_1785281940677_d3",
+      "custom_1785281940677_d4"
+    ],
+    "custom_1785281992851_digits": [
+      "custom_1785281992851_d1",
+      "custom_1785281992851_d2",
+      "custom_1785281992851_d3",
+      "custom_1785281992851_d4"
+    ],
+    "custom_1785282088710_digits": [
+      "custom_1785282088710_d1",
+      "custom_1785282088710_d2",
+      "custom_1785282088710_d3",
+      "custom_1785282088710_d4"
+    ]
+  },
+  "compositeAnswerFields": {
+    "custom_1785281786622": {
+      "signLabel": "custom_1785281786622_sign",
+      "decLabel": "custom_1785281786622_dec",
+      "digitLabels": [
+        "custom_1785281786622_d1",
+        "custom_1785281786622_d2",
+        "custom_1785281786622_d3",
+        "custom_1785281786622_d4"
+      ],
+      "label": "Phần TN số ( Câu 1)"
+    },
+    "custom_1785281844407": {
+      "signLabel": "custom_1785281844407_sign",
+      "decLabel": "custom_1785281844407_dec",
+      "digitLabels": [
+        "custom_1785281844407_d1",
+        "custom_1785281844407_d2",
+        "custom_1785281844407_d3",
+        "custom_1785281844407_d4"
+      ],
+      "label": "Phần TN số ( Câu 2)"
+    },
+    "custom_1785281890315": {
+      "signLabel": "custom_1785281890315_sign",
+      "decLabel": "custom_1785281890315_dec",
+      "digitLabels": [
+        "custom_1785281890315_d1",
+        "custom_1785281890315_d2",
+        "custom_1785281890315_d3",
+        "custom_1785281890315_d4"
+      ],
+      "label": "Phần TN số ( Câu 3)"
+    },
+    "custom_1785281940677": {
+      "signLabel": "custom_1785281940677_sign",
+      "decLabel": "custom_1785281940677_dec",
+      "digitLabels": [
+        "custom_1785281940677_d1",
+        "custom_1785281940677_d2",
+        "custom_1785281940677_d3",
+        "custom_1785281940677_d4"
+      ],
+      "label": "Phần TN số ( Câu 4)"
+    },
+    "custom_1785281992851": {
+      "signLabel": "custom_1785281992851_sign",
+      "decLabel": "custom_1785281992851_dec",
+      "digitLabels": [
+        "custom_1785281992851_d1",
+        "custom_1785281992851_d2",
+        "custom_1785281992851_d3",
+        "custom_1785281992851_d4"
+      ],
+      "label": "Phần TN số ( Câu 5)"
+    },
+    "custom_1785282088710": {
+      "signLabel": "custom_1785282088710_sign",
+      "decLabel": "custom_1785282088710_dec",
+      "digitLabels": [
+        "custom_1785282088710_d1",
+        "custom_1785282088710_d2",
+        "custom_1785282088710_d3",
+        "custom_1785282088710_d4"
+      ],
+      "label": "Phần TN số ( Câu 6)"
+    }
+  },
+  "nameDobCropBox": [
+    240,
+    250,
+    725,
+    355
+  ]
+}

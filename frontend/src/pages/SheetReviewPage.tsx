@@ -8,9 +8,9 @@ import CameraCaptureModal from '../components/common/CameraCaptureModal';
 import type { TemplateVariant, ImageSource, TemplateSchema } from '../types/grading';
 import {
   TEMPLATE_VARIANT_LABEL, saveLastUsedTemplate, PINNED_TEMPLATES, PINNED_TEMPLATE_40_ID, VJU_PRESET_SCHEMA,
-  VJU_SBD4_PREVIEW_IMAGE, VJU_SBD8_PREVIEW_IMAGE, PINNED_TEMPLATE_40_PREVIEW_IMAGE,
+  VJU_SBD4_PREVIEW_IMAGE, VJU_SBD8_PREVIEW_IMAGE, pinnedPreviewImage, sheetTemplate,
 } from '../types/grading';
-import { examsApi, customFormsApi } from '../services/apiClient';
+import { examsApi, customFormsApi, examPapersApi } from '../services/apiClient';
 import type { CustomFormMeta } from '../services/apiClient';
 import type { ExamOut } from '../types/exam';
 import { buildSchemaFromDetail } from '../utils/templateSchema';
@@ -120,6 +120,28 @@ export default function SheetReviewPage() {
       setExamsLoading(false);
     }
   };
+
+  // 2026-10-05: a kỳ thi whose bộ đề trộn were mixed for a given sheet (Mẫu 40
+  // câu, Phiếu Bộ GD or the teacher's own) preselects that sheet; the teacher can still change it.
+  useEffect(() => {
+    if (selectedExamId == null) return;
+    let live = true;
+    examPapersApi.examAnswerKey(selectedExamId)
+      .then(k => {
+        if (!live || k.versions.length === 0) return;
+        const t = sheetTemplate(k.sheets, k.sheetNames);
+        if (t.pinned) {
+          setTemplateMode('vju');
+          setSelectedPinnedCustomId(t.id);
+        } else {             // the teacher's own sheet: on the "custom" tab
+          setTemplateMode('custom');
+          setSelectedCustomId(t.id);
+          setSelectedPinnedCustomId(null);
+        }
+      })
+      .catch(() => { /* no bộ đề: keep the current choice */ });
+    return () => { live = false; };
+  }, [selectedExamId]);
 
   // ── Load custom templates from API ───────────────────────────────────────
   // preselectId: if non-null, select this id after load (from sessionStorage nav).
@@ -536,7 +558,7 @@ export default function SheetReviewPage() {
                   // check its id BEFORE the generic custom-mode branch below,
                   // otherwise that branch always wins and this real photo
                   // never shows (dead code — was unreachable).
-                  selectedPinnedCustomId === PINNED_TEMPLATE_40_ID ? PINNED_TEMPLATE_40_PREVIEW_IMAGE
+                  pinnedPreviewImage(selectedPinnedCustomId) ? pinnedPreviewImage(selectedPinnedCustomId)
                   : effectiveTemplateMode === 'custom' ? null
                   : templateVariant === 'sbd4' ? VJU_SBD4_PREVIEW_IMAGE
                   : VJU_SBD8_PREVIEW_IMAGE

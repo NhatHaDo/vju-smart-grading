@@ -72,17 +72,36 @@ export const TEMPLATE_VARIANT_LABEL: Record<TemplateVariant, string> = {
 // `let` exports are live bindings: importers see the resolved value.
 const PINNED_40_ENV = import.meta.env.VITE_PINNED_TEMPLATE_40_ID;
 export let PINNED_TEMPLATE_40_ID = Number(PINNED_40_ENV ?? 2);
-export const PINNED_TEMPLATES: { label: string; id: number }[] = [
-  { label: 'Mẫu 40 câu TN + Đúng/Sai', id: PINNED_TEMPLATE_40_ID },
+export const PINNED_TEMPLATES: { label: string; id: number; previewImage?: string | null }[] = [
+  { label: 'Mẫu 40 câu TN + Đúng/Sai', id: PINNED_TEMPLATE_40_ID, previewImage: '/template-previews/vju-mau40.jpg' },
 ];
+
+/** Id of the shared "Phiếu Bộ GD" template, once the server has it (null before). */
+export let PINNED_TEMPLATE_BGD_ID: number | null = null;
+
+/** The template to grade a kỳ thi with, from the sheet(s) its bộ đề were mixed
+ *  for (template ids): that sheet when they all agree, otherwise Mẫu 40 câu. */
+export function sheetTemplate(sheets: number[] | undefined, names?: Record<string, string>): { mode: 'custom'; id: number; name: string; pinned: boolean } {
+  const id = sheets && sheets.length > 0 && sheets.every(s => s === sheets[0]) ? sheets[0] : null;
+  const pinned = PINNED_TEMPLATES.find(pt => pt.id === id);
+  if (pinned) return { mode: 'custom', id: pinned.id, name: pinned.label, pinned: true };
+  if (id != null) return { mode: 'custom', id, name: names?.[String(id)] ?? 'Phiếu của bộ đề', pinned: false };
+  return { mode: 'custom', id: PINNED_TEMPLATE_40_ID, name: PINNED_TEMPLATES[0].label, pinned: true };
+}
 
 export async function resolvePinnedTemplates(): Promise<void> {
   if (PINNED_40_ENV) return;
   try {
-    const { mau40 } = await customFormsApi.pinned();
+    const { mau40, bgd } = await customFormsApi.pinned();
     if (mau40 != null) {
       PINNED_TEMPLATE_40_ID = mau40;
       PINNED_TEMPLATES[0].id = mau40;
+    }
+    // 2026-10-05: the Bộ GD sheet (SBD 6 số, mã đề 3 số) — offered next to
+    // Mẫu 40 on the Upload / Answer Key pickers once the server has it
+    if (bgd != null) PINNED_TEMPLATE_BGD_ID = bgd;
+    if (bgd != null && !PINNED_TEMPLATES.some(pt => pt.id === bgd)) {
+      PINNED_TEMPLATES.push({ label: 'Phiếu Bộ GD (SBD 6 số, mã đề 3 số)', id: bgd, previewImage: BGD_PREVIEW_IMAGE });
     }
   } catch { /* keep the default */ }
 }
@@ -99,6 +118,17 @@ export async function resolvePinnedTemplates(): Promise<void> {
 export const VJU_SBD4_PREVIEW_IMAGE = '/template-previews/vju-sbd4.jpg';
 export const VJU_SBD8_PREVIEW_IMAGE = '/template-previews/vju-sbd8.jpg';
 export const PINNED_TEMPLATE_40_PREVIEW_IMAGE = '/template-previews/vju-mau40.jpg';
+// 2026-10-05: "đổi đúng ảnh mẫu phiếu của 40 câu với cái bgd đi" — the photo
+// that sat under vju-mau40.jpg was in fact the blank Bộ GD sheet (SBD 6 số,
+// mã đề 3 số); it is now bgd-40tn.jpg and shown for that template. Mẫu 40
+// now shows a real graded Mẫu 40 sheet ("lấy luôn ảnh chấm làm mẫu"), with the
+// name, signatures and mã sinh viên blurred / blanked out.
+export const BGD_PREVIEW_IMAGE = '/template-previews/bgd-40tn.jpg';
+
+/** The reference photo of a pinned template (Upload / Answer Key preview), or null. */
+export function pinnedPreviewImage(templateId: number | null | undefined): string | null {
+  return PINNED_TEMPLATES.find(pt => pt.id === templateId)?.previewImage ?? null;
+}
 
 export interface OmrStudentInfo {
   cccd?:    string | null;
@@ -368,6 +398,10 @@ export interface AnswerKeyStore {
    *  least one entry exists here, `resolveAnswerKeyForMaDe` switches to strict
    *  per-đề matching instead of falling back to the top-level set. */
   byMaDe?: Record<string, AnswerKeySet>;
+  /** 2026-10-05: saved for a kỳ thi after "Dùng đáp án khác" — this kỳ thi is
+   *  graded with its own answers, not the attached bộ đề trộn's, until the
+   *  teacher presses "Dùng lại đáp án bộ đề". */
+  ownKey?: boolean;
   /** Proctor/grader names for single-đề mode. */
   proctors?: ProctorInfo;
 }
@@ -484,6 +518,26 @@ export function loadAnswerKeyDraft(templateKey: TemplateStoreKey): AnswerKeyStor
 export function saveAnswerKeyDraft(templateKey: TemplateStoreKey, store: AnswerKeyStore): void {
   const map = loadAnswerKeyDraftsMap();
   map[templateKey] = store;
+  saveAnswerKeyDraftsMap(map);
+}
+
+// 2026-10-05: "hồi nãy cái 2601 kia là do hệ thống ko xoá cái cũ của cái
+// trước đi, lúc t vào lại vẫn có" — grading always reopened the last saved
+// key, whatever the kỳ thi, so a new exam showed the previous exam's mã đề.
+// Each (kỳ thi, mẫu phiếu) now keeps its own key, in the same synced drafts
+// map under "exam:<id>|<template key>" ("exam:none|…" when no kỳ thi): a
+// kỳ thi you come back to shows its own answers, a new one starts empty.
+function examKeySlot(examId: number | null, templateKey: TemplateStoreKey): string {
+  return `exam:${examId ?? 'none'}|${templateKey}`;
+}
+
+export function loadExamAnswerKey(examId: number | null, templateKey: TemplateStoreKey): AnswerKeyStore | null {
+  return loadAnswerKeyDraftsMap()[examKeySlot(examId, templateKey)] ?? null;
+}
+
+export function saveExamAnswerKey(examId: number | null, templateKey: TemplateStoreKey, store: AnswerKeyStore): void {
+  const map = loadAnswerKeyDraftsMap();
+  map[examKeySlot(examId, templateKey)] = store;
   saveAnswerKeyDraftsMap(map);
 }
 
