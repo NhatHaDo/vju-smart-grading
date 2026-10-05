@@ -302,3 +302,13 @@ export async function parseAnswerKeyWorkbook(file: File, schema: TemplateSchema)
     warnings: [...warnings, 'Không tìm thấy sheet đáp án hợp lệ trong file (thiếu cột "Câu"/"Đáp án").'],
   };
 }
+
+/** The mã đề written in an answer file's name: "Dap_an_Ma_de_101.xlsx",
+ *  "de 102.xlsx", "Mã đề thi 103 (1).xlsx", or just "101.xlsx"; null = none. */
+export function maDeFromFileName(name: string): string | null {
+  // drop the extension and a browser's " (1)" duplicate-download suffix
+  const base = name.replace(/\.[^.]+$/, '').replace(/\s*\(\d+\)$/, '').trim();
+  const m = base.match(/(?:m[aã][\s_-]*)?(?:đ[eềể]|de)(?:[\s_-]*thi)?[\s_-]*(\d{2,6})(?!.*\d)/i)
+    ?? base.match(/^(\d{2,6})$/);   // a file named just "101.xlsx"
+  return m ? m[1] : null;
+}

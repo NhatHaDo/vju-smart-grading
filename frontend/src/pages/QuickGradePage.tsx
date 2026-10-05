@@ -24,17 +24,24 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Zap, X, Hand, Camera as CameraIcon, ArrowLeft, AlertTriangle, CheckCircle2, ListChecks, Settings2, LayoutTemplate } from 'lucide-react';
+import { Zap, X, Hand, Camera as CameraIcon, ArrowLeft, AlertTriangle, CheckCircle2, ListChecks, Settings2, LayoutTemplate, FileUp } from 'lucide-react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import PageHeader from '../components/layout/PageHeader';
 import { customFormsApi, examPapersApi, examsApi } from '../services/apiClient';
 import type { ExamOut } from '../types/exam';
+import { buildSchemaFromDetail } from '../utils/templateSchema';
+import { maDeFromFileName, parseAnswerKeyWorkbook } from '../utils/answerKeyExcel';
 import {
   loadAnswerKey,
   loadAnswerKeyDraft,
+  loadAnswerKeyOwner,
   loadLastUsedTemplate,
+  saveAnswerKey,
+  saveAnswerKeyDraft,
   saveLastUsedTemplate,
+  VJU_PRESET_SCHEMA,
+  type TemplateSchema,
   templateStoreKeyFor,
   PINNED_TEMPLATES,
   VJU_SBD4_PREVIEW_IMAGE,
@@ -138,7 +145,7 @@ function SheetCards({ options, tpl, variant, onPick, disabled }: {
             style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, padding: 6, textAlign: 'left',
               border: `2px solid ${on ? '#C8102E' : '#E5E7EB'}`, borderRadius: 12, background: on ? '#FEF2F2' : '#fff',
               cursor: disabled ? 'default' : 'pointer', fontFamily: 'inherit', opacity: disabled && !on ? 0.5 : 1 }}>
-            <div style={{ height: 110, borderRadius: 8, overflow: 'hidden', background: '#F3F4F6',
+            <div style={{ width: '100%', boxSizing: 'border-box', height: 110, borderRadius: 8, overflow: 'hidden', background: '#F3F4F6',
               display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               {o.image
                 ? <img src={o.image} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top' }} />
@@ -157,7 +164,7 @@ function SheetCards({ options, tpl, variant, onPick, disabled }: {
 }
 
 function SetupScreen({
-  store, tpl, variant, sheets, onPickSheet, onEditAnswers, onStart, exams, examId, onSelectExam, examInfo,
+  store, tpl, variant, sheets, onPickSheet, onEditAnswers, onImportFiles, importNote, importing, onStart, exams, examId, onSelectExam, examInfo,
 }: {
   store: AnswerKeyStore | null;
   tpl: LastUsedTemplate | null;
@@ -165,6 +172,10 @@ function SetupScreen({
   sheets: SheetOption[];
   onPickSheet: (o: SheetOption) => void;
   onEditAnswers: () => void;
+  /** Answer file(s) picked on the phone → the chosen sheet's answer key. */
+  onImportFiles: (files: File[]) => void;
+  importNote: { ok: string; warnings: string[] } | null;
+  importing: boolean;
   onStart: () => void;
   exams: ExamOut[];
   examId: number | null;
@@ -183,6 +194,13 @@ function SetupScreen({
     ? (tpl?.name ?? 'Custom template')
     : TEMPLATE_VARIANT_LABEL[variant];
   const fromPapers = examId != null && !!examInfo && !examInfo.loading && examInfo.versions.length > 0;
+  const fileRef = useRef<HTMLInputElement>(null);
+  const importButton = (primary: boolean) => (
+    <Button size="sm" variant={primary ? 'primary' : 'secondary'} icon={<FileUp size={14} />} loading={importing}
+      onClick={() => fileRef.current?.click()}>
+      Nhập file đáp án
+    </Button>
+  );
 
   return (
     <div style={{ padding: 24, maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -226,9 +244,12 @@ function SetupScreen({
           <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 10, padding: '12px 14px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <AlertTriangle size={16} color="#C2410C" style={{ flexShrink: 0 }} />
             <div style={{ flex: '1 1 200px', fontSize: 13, color: '#9A3412', lineHeight: 1.5 }}>
-              <strong>{templateLabel}</strong> chưa có đáp án. Nhập đáp án rồi quay lại đây là chấm được ngay.
+              <strong>{templateLabel}</strong> chưa có đáp án. Chọn file đáp án Excel trong máy (nhiều mã đề thì chọn nhiều file cùng lúc), hoặc nhập tay.
             </div>
-            <Button size="sm" icon={<Settings2 size={14} />} onClick={onEditAnswers}>Nhập đáp án</Button>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {importButton(true)}
+              <Button size="sm" variant="secondary" icon={<Settings2 size={14} />} onClick={onEditAnswers}>Nhập tay</Button>
+            </div>
           </div>
         ) : (
           <div style={{ background: '#F9FAFB', border: '1px solid #EEF0F2', borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -237,7 +258,24 @@ function SetupScreen({
               {maDeCount > 0 && <> · {maDeCount} mã đề</>}
             </div>
             {!fromPapers && (
-              <Button size="sm" variant="secondary" icon={<Settings2 size={14} />} onClick={onEditAnswers}>Sửa đáp án</Button>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {importButton(false)}
+                <Button size="sm" variant="secondary" icon={<Settings2 size={14} />} onClick={onEditAnswers}>Sửa đáp án</Button>
+              </div>
+            )}
+          </div>
+        )}
+        <input ref={fileRef} type="file" multiple style={{ display: 'none' }}
+          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          onChange={e => { const f = Array.from(e.target.files ?? []); e.target.value = ''; if (f.length) onImportFiles(f); }} />
+        {importNote && (
+          <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+            {importNote.ok && <div style={{ color: '#15803D' }}>✓ {importNote.ok}</div>}
+            {importNote.warnings.length > 0 && (
+              <div style={{ color: '#B45309', marginTop: 4 }}>
+                {importNote.warnings.slice(0, 4).map((w, i) => <div key={i}>⚠ {w}</div>)}
+                {importNote.warnings.length > 4 && <div>… và {importNote.warnings.length - 4} cảnh báo khác</div>}
+              </div>
             )}
           </div>
         )}
@@ -290,8 +328,8 @@ export default function QuickGradePage() {
   const [customSheets, setCustomSheets] = useState<SheetOption[]>([]);
 
   useEffect(() => {
-    setStore(loadAnswerKey());
     const last = loadLastUsedTemplate();
+    setStore(last ? savedKeyFor(last) : loadAnswerKey());
     setTpl(last);
     examsApi.list().then(setExams).catch(() => setExams([]));
     customFormsApi.list()
@@ -308,12 +346,21 @@ export default function QuickGradePage() {
     ...customSheets,
   ], [customSheets]);
 
-  /** The answers saved for a sheet: its own Answer Key slot, or the active
-   *  key when that sheet is the one last used (= the key belongs to it). */
-  const savedKeyFor = (t: LastUsedTemplate): AnswerKeyStore | null => {
+  // Whose the active answer key is when an older save didn't record it: the
+  // sheet last used when this page opened (picking cards here changes the
+  // "last used" sheet, but not whose answers the active key holds).
+  const legacyOwner = useRef<string | null>(null);
+  if (legacyOwner.current === null) {
     const last = loadLastUsedTemplate();
+    legacyOwner.current = last ? templateStoreKeyFor(last.mode, last.id) : 'vju';
+  }
+
+  /** The answers saved for a sheet: the active key when it was saved for
+   *  that sheet, else that sheet's own Answer Key slot. */
+  const savedKeyFor = (t: LastUsedTemplate): AnswerKeyStore | null => {
     const key = templateStoreKeyFor(t.mode, t.id);
-    if (last && templateStoreKeyFor(last.mode, last.id) === key) return loadAnswerKey();
+    const owner = loadAnswerKeyOwner() ?? legacyOwner.current;
+    if (owner === key) return loadAnswerKey() ?? loadAnswerKeyDraft(key);
     return loadAnswerKeyDraft(key);
   };
 
@@ -333,6 +380,7 @@ export default function QuickGradePage() {
   const pickSheet = (o: SheetOption) => {
     const t: LastUsedTemplate = { mode: o.mode, id: o.id, name: o.mode === 'custom' ? o.name : null };
     setTpl(t);
+    setImportNote(null);
     if (o.variant) setVariant(o.variant);
     if (examId == null || o.mode !== 'custom' || o.id == null) {
       setStore(savedKeyFor(t));
@@ -346,6 +394,77 @@ export default function QuickGradePage() {
         setStore(k.versions.length ? paperStore(k) : savedKeyFor(t));
       })
       .catch(() => { setExamInfo({ loading: false, papers: [], versions: [] }); setStore(savedKeyFor(t)); });
+  };
+
+  // 2026-10-05: "thao tác trên điện thoại thì làm sao t import được file đáp
+  // án vào để chấm ? … gv dùng trên đth là chính" — pick the answer file(s)
+  // right here. Same rules as Answer Key's Import Excel: the mã đề comes
+  // from the file name ("Dap_an_Ma_de_101.xlsx") or the file's "Đề 101"
+  // sheets; a new mã đề is added, an existing one replaced. The result is
+  // saved as this sheet's answer key, so Answer Key / Upload see it too.
+  const [importing, setImporting] = useState(false);
+  const [importNote, setImportNote] = useState<{ ok: string; warnings: string[] } | null>(null);
+
+  const schemaFor = async (t: LastUsedTemplate | null): Promise<TemplateSchema | null> => {
+    if (!t || t.mode === 'vju' || t.id == null) return VJU_PRESET_SCHEMA;
+    try { return buildSchemaFromDetail(await customFormsApi.get(t.id)); } catch { return null; }
+  };
+
+  const importFiles = async (files: File[]) => {
+    const t: LastUsedTemplate = tpl ?? { mode: 'vju', id: null, name: null };
+    setImportNote(null);
+    setImporting(true);
+    try {
+      const schema = await schemaFor(t);
+      if (!schema) { setImportNote({ ok: '', warnings: ['Không tải được mẫu phiếu, thử lại sau.'] }); return; }
+      const base = savedKeyFor(t);
+      let next: AnswerKeyStore = base
+        ? { ...base, byMaDe: base.byMaDe ? { ...base.byMaDe } : undefined }
+        : { answers: {}, scoring: { ...DEFAULT_SCORING }, updatedAt: '' };
+      const warnings: string[] = [];
+      const done: string[] = [];
+      const replaced: string[] = [];
+      for (const file of files) {
+        let parsed;
+        try { parsed = await parseAnswerKeyWorkbook(file, schema); }
+        catch { warnings.push(`${file.name}: không đọc được file (.xlsx)`); continue; }
+        warnings.push(...parsed.warnings.map(w => (files.length > 1 ? `${file.name}: ${w}` : w)));
+        next.scoring = parsed.store.scoring;
+        const sets = parsed.store.byMaDe && Object.keys(parsed.store.byMaDe).length > 0
+          ? Object.entries(parsed.store.byMaDe).map(([code, set]) => ({ code, answers: set.answers }))
+          : null;
+        let code: string | null = null;
+        if (!sets) {
+          code = maDeFromFileName(file.name);
+          if (!code && (files.length > 1 || next.byMaDe)) {
+            code = (window.prompt(`File "${file.name}" là đáp án của mã đề nào? (VD: 101)`, '') ?? '').trim() || null;
+            if (!code) { warnings.push(`${file.name}: chưa nhập mã đề nên bỏ qua file này`); continue; }
+          }
+        }
+        for (const x of sets ?? (code ? [{ code, answers: parsed.store.answers }] : [])) {
+          const now = new Date().toISOString();
+          if (Object.values(next.byMaDe?.[x.code]?.answers ?? {}).some(v => v)) replaced.push(x.code);
+          next.byMaDe = { ...(next.byMaDe ?? {}), [x.code]: { answers: x.answers, scoring: next.scoring, updatedAt: now } };
+          done.push(`Đề ${x.code}`);
+        }
+        if (!sets && !code) {             // one đề, no mã đề: the plain answer key
+          next = { ...next, answers: parsed.store.answers };
+          done.push(file.name);
+        }
+      }
+      if (done.length === 0) { setImportNote({ ok: '', warnings: warnings.length ? warnings : ['Không có đáp án nào trong file'] }); return; }
+      next.updatedAt = new Date().toISOString();
+      saveLastUsedTemplate(t);
+      saveAnswerKey(next, templateStoreKeyFor(t.mode, t.id));
+      saveAnswerKeyDraft(templateStoreKeyFor(t.mode, t.id), next);
+      setStore(next);
+      setImportNote({
+        ok: `Đã nạp ${done.join(', ')}` + (replaced.length ? ` (đề ${replaced.join(', ')} thay bằng file mới)` : ''),
+        warnings,
+      });
+    } finally {
+      setImporting(false);
+    }
   };
 
   /** Answer Key opens on the chosen sheet (it starts on the last used one). */
@@ -394,6 +513,9 @@ export default function QuickGradePage() {
           sheets={sheets}
           onPickSheet={pickSheet}
           onEditAnswers={editAnswers}
+          onImportFiles={files => { void importFiles(files); }}
+          importNote={importNote}
+          importing={importing}
           onStart={() => setSessionActive(true)}
           exams={exams}
           examId={examId}

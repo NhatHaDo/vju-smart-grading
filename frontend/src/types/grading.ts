@@ -420,9 +420,19 @@ export function loadAnswerKey(): AnswerKeyStore | null {
   } catch { return null; }
 }
 
-export function saveAnswerKey(store: AnswerKeyStore): void {
+/** owner: the mẫu phiếu (templateStoreKeyFor) these answers are for, so
+ *  Chấm nhanh never hands one sheet's answers to another (2026-10-05). */
+export function saveAnswerKey(store: AnswerKeyStore, owner?: string): void {
   try { localStorage.setItem(AK_LS_KEY, JSON.stringify(store)); } catch { /* ignore */ }
+  if (owner) { try { localStorage.setItem(AK_OWNER_KEY, owner); } catch { /* ignore */ } }
   markUserStateDirty(AK_LS_KEY);
+}
+
+const AK_OWNER_KEY = 'vju_answer_key_owner';
+
+/** The mẫu phiếu the active answer key was saved for; null = not recorded (older saves). */
+export function loadAnswerKeyOwner(): string | null {
+  try { return localStorage.getItem(AK_OWNER_KEY); } catch { return null; }
 }
 
 export function clearAnswerKey(): void {

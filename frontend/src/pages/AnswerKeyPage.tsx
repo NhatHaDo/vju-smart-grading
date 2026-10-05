@@ -48,7 +48,7 @@ import {
 import { customFormsApi, examPapersApi } from '../services/apiClient';
 import type { CustomFormMeta } from '../services/apiClient';
 import { buildSchemaFromDetail, buildSchemaFromAnswerKeys } from '../utils/templateSchema';
-import { buildAnswerKeyWorkbook, buildAnswerKeySampleWorkbook, parseAnswerKeyWorkbook } from '../utils/answerKeyExcel';
+import { buildAnswerKeyWorkbook, buildAnswerKeySampleWorkbook, maDeFromFileName, parseAnswerKeyWorkbook } from '../utils/answerKeyExcel';
 
 const CHOICES = ['—', 'A', 'B', 'C', 'D'];
 // 2026-07-29: this used to be hardcoded to 'http://localhost:8000/...' —
@@ -633,7 +633,7 @@ export default function AnswerKeyPage() {
     // Always write the single "active" key — every scoring/results/analytics
     // page reads this one, so saving here is what actually makes this
     // template's answers the one used for grading (unchanged from before).
-    saveAnswerKey(store);
+    saveAnswerKey(store, isGradingMode ? currentGradingTemplateKey ?? undefined : directTemplateKey);
     // Also keep this template's own draft in sync, so switching away and
     // back via the dropdown shows the just-saved answers, not a stale draft.
     if (!isGradingMode) saveAnswerKeyDraft(directTemplateKey, store);
@@ -685,13 +685,6 @@ export default function AnswerKeyPage() {
   // replaced (and the message says so). Several files can be picked at once.
   // A file with "Đề 101", "Đề 102" sheets (this page's own multi-đề export)
   // still replaces the whole set.
-  const maDeFromFileName = (name: string): string | null => {
-    // drop the extension and a browser's " (1)" duplicate-download suffix
-    const base = name.replace(/\.[^.]+$/, '').replace(/\s*\(\d+\)$/, '').trim();
-    const m = base.match(/(?:m[aã][\s_-]*)?(?:đ[eềể]|de)(?:[\s_-]*thi)?[\s_-]*(\d{2,6})(?!.*\d)/i)
-      ?? base.match(/^(\d{2,6})$/);   // a file named just "101.xlsx"
-    return m ? m[1] : null;
-  };
 
   const handleImportExcelFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (paperLocked) { e.target.value = ''; return; }
@@ -938,7 +931,7 @@ export default function AnswerKeyPage() {
 
     // Save answer key first
     const store = buildStore();
-    saveAnswerKey(store);
+    saveAnswerKey(store, currentGradingTemplateKey ?? undefined);
     saveExamAnswerKey(examId, gradingSlotKey, { ...store, ownKey: !paperLocked && paperFetched != null });
     autoSaveToLibrary(store);
     setSavedAt(store.updatedAt);
