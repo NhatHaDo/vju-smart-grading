@@ -845,7 +845,8 @@ function QuickGradeCamera({
       try {
         const form = new FormData();
         const ts = new Date().toISOString().replace(/[:.]/g, '-');
-        form.append('image', blob, `camera_${ts}.jpg`);
+        // "cham-nhanh_" marks the bài as Chấm nhanh's on the Kết quả page (lượt chấm list)
+        form.append('image', blob, `cham-nhanh_${ts}.jpg`);
 
         const templateParam = isCustom && tpl?.id != null
           ? `&template_id=${tpl.id}`

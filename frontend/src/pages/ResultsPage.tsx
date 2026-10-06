@@ -83,6 +83,15 @@ function formatGradedAtLabel(iso: string): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// 2026-10-06 "mấy cái ko gắn với kì thi thì sao ? lọc nnao ?" — a lượt chấm
+// in the list says where it came from, not only its time.
+function gradedAtSource(rows: OmrGradeResult[]): string {
+  const names = rows.map(r => r.input?.filename ?? '');
+  if (names.length && names.every(n => n.startsWith('cham-nhanh_'))) return 'Chấm nhanh';
+  if (names.length && names.every(n => n.startsWith('camera_'))) return 'Chụp bằng camera';
+  return 'Tải ảnh lên';
+}
+
 function getBatchTemplateLabel(b: BatchGradeState): string {
   if (b.templateMode === 'custom') {
     // 2026-08-07: bỏ tiền tố "Custom template —" cho đồng nhất với
@@ -866,7 +875,10 @@ export default function ResultsPage() {
       });
       const d = new Date();
       const pad = (x: number) => String(x).padStart(2, '0');
-      const folder = `Ket qua ${selectedExamName ?? 'cham'} ${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`;
+      const lot = isAllGradedAt ? null : gradedAtOptions.find(([iso]) => iso === selectedGradedAt);
+      const folder = lot && !selectedExamName
+        ? `${lot[2]} ${formatGradedAtLabel(lot[0]).replace(/\//g, '-').replace(':', 'h')}`
+        : `Ket qua ${selectedExamName ?? 'cham'} ${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`;
       const n = await saveResultsBundle(rows, excel, folder);
       setPageNotice({ ok: true, text: `Đã tải file Excel và ${n}/${rows.length} ảnh bài chấm.` });
     } catch (e) {
@@ -1060,10 +1072,11 @@ export default function ResultsPage() {
   const gradedAtOptions = Array.from(
     safeResults.reduce((map, r) => {
       const key = rowGradedAt(r, batch);
-      if (key) map.set(key, (map.get(key) ?? 0) + 1);
+      if (key) map.set(key, [...(map.get(key) ?? []), r]);
       return map;
-    }, new Map<string, number>()).entries()
-  ).sort((a, b) => b[0].localeCompare(a[0]));
+    }, new Map<string, OmrGradeResult[]>()).entries()
+  ).sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([iso, rows]) => [iso, rows.length, gradedAtSource(rows)] as const);
   const multipleGradedAt = gradedAtOptions.length > 1;
   const isAllGradedAt    = selectedGradedAt === 'all';
 
@@ -1228,9 +1241,9 @@ export default function ResultsPage() {
                   style={{ width: '100%', padding: '7px 32px 7px 12px', borderRadius: 9, border: '1.5px solid #E5E7EB', fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff', appearance: 'none', cursor: 'pointer' }}
                 >
                   <option value="all">Tất cả lượt chấm ({safeResults.length})</option>
-                  {gradedAtOptions.map(([iso, count]) => (
+                  {gradedAtOptions.map(([iso, count, source]) => (
                     <option key={iso} value={iso}>
-                      {formatGradedAtLabel(iso)} ({count})
+                      {formatGradedAtLabel(iso)} · {source} · {count} phiếu
                     </option>
                   ))}
                 </select>
@@ -1288,7 +1301,7 @@ export default function ResultsPage() {
                 }
               </div>
               <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
-                {totalSheets} phiếu · Chấm lúc: {batch?.gradedAt ? fmtDate(batch.gradedAt) : '—'}
+                {totalSheets} phiếu · Chấm lúc: {!isAllGradedAt ? fmtDate(selectedGradedAt) : batch?.gradedAt ? fmtDate(batch.gradedAt) : '—'}
                 {warnCount > 0 && (
                   <span style={{ color: '#C8102E', marginLeft: 10, fontWeight: 600 }}>
                     · <AlertTriangle size={11} style={{ display: 'inline', verticalAlign: 'middle' }} /> {warnCount} phiếu cần xem lại

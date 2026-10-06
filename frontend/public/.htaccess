@@ -17,3 +17,16 @@
   RewriteCond %{REQUEST_FILENAME} !-d
   RewriteRule . /index.html [L]
 </IfModule>
+
+# 2026-10-06 "nó vẫn cứ bị đứng yên": a phone kept running an old Chấm nhanh
+# after several deploys — its browser (the Google app's) reused the cached
+# index.html, which still pointed at the old build's script. index.html is
+# now always fetched fresh; the build's own files (assets/*-<hash>.js|css)
+# change name on every build, so they can stay cached.
+<IfModule mod_headers.c>
+  <FilesMatch "\.html$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+    Header set Pragma "no-cache"
+    Header set Expires "0"
+  </FilesMatch>
+</IfModule>
