@@ -1156,7 +1156,7 @@ function QuickGradeCamera({
                             {scoreOn10(lastResult.score)}
                           </div>
                           <div style={{ fontSize: 11, opacity: 0.75, marginTop: 2 }}>
-                            {lastResult.score.total}/{lastResult.score.max} · {scorePercent(lastResult.score)}%
+                            {scorePercent(lastResult.score)}% số điểm
                           </div>
                         </div>
                       ) : (

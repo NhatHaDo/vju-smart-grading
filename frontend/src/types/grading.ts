@@ -729,23 +729,34 @@ export function normalizeMaDe(raw: string | null | undefined): string | null {
   return !code || /[_?]/.test(code) ? null : code;
 }
 
-/** Compute per-sheet score given answers and key. */
+/** Compute per-sheet score given answers and key.
+ *
+ *  2026-10-07 "sao app tính nnao mà lại để là thang 10.20 vậy ??? … thang 10
+ *  chứ": `total` (the Điểm shown everywhere: Kết quả, chi tiết bài, Excel,
+ *  thống kê) is on the 10 scale — the points earned under the đề's thang điểm
+ *  over the most it allows, × 10. A thang điểm that already adds up to 10
+ *  gives the same number as before; "Đúng = 1 điểm" (the default) or a
+ *  rounded 0.34 per câu no longer give 25/30 or 8.50/10.20.
+ *  `raw` / `max` are the points themselves. */
 export function computeScore(
   sheetAnswers: Record<string, string | null>,
   key: AnswerKeySet | AnswerKeyStore,
-): { correct: number; wrong: number; blank: number; total: number } {
+): { correct: number; wrong: number; blank: number; total: number; raw: number; max: number } {
   const keyed = Object.keys(key.answers);
   const qp = key.scoring.questionPoints;
-  let correct = 0, wrong = 0, blank = 0, total = 0;
+  let correct = 0, wrong = 0, blank = 0, raw = 0, max = 0;
   for (const q of keyed) {
     const student = sheetAnswers[q] ?? null;
     const correct_ans = key.answers[q];
     if (!correct_ans) continue;          // no answer defined for this question
-    if (!student)       { blank++;  total += key.scoring.blank; continue; }
-    if (answersMatch(student, correct_ans)) { correct++; total += qp?.[q] ?? key.scoring.correct; }
-    else                         { wrong++;   total += key.scoring.wrong; }
+    max += qp?.[q] ?? key.scoring.correct;
+    if (!student)       { blank++;  raw += key.scoring.blank; continue; }
+    if (answersMatch(student, correct_ans)) { correct++; raw += qp?.[q] ?? key.scoring.correct; }
+    else                         { wrong++;   raw += key.scoring.wrong; }
   }
-  return { correct, wrong, blank, total: Math.round(total * 100) / 100 };
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  const total = max > 0 ? r2((raw / max) * 10) : r2(raw);
+  return { correct, wrong, blank, total, raw: r2(raw), max: r2(max) };
 }
 
 /** One answer-section's worth of score (e.g. "Toán (Bắt buộc)", "Vật lý") —

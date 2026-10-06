@@ -522,10 +522,13 @@ function buildBangDiem(
     infoFields.forEach((field, fi) => { txt(row.getCell(3 + fi), info[field.key] ?? null); });
 
     const secStart = 3 + infoFields.length;
+    // each phần on the same 10 scale as the Điểm column (see computeScore)
+    const k = sc && sc.max > 0 ? 10 / sc.max : 1;
+    const r2 = (x: number) => Math.round(x * k * 100) / 100;
     sections.forEach((_s, si) => {
       const cell = row.getCell(secStart + si);
       const s = secSc?.[si];
-      cell.value = s ? (s.max > 0 ? `${s.total}/${s.max}` : String(s.total)) : '—';
+      cell.value = s ? (s.max > 0 ? `${r2(s.total)}/${r2(s.max)}` : String(r2(s.total))) : '—';
       aln(cell, 'center');
     });
 

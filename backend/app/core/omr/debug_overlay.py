@@ -987,17 +987,23 @@ def draw_section_score_summary(
     ordered_names = [n for n in _PHAN_ORDER if n in sections] + [
         n for n in sections if n not in _PHAN_ORDER
     ]
+    # each part's points on the same 10 scale, so they add up to the ĐIỂM
+    k = 10 / max_score if max_score and max_score > 0 else 1.0
     for name in ordered_names:
         sec = sections[name]
         if not sec.total:
             continue
         short = _PHAN_SHORT.get(name, name)
-        lines.append(f"{short}: {sec.correct}/{sec.total} = {sec.points_earned:.2f}")
-    lines.append(f"Tổng: {total_score:.2f}/{max_score:.2f}")
+        lines.append(f"{short}: {sec.correct}/{sec.total} = {sec.points_earned * k:.2f}")
+    # 2026-10-07 "sao … lại để là thang 10.20 vậy ??? … thang 10 chứ": the
+    # điểm is on the 10 scale (points earned / most points × 10), the same
+    # number the app shows; the raw "Tổng: 8.50/10.20" line is gone.
     headline = None
     if max_score and max_score > 0:
         on10 = round(total_score / max_score * 10, 2)
         headline = f"ĐIỂM: {on10:g}"
+    else:
+        lines.append(f"Tổng: {total_score:.2f}")
 
     font = _resolve_score_font(font_size)
     big = _resolve_score_font(font_size * 2)
