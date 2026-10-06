@@ -613,6 +613,7 @@ function PaperCard({ paper, exams, onChanged, onDeleted, onError }: {
 }) {
   const [showKey, setShowKey] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const sheets = useSheets();
 
   const run = async (tag: string, fn: () => Promise<void>) => {
     setBusy(tag);
@@ -634,7 +635,7 @@ function PaperCard({ paper, exams, onChanged, onDeleted, onError }: {
     ...PARTS.filter(p => paper.counts[p.key] > 0)
       .map(p => `${paper.counts[p.key]} ${p.key === 'mcq' ? 'trắc nghiệm' : p.key === 'tf' ? 'Đúng/Sai' : 'trả lời ngắn'}`),
     `${paper.versions.length} mã đề`,
-    paper.gradable && paper.sheet_name ? `Chấm bằng ${paper.sheet_name}` : 'Chỉ in đề',
+    ...(paper.sheet == null ? ['Chỉ in đề'] : []),
     `Tạo ${pad(created.getDate())}/${pad(created.getMonth() + 1)}/${created.getFullYear()} ${pad(created.getHours())}:${pad(created.getMinutes())}`,
   ];
   const inExamCount = paper.versions.filter(v => v.in_exam).length;
@@ -669,6 +670,24 @@ function PaperCard({ paper, exams, onChanged, onDeleted, onError }: {
         <Button size="sm" variant="secondary" icon={<Trash2 size={13} />} style={{ color: '#EF4444', borderColor: '#FECACA' }}
           onClick={() => { if (confirm(`Xóa bộ đề "${paper.name}" và ${paper.versions.length} mã đề?`)) run('delete', async () => { await examPapersApi.delete(paper.id); onDeleted(); }); }} />
       </div>
+
+      {/* Phiếu chấm (2026-10-06): "thế t chỉnh lại nnao" — a bộ đề mixed for
+          the wrong sheet (or before the sheet could be picked) is switched
+          here: same mã đề, same questions, only the sheet it is graded on. */}
+      {paper.sheet != null && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Phiếu chấm:</span>
+          <select value={String(paper.sheet)} disabled={busy === 'sheet'}
+            onChange={e => {
+              const id = Number(e.target.value);
+              run('sheet', async () => onChanged(await examPapersApi.update(paper.id, { sheet: id })));
+            }}
+            style={{ ...inputStyle, width: 'auto', minWidth: 220, maxWidth: '100%', padding: '6px 8px', fontSize: 13 }}>
+            {!sheets.some(sp => sp.id === paper.sheet) && <option value={String(paper.sheet)}>{paper.sheet_name ?? 'Phiếu đang dùng'}</option>}
+            {sheets.map(sp => <option key={sp.id} value={String(sp.id)}>{sp.name}</option>)}
+          </select>
+        </div>
+      )}
 
       {/* Kỳ thi (bước 5) */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>

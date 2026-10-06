@@ -843,8 +843,41 @@ async def quick_check(
         return {"detected": False, "quality_score": 0.0, "ready": False}
 
     ready = bool(result.success and result.marker_quality_score >= QUICK_CHECK_READY_THRESHOLD)
-    return {
+    out = {
         "detected":      bool(result.success),
         "quality_score": result.marker_quality_score,
         "ready":         ready,
+    }
+    if result.success and result.marker_pts is not None:
+        out.update(sheet_fingerprint(img, np.asarray(result.marker_pts, dtype=np.float32)))
+    return out
+
+
+# 2026-10-06: "lúc t chấm nhanh thì nó không tự chấm … việc của các thầy cô chỉ
+# là giơ máy và đẩy phiếu lần lượt": Chấm nhanh used to wait for a frame with
+# NO sheet before grading the next one, but sliding the next sheet on top
+# keeps a sheet in view all the time. Each quick-check now also says where
+# the sheet's 4 corners are and gives a small fingerprint of the sheet itself
+# (its straightened picture, printed form taken out), so the page can tell a
+# NEW sheet from the one it just graded: corners moved, or the fingerprint
+# differs (another student's marks and handwriting).
+FINGERPRINT_W, FINGERPRINT_H = 60, 85
+
+
+def sheet_fingerprint(gray: np.ndarray, pts: np.ndarray) -> dict:
+    """{"corners": [[x, y] × 4, as a share of the frame], "fingerprint": base64}
+    — the fingerprint is the sheet straightened to 60×85, high-passed (light
+    and shadow taken out), normalised and stored as one byte per pixel."""
+    import base64
+    h, w = gray.shape[:2]
+    dst = np.array([[0, 0], [FINGERPRINT_W - 1, 0], [FINGERPRINT_W - 1, FINGERPRINT_H - 1], [0, FINGERPRINT_H - 1]],
+                   dtype=np.float32)
+    small = cv2.warpPerspective(gray, cv2.getPerspectiveTransform(pts, dst), (FINGERPRINT_W, FINGERPRINT_H),
+                                flags=cv2.INTER_AREA).astype(np.float32)
+    hp = small - cv2.GaussianBlur(small, (0, 0), 2)
+    hp = (hp - hp.mean()) / (hp.std() + 1e-6)
+    q = np.clip((hp + 3) * (255 / 6), 0, 255).astype(np.uint8)
+    return {
+        "corners":     [[round(float(x) / w, 4), round(float(y) / h, 4)] for x, y in pts],
+        "fingerprint": base64.b64encode(q.tobytes()).decode("ascii"),
     }

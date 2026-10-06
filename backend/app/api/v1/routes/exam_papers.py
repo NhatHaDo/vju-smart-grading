@@ -57,6 +57,10 @@ class FromBankIn(BaseModel):
 class PaperUpdate(BaseModel):
     name:    str | None = None
     exam_id: int | None = None
+    # 2026-10-06: the answer sheet the bộ đề is graded on (template id from
+    # GET /exam-papers/sheets) — a bộ đề mixed for the wrong sheet (or before
+    # the sheet could be picked) is switched without mixing again
+    sheet:   int | None = None
 
 
 class VersionUpdate(BaseModel):

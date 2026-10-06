@@ -747,7 +747,7 @@ export const examPapersApi = {
     const res = await requestRaw('/api/v1/exam-papers/from-file', { method: 'POST', body: fd });
     return (await rawOrThrow(res)).json();
   },
-  update: (id: number, fields: { name?: string; exam_id?: number | null }) =>
+  update: (id: number, fields: { name?: string; exam_id?: number | null; sheet?: AnswerSheet }) =>
     request<ExamPaperOut>(`/api/v1/exam-papers/${id}`, { method: 'PUT', body: JSON.stringify(fields) }),
   setInExam: (id: number, versionId: number, inExam: boolean) =>
     request<ExamPaperOut>(`/api/v1/exam-papers/${id}/versions/${versionId}`, { method: 'PUT', body: JSON.stringify({ in_exam: inExam }) }),

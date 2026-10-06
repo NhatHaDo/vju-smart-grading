@@ -73,6 +73,59 @@ const RESULT_BANNER_MS = 4000;
 
 type AutoState = 'searching' | 'holding' | 'clearing';
 
+// ── Nhận ra phiếu MỚI khi thầy cô đẩy phiếu tiếp theo lên (2026-10-06) ─────
+// "lúc t chấm nhanh thì nó không tự chấm … việc của các thầy cô chỉ là giơ
+// máy và đẩy phiếu lần lượt": after grading, the page used to wait for a
+// frame with no sheet at all, which never comes when the next sheet slides on
+// top. Now a sheet counts as new when its corners moved, or when its
+// fingerprint (quick-check: the straightened sheet, printed form taken out)
+// differs from the one just graded. Measured on 17 real Bộ GD photos: two
+// different sheets are ≥ 0.114 apart, the same sheet under other light/
+// angle/blur ≤ 0.116 (95%), so 0.11; the rare same-sheet miss is caught by
+// the duplicate check after grading (same SBD, mã đề and answers = skipped).
+const NEW_SHEET_FP_DIST   = 0.11;
+/** A corner moved this much (share of the frame) since grading = sheet changed. */
+const NEW_SHEET_MOVE      = 0.06;
+/** Between two "ready" checks the corners must stay this still to count as held. */
+const HOLD_STILL_MOVE     = 0.02;
+
+interface QuickCheck { detected: boolean; ready: boolean; corners?: number[][]; fingerprint?: string }
+interface SheetMark { corners: number[][]; fp: Float32Array | null }
+
+function decodeFingerprint(b64: string | undefined): Float32Array | null {
+  if (!b64) return null;
+  try {
+    const bin = atob(b64);
+    const v = new Float32Array(bin.length);
+    let mean = 0;
+    for (let i = 0; i < bin.length; i++) { v[i] = bin.charCodeAt(i) / 255 * 6 - 3; mean += v[i]; }
+    mean /= v.length || 1;
+    let sd = 0;
+    for (let i = 0; i < v.length; i++) { v[i] -= mean; sd += v[i] * v[i]; }
+    sd = Math.sqrt(sd / (v.length || 1)) || 1;
+    for (let i = 0; i < v.length; i++) v[i] /= sd;
+    return v;
+  } catch { return null; }
+}
+
+/** 1 − correlation of two fingerprints: ~0 same sheet, ≥ 0.11 another sheet. */
+function fingerprintDistance(a: Float32Array, b: Float32Array): number {
+  if (a.length !== b.length || a.length === 0) return 1;
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += a[i] * b[i];
+  return 1 - s / a.length;
+}
+
+function cornerShift(a: number[][] | undefined, b: number[][] | undefined): number {
+  if (!a || !b || a.length !== 4 || b.length !== 4) return 1;
+  return Math.max(...a.map((p, i) => Math.hypot(p[0] - b[i][0], p[1] - b[i][1])));
+}
+
+/** Same SBD / mã đề and same answers read = the very sheet just graded. */
+function sameReading(a: OmrGradeResult, b: OmrGradeResult): boolean {
+  return JSON.stringify([a.student_info, a.answers]) === JSON.stringify([b.student_info, b.answers]);
+}
+
 function buildAnswerKeyPayload(store: AnswerKeyStore): Record<string, unknown> | null {
   if (isMultiMaDe(store)) {
     return {
@@ -614,6 +667,10 @@ function QuickGradeCamera({
 
   const checkingRef     = useRef(false);
   const waitingClearRef = useRef(false);
+  /** The sheet just auto-graded (corners + fingerprint), to tell the next one from it. */
+  const gradedRef       = useRef<SheetMark | null>(null);
+  /** Corners at the previous check, to know the sheet is held still. */
+  const lastSeenRef     = useRef<number[][] | null>(null);
   const readyStreakRef  = useRef(0);
   const gradingRef      = useRef(false);
   const bannerTimerRef  = useRef<number | null>(null);
@@ -732,7 +789,9 @@ function QuickGradeCamera({
 
   // Chụp full-res khung hình hiện tại rồi gửi CHẤM NGAY — không dừng lại ở
   // bước xem trước/xác nhận (bỏ hẳn theo lựa chọn ưu tiên tốc độ).
-  const captureAndGrade = useCallback(() => {
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimerRef = useRef<number | null>(null);
+  const captureAndGrade = useCallback((auto = false) => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0 || gradingRef.current) return;
 
@@ -771,8 +830,16 @@ function QuickGradeCamera({
           showResultBanner(null, `Lỗi chấm: HTTP ${res.status} — ${txt.slice(0, 160)}`);
         } else {
           const data = await res.json() as OmrGradeResult;
-          setResults(rs => [...rs, data]);
-          showResultBanner(data, null);
+          const prev = resultsRef.current[resultsRef.current.length - 1];
+          if (auto && prev && sameReading(prev, data)) {
+            // the sheet just graded, seen again: not counted twice
+            setNotice('Phiếu này vừa chấm rồi, đưa phiếu tiếp theo');
+            if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+            noticeTimerRef.current = window.setTimeout(() => setNotice(null), 2500);
+          } else {
+            setResults(rs => [...rs, data]);
+            showResultBanner(data, null);
+          }
         }
       } catch (err) {
         showResultBanner(null, `Không gửi được ảnh lên chấm: ${(err as Error)?.message ?? 'lỗi mạng'}`);
@@ -812,22 +879,37 @@ function QuickGradeCamera({
         form.append('image', blob, 'quick.jpg');
         const res = await fetch(QUICK_CHECK_URL, { method: 'POST', body: form });
         if (!res.ok) return;
-        const data = (await res.json()) as { detected: boolean; ready: boolean };
+        const data = (await res.json()) as QuickCheck;
 
         if (!data.detected) {
           waitingClearRef.current = false;
           readyStreakRef.current = 0;
           setReadyStreak(0);
           setAutoState('searching');
+          lastSeenRef.current = null;
           return;
         }
 
         if (waitingClearRef.current) {
-          setAutoState('clearing');
-          return;
+          // a sheet is in view: still the one just graded, or the next one
+          // pushed on top (moved corners / another fingerprint)?
+          const graded = gradedRef.current;
+          const fp = decodeFingerprint(data.fingerprint);
+          const moved = cornerShift(data.corners, graded?.corners) > NEW_SHEET_MOVE;
+          const other = !!(fp && graded?.fp && fingerprintDistance(fp, graded.fp) > NEW_SHEET_FP_DIST);
+          if (!graded || !(moved || other)) {
+            setAutoState('clearing');
+            lastSeenRef.current = data.corners ?? null;
+            return;
+          }
+          waitingClearRef.current = false;
+          readyStreakRef.current = 0;
         }
 
-        if (data.ready) {
+        // held still: the corners barely moved since the last check
+        const still = cornerShift(data.corners, lastSeenRef.current ?? undefined) <= HOLD_STILL_MOVE;
+        lastSeenRef.current = data.corners ?? null;
+        if (data.ready && (still || readyStreakRef.current === 0)) {
           readyStreakRef.current += 1;
           setReadyStreak(readyStreakRef.current);
           setAutoState('holding');
@@ -835,8 +917,14 @@ function QuickGradeCamera({
             readyStreakRef.current = 0;
             setReadyStreak(0);
             waitingClearRef.current = true;
-            captureAndGrade();
+            gradedRef.current = { corners: data.corners ?? [], fp: decodeFingerprint(data.fingerprint) };
+            captureAndGrade(true);
           }
+        } else if (data.ready) {
+          // moving: start counting again from this frame
+          readyStreakRef.current = 1;
+          setReadyStreak(1);
+          setAutoState('holding');
         } else {
           readyStreakRef.current = 0;
           setReadyStreak(0);
@@ -859,7 +947,8 @@ function QuickGradeCamera({
 
   const statusText = grading
     ? 'Đang chấm…'
-    : autoState === 'clearing' ? 'Đã chấm ✓ — nhấc phiếu ra để chấm phiếu tiếp theo'
+    : notice ? notice
+    : autoState === 'clearing' ? 'Đã chấm ✓ — đưa phiếu tiếp theo vào'
     : autoState === 'holding'  ? `Giữ yên… (${readyStreak}/${READY_STREAK_NEEDED})`
     : 'Đưa phiếu vào khung, thấy rõ cả 4 góc';
 
@@ -1055,7 +1144,7 @@ function QuickGradeCamera({
           background: 'rgba(0,0,0,0.55)', position: 'relative', zIndex: 2,
         }}>
           <button
-            onClick={captureAndGrade}
+            onClick={() => captureAndGrade(false)}
             disabled={starting || grading}
             aria-label="Chụp và chấm ngay"
             title="Chụp và chấm ngay (dự phòng nếu chế độ tự động không bắt được)"

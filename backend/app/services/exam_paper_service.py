@@ -307,6 +307,23 @@ class ExamPaperService:
             if not (fields["name"] or "").strip():
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Nhập tên bộ đề")
             p.name = fields["name"].strip()
+        if fields.get("sheet") is not None:
+            # same mã đề, same questions: only the sheet they are graded on
+            # changes, so it must hold every version (and be on a kỳ thi's
+            # answer key under the new sheet's labels from now on)
+            lay = self._layout(fields["sheet"])
+            for v in p.versions:
+                problem = sheet_problem(_snaps(v), v.code, lay)
+                if problem:
+                    raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                        f"Không chấm được bộ đề này bằng phiếu \"{lay.name}\" ({problem})")
+            settings = json.loads(p.settings_json or "{}")
+            settings["for_sheet"] = True
+            if lay.id:
+                settings["sheet"] = lay.id
+            else:
+                settings.pop("sheet", None)
+            p.settings_json = json.dumps(settings, ensure_ascii=False)
         if "exam_id" in fields:
             if fields["exam_id"] is not None:
                 self._exam_or_404(fields["exam_id"])

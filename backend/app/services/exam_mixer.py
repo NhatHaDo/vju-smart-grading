@@ -113,6 +113,9 @@ def sheet_problem(snaps: list["Snapshot"], code: str = "0", sheet=None) -> str |
         return "có câu chưa có đáp án"
     if not code.isdigit():
         return f"mã đề \"{code}\" không phải số"
+    digits = _rules(sheet)[3]
+    if digits is not None and len(code) > digits:
+        return f"mã đề {code} có {len(code)} chữ số, phiếu chỉ có {digits} ô mã đề"
     return None
 
 

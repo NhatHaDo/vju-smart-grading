@@ -582,3 +582,29 @@ def test_grading_key_follows_the_sheet():
     key = grading_key(snaps, lay)
     assert key["q1"] == "E" and key["s1"] == "-1.5" and [key[f"t{i}"] for i in range(1, 5)] == ["Đ", "S", "Đ", "S"]
     assert sheet_problem(snaps * 3, "12", lay) is not None  # 3 trắc nghiệm on a 2-câu sheet
+
+
+def test_bo_de_can_switch_its_answer_sheet(client, tmp_path, monkeypatch):
+    """"thế t chỉnh lại nnao": a bộ đề mixed for Mẫu 40 (e.g. before the sheet
+    could be picked) is switched to the Bộ GD sheet on its card — same mã đề,
+    same questions — and the kỳ thi's answer key follows; a sheet that can't
+    hold it is refused."""
+    _, mau40, bgd = _install_sheets(client, tmp_path, monkeypatch)
+    h = client.headers_for(1)
+    cat = _bank_with_mcq(client, h)
+    exam = client.post("/api/v1/exams", json={"name": "KTGK", "subject": "Tin"}, headers=h).json()
+    paper = client.post("/api/v1/exam-papers/from-bank", headers=h, json={
+        "name": "KTGK TKW", "category_ids": [cat["id"]], "counts": {"mcq": 3}, "num_versions": 2,
+        "start_code": "101", "exam_id": exam["id"]}).json()
+    assert paper["sheet"] == mau40
+    r = client.put(f"/api/v1/exam-papers/{paper['id']}", json={"sheet": bgd}, headers=h)
+    assert r.status_code == 200 and r.json()["sheet"] == bgd and r.json()["exam_id"] == exam["id"]
+    assert [v["code"] for v in r.json()["versions"]] == ["101", "102"]
+    key = client.get(f"/api/v1/exam-papers/exam-answer-key/{exam['id']}", headers=h).json()
+    assert key["sheets"] == [bgd] and key["versions"] == ["101", "102"]
+    # 4-digit mã đề don't fit the Bộ GD sheet's 3 columns
+    p4 = client.post("/api/v1/exam-papers/from-bank", headers=h, json={
+        "name": "4 số", "category_ids": [cat["id"]], "counts": {"mcq": 3}, "num_versions": 1,
+        "start_code": "1001"}).json()
+    r = client.put(f"/api/v1/exam-papers/{p4['id']}", json={"sheet": bgd}, headers=h)
+    assert r.status_code == 422 and "3 ô mã đề" in r.json()["detail"]
