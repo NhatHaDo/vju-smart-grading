@@ -263,6 +263,8 @@ export interface OmrGradeResult {
   signatures?:         SignatureCheck[] | null;
   /** 0–1: share of the template's bubbles found printed on the photo; null = not measured */
   sheet_match?:        number | null;
+  /** small high-passed picture of the sheet (base64, 120×170) — Chấm nhanh's "already graded?" check */
+  sheet_print?:        string | null;
   /** client-side only — set after fetch */
   _error?:             string;
   /** client-side only — set after POST /results/batch succeeds; used for DB delete/correction */

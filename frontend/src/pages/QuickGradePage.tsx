@@ -123,13 +123,14 @@ function cornerShift(a: number[][] | undefined, b: number[][] | undefined): numb
 
 // "t thấy nó vẫn ko tự chấm" (stuck on "Đã chấm ✓"): on a real phone the
 // next sheet pushed exactly on top neither moves the corners nor changes the
-// small fingerprint enough. Fallback: when the view was disturbed (a hand
+// small fingerprint enough. Fallback: while a sheet is held in view after
+// grading it is read again — soon after the view was disturbed (a hand
 // pushing a sheet: the corners jumped, the frame blurred, the fingerprint
-// drifted) and then held still again, the sheet is read again; a reading
-// that matches a sheet already graded is not counted twice.
-// 2026-10-06 "ko có gì nó cũng chụp chấm": it used to re-read every 1.8 s
-// even with nothing happening — now only after such a disturbance.
+// drifted), and every PROBE_IDLE_MS anyway, since a push can happen between
+// two checks. A reading of a sheet already graded is not counted twice (see
+// alreadyGraded); the quiet re-reads show nothing.
 const PROBE_GAP_MS = 1800;
+const PROBE_IDLE_MS = 3000;
 const SAME_ANSWERS_SHARE = 0.9;
 const DISTURB_MOVE = 2 * HOLD_STILL_MOVE;
 const DISTURB_FP_DIST = NEW_SHEET_FP_DIST / 2;
@@ -141,26 +142,43 @@ const MIN_SHEET_MATCH = 0.75;
 
 const fullyRead = (v: unknown): v is string => typeof v === 'string' && v !== '' && !v.includes('_');
 
-/** Two readings of one sheet: no info field read differently, ≥ 90% same answers. */
-function similarReading(a: OmrGradeResult, b: OmrGradeResult): boolean {
+// "sao t thấy nó lại bị đứng yên sau khi chấm 1 phiếu": answers alone can't
+// tell sheets apart — a class's sheets often have no SBD, the blank câu are
+// the same on every sheet, and two all-correct sheets read identically.
+// The grade sends a small picture of the sheet itself (sheet_print): the same
+// sheet photographed again differs by ≤ 0.005, another student's sheet by
+// ≥ 0.06 (handwriting, name) even with every answer the same.
+const SAME_PRINT_DIST = 0.03;
+
+/** An info field (SBD, mã đề…) read in full on both and different → other sheet. */
+function otherStudent(a: OmrGradeResult, b: OmrGradeResult): boolean {
   const ia = (a.student_info ?? {}) as Record<string, unknown>;
   const ib = (b.student_info ?? {}) as Record<string, unknown>;
   for (const k of new Set([...Object.keys(ia), ...Object.keys(ib)])) {
-    if (fullyRead(ia[k]) && fullyRead(ib[k]) && ia[k] !== ib[k]) return false;
+    if (fullyRead(ia[k]) && fullyRead(ib[k]) && ia[k] !== ib[k]) return true;
   }
-  const keys = new Set([...Object.keys(a.answers ?? {}), ...Object.keys(b.answers ?? {})]);
-  if (keys.size === 0) return true;
-  let same = 0;
-  for (const k of keys) if ((a.answers?.[k] ?? '') === (b.answers?.[k] ?? '')) same++;
-  return same / keys.size >= SAME_ANSWERS_SHARE;
+  return false;
+}
+
+/** No sheet picture (older server): the câu answered on either must be ≥ 90% the same. */
+function similarAnswers(a: OmrGradeResult, b: OmrGradeResult): boolean {
+  const keys = [...new Set([...Object.keys(a.answers ?? {}), ...Object.keys(b.answers ?? {})])]
+    .filter(k => a.answers?.[k] || b.answers?.[k]);
+  if (keys.length === 0) return true;
+  const same = keys.filter(k => (a.answers?.[k] ?? '') === (b.answers?.[k] ?? '')).length;
+  return same / keys.length >= SAME_ANSWERS_SHARE;
 }
 
 /** Index of the bài in this session that is this very sheet again, or -1.
- *  Every bài is checked, not only the last one ("nó còn phát hiện phiếu
- *  này đã chấm r"). */
-function alreadyGraded(results: OmrGradeResult[], r: OmrGradeResult): number {
+ *  Every bài is checked, not only the last one. */
+function alreadyGraded(results: OmrGradeResult[], prints: WeakMap<OmrGradeResult, Float32Array>,
+                       r: OmrGradeResult, print: Float32Array | null): number {
   for (let i = results.length - 1; i >= 0; i--) {
-    if (similarReading(results[i], r)) return i;
+    const prev = results[i];
+    if (otherStudent(prev, r)) continue;
+    const pp = prints.get(prev);
+    const same = pp && print ? fingerprintDistance(pp, print) < SAME_PRINT_DIST : similarAnswers(prev, r);
+    if (same) return i;
   }
   return -1;
 }
@@ -806,8 +824,10 @@ function QuickGradeCamera({
   const disturbedRef = useRef(false);
   const rejectedAtRef = useRef(0);    // last read that was not the sheet (see isTheSheet)
   const rejectsRef = useRef(0);       // … and how many in a row (waits longer each time)
-  /** probe: a re-read of the sheet still in view (see PROBE_GAP_MS) — counted only when it is another sheet. */
-  const captureAndGrade = useCallback((auto = false, probe = false) => {
+  /** probe: a re-read of the sheet still in view (see PROBE_GAP_MS) — counted only when it is another sheet;
+   *  disturbedProbe: one after the view was disturbed (says "đã chấm rồi" if it is the same sheet). */
+  const printsRef = useRef(new WeakMap<OmrGradeResult, Float32Array>());
+  const captureAndGrade = useCallback((auto = false, probe = false, disturbedProbe = false) => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0 || gradingRef.current) return;
 
@@ -838,7 +858,7 @@ function QuickGradeCamera({
           : '';
         // full_debug=true — cần debug.overlay_all_path để hiện ảnh detect to
         // ngay trên màn hình Chấm nhanh (thay cho banner điểm nhỏ trước đây).
-        const url = `${GRADE_URL}?mean_mode=circle_mask&full_debug=true&image_source=auto${templateParam}${answerKeyParam}${scoringParam}`;
+        const url = `${GRADE_URL}?mean_mode=circle_mask&full_debug=true&sheet_print=true&image_source=auto${templateParam}${answerKeyParam}${scoringParam}`;
 
         const res = await fetch(url, { method: 'POST', body: form });
         if (!res.ok) {
@@ -846,7 +866,10 @@ function QuickGradeCamera({
           showResultBanner(null, `Lỗi chấm: HTTP ${res.status} — ${txt.slice(0, 160)}`);
         } else {
           const data = await res.json() as OmrGradeResult;
-          const dup = alreadyGraded(resultsRef.current, data);
+          // the sheet picture is only for the check below — not kept in the results
+          const print = decodeFingerprint(data.sheet_print ?? undefined);
+          delete data.sheet_print;
+          const dup = alreadyGraded(resultsRef.current, printsRef.current, data, print);
           if (auto && !isTheSheet(data)) {
             // no sheet / half a sheet / blurred / another form: not counted,
             // and the next steady view is read again
@@ -856,11 +879,13 @@ function QuickGradeCamera({
             rejectsRef.current = Math.min(rejectsRef.current + 1, 3);
             if (!probe) flashNotice('Chưa thấy rõ phiếu — để cả tờ phiếu trong khung, giữ yên máy');
           } else if (auto && dup >= 0) {
-            // a sheet already graded, seen again: not counted twice
+            // a sheet already graded, seen again: not counted twice (a quiet
+            // re-check of the sheet lying there says nothing)
             rejectsRef.current = 0;
-            flashNotice(`Phiếu này đã chấm rồi (bài ${dup + 1}) — đưa phiếu tiếp theo`);
+            if (!probe || disturbedProbe) flashNotice(`Phiếu này đã chấm rồi (bài ${dup + 1}) — đưa phiếu tiếp theo`);
           } else {
             rejectsRef.current = 0;
+            if (print) printsRef.current.set(data, print);
             setResults(rs => [...rs, data]);
             showResultBanner(data, null);
           }
@@ -934,12 +959,14 @@ function QuickGradeCamera({
               disturbedRef.current = true;
             }
             probeStreakRef.current = data.ready && held ? probeStreakRef.current + 1 : 0;
-            if (disturbedRef.current && probeStreakRef.current >= READY_STREAK_NEEDED
-                && Date.now() - lastGradeAtRef.current >= PROBE_GAP_MS) {
+            const since = Date.now() - lastGradeAtRef.current;
+            const disturbed = disturbedRef.current;
+            if (probeStreakRef.current >= READY_STREAK_NEEDED
+                && since >= (disturbed ? PROBE_GAP_MS : PROBE_IDLE_MS)) {
               probeStreakRef.current = 0;
               disturbedRef.current = false;
               gradedRef.current = { corners: data.corners ?? [], fp: decodeFingerprint(data.fingerprint) };
-              captureAndGrade(true, true);
+              captureAndGrade(true, true, disturbed);
             }
             return;
           }

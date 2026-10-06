@@ -167,6 +167,27 @@ class DebugVisualPaths:
 SHEET_MATCH_MIN = 0.75
 
 
+SHEET_PRINT_W, SHEET_PRINT_H = 120, 170
+
+
+def sheet_print_of(page: np.ndarray) -> str | None:
+    """The straightened sheet at 120×170, high-passed (light and shadow taken
+    out), one byte per pixel, base64. Two photos of the same sheet give
+    nearly the same print; another student's sheet differs at least in the
+    handwriting — even when every answer is the same (2026-10-06: two
+    all-correct sheets of a class read identically)."""
+    import base64
+    try:
+        g = page if page.ndim == 2 else cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
+        s = cv2.resize(g, (SHEET_PRINT_W, SHEET_PRINT_H), interpolation=cv2.INTER_AREA).astype(np.float32)
+        hp = cv2.GaussianBlur(s - cv2.GaussianBlur(s, (0, 0), 3), (0, 0), 0.8)
+        hp = (hp - hp.mean()) / (hp.std() + 1e-6)
+        q = np.clip((hp + 3) * (255 / 6), 0, 255).astype(np.uint8)
+        return base64.b64encode(q.tobytes()).decode("ascii")
+    except Exception:
+        return None
+
+
 # ── Result container ──────────────────────────────────────────────────────
 
 @dataclass
@@ -206,6 +227,9 @@ class OMRResult:
     # Low = the 4 "corners" were not this sheet's: no sheet in the frame,
     # half a sheet, another form. Chấm nhanh doesn't count such a frame.
     sheet_match: float | None = None
+    # A small picture of this very sheet (see sheet_print_of) — tells two
+    # sheets with the same answers apart (handwriting, name, smudges).
+    sheet_print: str | None = None
 
     @property
     def needs_review(self) -> bool:
@@ -968,9 +992,11 @@ class OMREngine:
         # same bubble positions; the caller's template object is untouched.
         self.template = self._base_template
         sheet_match: float | None = None
+        sheet_print: str | None = None
         if self.enable_block_snap and M_inv is None and prep_method == "markers":
             _snap_stats: dict = {}
             self.template, _block_shifts = snap_template(read_image, self._base_template, _snap_stats)
+            sheet_print = sheet_print_of(read_image)
             if _snap_stats.get("total"):
                 sheet_match = _snap_stats["matched"] / _snap_stats["total"]
                 if sheet_match < SHEET_MATCH_MIN:
@@ -1255,6 +1281,7 @@ class OMREngine:
             _M_inv=M_inv,
             signature_checks=signature_checks,
             sheet_match=sheet_match,
+            sheet_print=sheet_print,
         )
         return omr_result, aligned_image, bubble_means, visual_image
 

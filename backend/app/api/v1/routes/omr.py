@@ -456,6 +456,10 @@ async def debug_grade(
         default=True,
         description="Xuất tất cả 4 ảnh debug + means.json (mặc định: true)",
     ),
+    sheet_print: bool = Query(
+        default=False,
+        description="Trả kèm ảnh thu nhỏ của phiếu (Chấm nhanh dùng để nhận ra phiếu đã chấm)",
+    ),
     image_source: str = Query(
         default="auto",
         description="Nguồn ảnh: 'auto' | 'flatbed' | 'scan_app' | 'camera'. "
@@ -752,6 +756,7 @@ async def debug_grade(
         # 0–1, None = not measured — see OMRResult.sheet_match
         "sheet_match": (round(omr_result.sheet_match, 3)
                         if omr_result.sheet_match is not None else None),
+        "sheet_print": omr_result.sheet_print if sheet_print else None,
         "info_field_columns": info_field_columns,
         "score":              score,
         "debug": {
