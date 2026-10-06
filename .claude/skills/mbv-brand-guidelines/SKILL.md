@@ -1,9 +1,16 @@
 ---
 name: mbv-brand-guidelines
-description: Áp dụng bộ quy chuẩn nhận diện thương hiệu MBV (Ngân hàng TNHH MTV Việt Nam Hiện Đại) — màu HEX, logo, font Liberation Sans — khi thiết kế, viết báo cáo, làm slide, banner, tài liệu hoặc trang web liên quan đến MBV. Dùng bất cứ khi nào yêu cầu nhắc đến MBV, "ngân hàng MBV", hoặc cần sản phẩm mang thương hiệu MBV.
+description: Áp dụng bộ quy chuẩn nhận diện thương hiệu MBV (Ngân hàng TNHH MTV Việt Nam Hiện Đại) — màu HEX, logo, font Liberation Sans — khi thiết kế, viết báo cáo, làm slide, banner, tài liệu hoặc trang web liên quan đến MBV. Dùng bất cứ khi nào yêu cầu nhắc đến MBV, "ngân hàng MBV", hoặc cần sản phẩm mang thương hiệu MBV. MẶC ĐỊNH đầu ra là slide .pptx 16:9 dùng để thuyết trình (kể cả khi yêu cầu ghi là "báo cáo"), trừ khi người dùng nêu rõ định dạng khác.
 ---
 
 # MBV Brand Guidelines
+
+## Đầu ra mặc định: slide thuyết trình (.pptx, 16:9)
+
+Khi skill này được gọi (ví dụ `/mbv-brand-guidelines <chủ đề>`), **mặc định tạo file .pptx 16:9 để thuyết trình**, dùng `scripts/mbv_pptx.py`, KHÔNG tạo .docx/.pdf.
+- Nội dung "báo cáo", "tài chính", "kết quả kinh doanh"… vẫn làm thành slide: mỗi slide một ý chính, câu ngắn, ưu tiên KPI/bảng gọn thay vì đoạn văn dài. Cấu trúc gợi ý: bìa → tóm tắt/thông điệp chính → các slide nội dung (KPI, bảng, so sánh) → bước tiếp theo → kết.
+- Chỉ đổi sang .docx (A4 dọc), PDF, HTML… khi người dùng yêu cầu rõ định dạng đó (ví dụ "file Word", "báo cáo A4", "PDF").
+- Lưu file vào thư mục `slides/` của dự án (tạo nếu chưa có), đặt tên `MBV_<ChuDe>.pptx`, rồi chạy `check_brand.py` và gửi file cho người dùng.
 
 Áp dụng các quy chuẩn dưới đây cho mọi sản phẩm mang thương hiệu MBV (thiết kế, báo cáo, slide, tài liệu, HTML/PDF/DOCX/PPTX). Nếu người dùng đưa quy chuẩn khác/mới hơn, ưu tiên theo người dùng.
 
@@ -95,7 +102,7 @@ Giới hạn cần biết: các builder chỉ dựng bố cục cơ bản; nếu
 
 ## Quy trình
 
-1. Xác định loại sản phẩm và định dạng đầu ra (slide 16:9 / báo cáo A4 dọc / PDF / web / khác).
+1. Xác định định dạng đầu ra: mặc định slide .pptx 16:9; chỉ chọn A4 dọc / PDF / web / khác khi người dùng yêu cầu rõ.
 2. Dùng builder hoặc template ở trên; không tự thêm màu/font khác bảng chuẩn.
 3. Chạy `check_brand.py` trên file đầu ra và sửa hết lỗi; với file trực quan, mở/render để kiểm tra bố cục, dấu tiếng Việt, tương phản.
 4. Nếu sản phẩm để công bố bên ngoài, nhắc người dùng đối chiếu với tài sản thương hiệu gốc của MBV.
