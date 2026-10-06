@@ -24,7 +24,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Zap, X, Hand, Camera as CameraIcon, ArrowLeft, AlertTriangle, CheckCircle2, ListChecks, Settings2, LayoutTemplate, FileUp } from 'lucide-react';
+import { Zap, X, Hand, Camera as CameraIcon, ArrowLeft, AlertTriangle, CheckCircle2, ListChecks, Settings2, LayoutTemplate, FileUp, Download } from 'lucide-react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import PageHeader from '../components/layout/PageHeader';
@@ -32,6 +32,7 @@ import { customFormsApi, examPapersApi, examsApi } from '../services/apiClient';
 import type { ExamOut } from '../types/exam';
 import { buildSchemaFromDetail } from '../utils/templateSchema';
 import { maDeFromFileName, parseAnswerKeyWorkbook } from '../utils/answerKeyExcel';
+import { saveAs } from 'file-saver';
 import {
   loadAnswerKey,
   loadAnswerKeyDraft,
@@ -108,6 +109,45 @@ function resolveOverlayUrl(path: string | null | undefined): string | null {
   const idx = Math.max(norm.lastIndexOf('outputs/'), norm.lastIndexOf('uploads/'));
   const relative = idx >= 0 ? norm.slice(idx) : norm.replace(/^\//, '');
   return `/${relative}`;
+}
+
+// ── Tải ảnh đã chấm (2026-10-06) ─────────────────────────────────────────────
+// anh Tú: "thêm nút tải ảnh xuống để tải ảnh này về" + "gửi ảnh các bài": the
+// graded picture (green/red marks, score in the corner) of one bài, or of
+// every bài of the session as one .zip.
+
+function overlayPathOf(r: OmrGradeResult): string | null {
+  return resolveOverlayUrl(r.debug?.overlay_all_path ?? r.debug?.aligned_image_path);
+}
+
+/** "SBD 123456 - Ma de 101 - 8.5 diem.jpg" — whatever the sheet read. */
+function gradedImageName(r: OmrGradeResult, index?: number): string {
+  const parts: string[] = [];
+  if (index != null) parts.push(String(index + 1).padStart(2, '0'));
+  // only fully read numbers ("_" = a column left blank or unreadable)
+  const ok = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '' && !v.includes('_');
+  const info = r.student_info ?? {};
+  const sbd = [info.sbd, info.cccd].find(ok);
+  const maDe = [info.ma_de, info.made].find(ok);
+  if (sbd) parts.push(`SBD ${sbd}`);
+  if (maDe) parts.push(`Ma de ${maDe}`);
+  if (!sbd && !maDe) {
+    // custom templates key their fields by block name (Mẫu 40: mã SV, mã đề)
+    parts.push(...Object.values(info).filter(ok).slice(0, 2));
+  }
+  const d = scoreOn10(r.score);
+  if (d != null) parts.push(`${d} diem`);
+  if (parts.length === (index != null ? 1 : 0)) parts.push('bai cham');
+  return `${parts.join(' - ').replace(/[\\/:*?"<>|]+/g, '_')}.jpg`;
+}
+
+async function fetchGradedImage(r: OmrGradeResult): Promise<Blob | null> {
+  const url = overlayPathOf(r);
+  if (!url) return null;
+  try {
+    const res = await fetch(url);
+    return res.ok ? await res.blob() : null;
+  } catch { return null; }
 }
 
 // ── Setup screen (chọn mẫu phiếu + kỳ thi, bấm Bắt đầu) ─────────────────────
@@ -646,6 +686,40 @@ function QuickGradeCamera({
     onExit(resultsRef.current);
   };
 
+  // Tải ảnh: one bài (keeps its result on screen while saving), or all of them
+  const [saving, setSaving] = useState<'one' | 'zip' | null>(null);
+  const downloadOne = async (r: OmrGradeResult) => {
+    if (bannerTimerRef.current) window.clearTimeout(bannerTimerRef.current);
+    setSaving('one');
+    const blob = await fetchGradedImage(r);
+    setSaving(null);
+    if (blob) saveAs(blob, gradedImageName(r));
+    else alert('Không tải được ảnh của bài này.');
+    bannerTimerRef.current = window.setTimeout(() => { setLastResult(null); setGradeError(null); }, RESULT_BANNER_MS);
+  };
+  const downloadAll = async () => {
+    const list = resultsRef.current;
+    if (list.length === 0) return;
+    setSaving('zip');
+    try {
+      const { default: JSZip } = await import('jszip');
+      const zip = new JSZip();
+      let n = 0;
+      for (let i = 0; i < list.length; i++) {
+        const blob = await fetchGradedImage(list[i]);
+        if (blob) { zip.file(gradedImageName(list[i], i), blob); n++; }
+      }
+      if (n === 0) { alert('Không tải được ảnh nào.'); return; }
+      const ts = new Date();
+      const pad = (x: number) => String(x).padStart(2, '0');
+      saveAs(await zip.generateAsync({ type: 'blob' }),
+        `Anh bai cham ${pad(ts.getDate())}-${pad(ts.getMonth() + 1)} ${pad(ts.getHours())}h${pad(ts.getMinutes())}.zip`);
+      if (n < list.length) alert(`Đã tải ${n}/${list.length} ảnh, ${list.length - n} bài không có ảnh.`);
+    } finally {
+      setSaving(null);
+    }
+  };
+
   const showResultBanner = useCallback((r: OmrGradeResult | null, err: string | null) => {
     setLastResult(r);
     setGradeError(err);
@@ -944,7 +1018,17 @@ function QuickGradeCamera({
                           )}
                         </div>
                       </div>
-                      <CheckCircle2 size={20} color="#34D399" style={{ flexShrink: 0 }} />
+                      {overlayImgSrc ? (
+                        <button type="button" onClick={() => { void downloadOne(lastResult); }} disabled={saving === 'one'}
+                          title="Tải ảnh bài này"
+                          style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6, border: 'none', borderRadius: 9999,
+                            padding: '8px 12px', background: '#fff', color: '#111', fontSize: 12.5, fontWeight: 700,
+                            fontFamily: 'inherit', cursor: 'pointer', opacity: saving === 'one' ? 0.6 : 1 }}>
+                          <Download size={15} /> {saving === 'one' ? 'Đang tải…' : 'Tải ảnh'}
+                        </button>
+                      ) : (
+                        <CheckCircle2 size={20} color="#34D399" style={{ flexShrink: 0 }} />
+                      )}
                     </div>
 
                     {/* Ảnh detect to — overlay chấm màu xanh/đỏ trên phiếu đã căn chỉnh */}
@@ -984,6 +1068,18 @@ function QuickGradeCamera({
           >
             <span style={{ width: 54, height: 54, borderRadius: '50%', background: '#C8102E' }} />
           </button>
+          {results.length > 0 && (
+            <Button
+              variant="secondary"
+              icon={<Download size={15} />}
+              loading={saving === 'zip'}
+              onClick={() => { void downloadAll(); }}
+              style={{ position: 'absolute', left: 18 }}
+              title="Tải ảnh đã chấm của tất cả các bài (.zip)"
+            >
+              Ảnh (.zip)
+            </Button>
+          )}
           <Button
             variant="secondary"
             icon={<CheckCircle2 size={15} />}
