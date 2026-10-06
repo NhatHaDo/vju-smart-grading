@@ -9,6 +9,7 @@
 import type { OmrGradeResult, AnswerKeyStore, CorrectionsStore, BatchGradeState } from '../../types/grading';
 import { TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, computeScore, applyCorrection, resolveAnswerKeyForMaDe, isMultiMaDe, correctionKey, getMaDeValue } from '../../types/grading';
 import { correctionHasChanges } from '../../utils/resultMapping';
+import { serverDate } from '../../utils/serverDate';
 
 // ── VJU palette ───────────────────────────────────────────────────────────────
 
@@ -133,7 +134,7 @@ export default function ExcelLikePreview({
 
   const now = new Date();
   const dateStr = now.toLocaleString('vi-VN', { hour12: false });
-  const gradedStr = new Date(batch.gradedAt).toLocaleString('vi-VN', { hour12: false });
+  const gradedStr = serverDate(batch.gradedAt).toLocaleString('vi-VN', { hour12: false });
   const templateLabel = TEMPLATE_VARIANT_LABEL[batch.templateVariant] ?? batch.templateVariant;
 
   // Start row numbers: title=1, meta x2=2-3, header=4, data starts=5

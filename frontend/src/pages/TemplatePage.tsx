@@ -21,6 +21,7 @@ import { useNavigate } from 'react-router-dom';
 import { customFormsApi, ApiError } from '../services/apiClient';
 import type { CustomFormMeta, CustomFormDetail } from '../services/apiClient';
 import { buildSchemaFromDetail } from '../utils/templateSchema';
+import { serverDate } from '../utils/serverDate';
 
 // ── Schematic preview SVG ─────────────────────────────────────────────────────
 
@@ -122,7 +123,7 @@ function TemplateDetailPanel({
           {typeLabel} · {detail.page_width}×{detail.page_height} px
         </div>
         <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 2 }}>
-          Cập nhật: {detail.updated_at.replace('T', ' ').slice(0, 16)}
+          Cập nhật: {serverDate(detail.updated_at).toLocaleString('vi-VN', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
         </div>
       </div>
 

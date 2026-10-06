@@ -17,6 +17,7 @@ import { buildSchemaFromDetail, getRowTemplateKey, getRowTemplateLabel, buildTem
 import type { TemplateFilterOption } from '../utils/templateSchema';
 import type { ExamOut } from '../types/exam';
 import { dbRowToOmrResult, correctionHasChanges } from '../utils/resultMapping';
+import { serverDate } from '../utils/serverDate';
 
 // ── Name/DOB thumbnail helper (2026-08-06) ──────────────────────────────────
 // Same path-resolution logic as imgUrl() in SheetImageViewer.tsx / OverlayLink()
@@ -77,7 +78,7 @@ function rowGradedAt(r: OmrGradeResult, batch: BatchGradeState | null): string |
 }
 
 function formatGradedAtLabel(iso: string): string {
-  const d = new Date(iso);
+  const d = serverDate(iso);
   if (isNaN(d.getTime())) return iso;
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -262,7 +263,7 @@ function exportCsv(
     ];
   });
   const csv = [headers, ...rows].map(row => row.map(csvCell).join(',')).join('\r\n');
-  const ts = new Date(batch.gradedAt).toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
+  const ts = serverDate(batch.gradedAt).toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
   const filename = `vju_omr_results_${tplSlug}_${ts}.csv`;
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
   const url  = URL.createObjectURL(blob);
@@ -277,7 +278,7 @@ function hasWarnings(r: OmrGradeResult) { return (r.warnings ?? []).length > 0; 
 /** Stable per-row key for bulk-select — mirrors the key already used for the table's .map(). */
 function rowKey(r: OmrGradeResult): string { return String(r.db_id ?? r.input?.filename ?? ''); }
 function fmtDate(iso: string) {
-  try { return new Date(iso).toLocaleString('vi-VN', { hour12: false }); } catch { return iso; }
+  try { return serverDate(iso).toLocaleString('vi-VN', { hour12: false }); } catch { return iso; }
 }
 
 // ── RealRow ────────────────────────────────────────────────────────────────
@@ -559,6 +560,28 @@ function DbStatusBanner({ status }: { status: DbSaveStatus }) {
   );
 }
 
+// Batches already saved to the server (see initData) — keys of the last 50.
+const SAVED_BATCHES_KEY = 'vju_saved_batch_keys';
+function savedBatchKeys(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(SAVED_BATCHES_KEY) ?? '[]');
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
+}
+/** short fingerprint of a batch key (a batch of hundreds of files makes a long key) */
+function keyHash(key: string): string {
+  let h = 5381;
+  for (let i = 0; i < key.length; i++) h = ((h * 33) ^ key.charCodeAt(i)) >>> 0;
+  return `${key.length}:${h.toString(36)}`;
+}
+function wasSaved(key: string): boolean { return savedBatchKeys().includes(keyHash(key)); }
+function markSaved(key: string): void {
+  const k = keyHash(key);
+  try {
+    localStorage.setItem(SAVED_BATCHES_KEY, JSON.stringify([...savedBatchKeys().filter(x => x !== k), k].slice(-50)));
+  } catch { /* ignore */ }
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────
 
 export default function ResultsPage() {
@@ -643,7 +666,15 @@ export default function ResultsPage() {
     setAnswerKey(loadAnswerKey());
     setCorrections(loadCorrections());
 
-    if (navBatch && Array.isArray(navBatch.results) && navBatch.results.length > 0) {
+    // 2026-10-07 "sau khi t ấn xoá tất cả thì nó hết, sau đó t refresh lại thì
+    // nó lại hiện lại": the batch handed over by Chấm nhanh / Upload stays in
+    // the browser's history across a page reload, so every reload saved it to
+    // the server AGAIN — deleted phiếu came back (and copies piled up). A batch
+    // already saved is remembered; reloading then just reads the server.
+    const navKey = navBatch && Array.isArray(navBatch.results)
+      ? `${navBatch.gradedAt}|${navBatch.results.map(r => r.input?.filename ?? '').join('|')}`
+      : null;
+    if (navBatch && Array.isArray(navBatch.results) && navBatch.results.length > 0 && !(navKey && wasSaved(navKey))) {
       // Fresh batch from grading — extract exam context from batch
       const eid  = navBatch.examId   ?? null;
       const ename= navBatch.examName ?? null;
@@ -656,7 +687,7 @@ export default function ResultsPage() {
       setDataSource('localStorage');
 
       // Build a stable key for this batch to prevent duplicate saves
-      const batchKey = `${navBatch.gradedAt}|${navBatch.results.map(r => r.input?.filename ?? '').join('|')}`;
+      const batchKey = navKey!;
       const alreadySaved = navBatch.results.some(r => r.db_id);
       const alreadySentThisMount = savedBatchKeyRef.current === batchKey;
 
@@ -680,6 +711,7 @@ export default function ResultsPage() {
               return db_id ? { ...r, db_id } : r;
             });
             const updatedBatch = { ...navBatch, results: updatedResults };
+            markSaved(batchKey);
             setBatch(updatedBatch);
             try { localStorage.setItem(LS_KEY, JSON.stringify(updatedBatch)); } catch { /* ignore */ }
           }
@@ -856,8 +888,8 @@ export default function ResultsPage() {
   // for the phiếu shown (kỳ thi / mẫu phiếu / tìm kiếm filters)
   const [bundling, setBundling] = useState(false);
   const downloadBundle = async () => {
-    if (!batch) return;
-    if (isAllMode && multipleTemplates) {
+    if (!batch || !exportBatch) return;
+    if (shownManyTemplates) {
       setPageNotice({ ok: false, text: 'Chọn một mẫu phiếu cụ thể ở ô "Mẫu phiếu" trước khi tải tất cả (mỗi file Excel chỉ cho một mẫu phiếu).' });
       return;
     }
@@ -867,7 +899,7 @@ export default function ResultsPage() {
     setPageNotice(null);
     try {
       const excel = await buildResultsExcelFile({
-        batch: { ...batch, templateSchema: selectedTemplateOpt?.templateSchema ?? batch.templateSchema },
+        batch: exportBatch,
         results: rows, answerKey, corrections,
         dataSource: dataSource === 'db' ? 'Database' : 'Trình duyệt (localStorage)',
         examName: selectedExamName ?? batch.examName ?? null,
@@ -1104,6 +1136,27 @@ export default function ResultsPage() {
     ? templateFilteredRows.filter(({ r, missingKeyForMaDe }) => hasWarnings(r) || !!missingKeyForMaDe)
     : templateFilteredRows;
 
+  // 2026-10-07 "sao cái file excel t tải từ cái tải tất cả nó lại dùng cái mẫu
+  // của phiếu khác": phiếu read back from the server don't say which mẫu the
+  // đợt used, so the page fell back to "Mẫu phiếu VJU - SBD 8 số" — and with
+  // "Tất cả mẫu phiếu" the Excel (and the labels) used that wrong mẫu. When
+  // the phiếu shown are all on ONE mẫu, that mẫu is used.
+  const shownTemplateKeys = new Set(gradedAtFilteredRows.map(({ r }) => getRowTemplateKey(r, batch)));
+  const shownManyTemplates = isAllMode && shownTemplateKeys.size > 1;
+  const exportTemplateOpt = selectedTemplateOpt
+    ?? (shownTemplateKeys.size === 1 ? templateOptions.find(o => shownTemplateKeys.has(o.key)) ?? null : null);
+  const exportBatch: BatchGradeState | null = batch && exportTemplateOpt
+    ? {
+        ...batch,
+        templateSchema: exportTemplateOpt.templateSchema,
+        templateMode:   exportTemplateOpt.templateMode,
+        ...(exportTemplateOpt.templateMode === 'custom'
+          ? { customTemplateId: exportTemplateOpt.templateId ?? undefined, customTemplateName: exportTemplateOpt.label }
+          : {}),
+      }
+    : batch;
+  const shownTemplateLabel = exportTemplateOpt?.label ?? (batch ? getBatchTemplateLabel(batch) : '—');
+
   // 2026-08-04: quick find-a-student search — narrows only what the TABLE
   // shows (and "chọn tất cả" checkbox), not the stats/export above, which
   // stay scoped to the "hard" filters (kỳ thi/lượt chấm/mẫu phiếu/kiểm tra
@@ -1179,7 +1232,7 @@ export default function ResultsPage() {
             variant="outline" size="sm" icon={<Download size={14} />}
             onClick={() => {
               if (!hasBatch || !batch) { alert('Chưa có kết quả để xuất Excel.'); return; }
-              if (isAllMode && multipleTemplates) {
+              if (shownManyTemplates) {
                 alert('Vui lòng chọn một mẫu phiếu cụ thể trước khi xuất Excel.');
                 return;
               }
@@ -1309,8 +1362,8 @@ export default function ResultsPage() {
             <div>
               <div style={{ fontSize: 13, fontWeight: 700 }}>
                 {selectedExamName
-                  ? <>Kỳ thi: <span style={{ color: '#C8102E' }}>{selectedExamName}</span> · {getBatchTemplateLabel(batch!)}</>
-                  : <>Đợt chấm: {batch ? getBatchTemplateLabel(batch) : '—'}</>
+                  ? <>Kỳ thi: <span style={{ color: '#C8102E' }}>{selectedExamName}</span> · {shownTemplateLabel}</>
+                  : <>Đợt chấm: {shownTemplateLabel}</>
                 }
               </div>
               <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
@@ -1449,7 +1502,7 @@ export default function ResultsPage() {
                 <Badge
                   style={{ background: '#F3F4F6', color: '#374151', borderRadius: 9999, padding: '2px 10px', fontSize: 11, fontWeight: 600 }}
                 >
-                  {getBatchTemplateLabel(batch)}
+                  {shownTemplateLabel}
                 </Badge>
               )}
               <div className="results-table-toolbar-spacer" style={{ flex: 1 }} />
@@ -1619,7 +1672,7 @@ export default function ResultsPage() {
 
       {showExcelPreview && batch && (
         <ExcelPreviewModal
-          batch={{ ...batch, templateSchema: selectedTemplateOpt?.templateSchema ?? batch.templateSchema }}
+          batch={exportBatch ?? batch}
           results={visibleScoredRows.map(x => x.r)}
           answerKey={answerKey}
           corrections={corrections}

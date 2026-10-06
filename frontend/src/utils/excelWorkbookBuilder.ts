@@ -24,6 +24,7 @@ import type {
 } from '../types/grading';
 import { computeScore, computeSectionScores, formatScoring, activeQuestionPoints, applyCorrection, TEMPLATE_VARIANT_LABEL, VJU_PRESET_SCHEMA, resolveAnswerKeyForMaDe, correctionKey, getMaDeValue, isMultiMaDe } from '../types/grading';
 import { correctionHasChanges } from './resultMapping';
+import { serverDate } from './serverDate';
 
 // ── Display model types ───────────────────────────────────────────────────────
 
@@ -319,7 +320,7 @@ function buildTongQuan(
 
   const info: [string, string | number][] = [
     ['Template',         templateLabel(batch)],
-    ['Thời gian chấm',   new Date(batch.gradedAt).toLocaleString('vi-VN', { hour12: false })],
+    ['Thời gian chấm',   serverDate(batch.gradedAt).toLocaleString('vi-VN', { hour12: false })],
     ['Thời gian xuất',   new Date().toLocaleString('vi-VN', { hour12: false })],
     ['Nguồn dữ liệu',    dataSource],
   ];
@@ -433,7 +434,7 @@ function buildBangDiem(
   // Metadata block
   const meta: [string, string][] = [
     ['Mẫu phiếu',      templateLabel(batch)],
-    ['Thời gian chấm', new Date(batch.gradedAt).toLocaleString('vi-VN', { hour12: false })],
+    ['Thời gian chấm', serverDate(batch.gradedAt).toLocaleString('vi-VN', { hour12: false })],
     ['Thời gian xuất', new Date().toLocaleString('vi-VN', { hour12: false })],
     ['Nguồn dữ liệu',  dataSource],
   ];

@@ -23,6 +23,7 @@ import type { ExamOut } from '../types/exam';
 import { FileNote, LOSSY, UnansweredPicker } from '../components/common/UnansweredPicker';
 import { filesSignature, loadPicked, savePicked, useDraft } from '../services/draftStore';
 import { saveAs } from 'file-saver';
+import { serverDate } from '../utils/serverDate';
 
 const PARTS: { key: QuestionType; label: string }[] = [
   { key: 'mcq',   label: 'Phần I-II: Trắc nghiệm' },   // named as on the VJU sheet
@@ -629,7 +630,7 @@ function PaperCard({ paper, exams, onChanged, onDeleted, onError }: {
     : `File: ${settings.file_name ?? 'không rõ'}`;
   // 2026-10-05: "mấy cái này làm sao cho gọn và rõ ràng": one tag per fact,
   // parts with 0 câu left out, the source on its own line (cut if long)
-  const created = new Date(paper.created_at);
+  const created = serverDate(paper.created_at);
   const pad = (n: number) => String(n).padStart(2, '0');
   const tags = [
     ...PARTS.filter(p => paper.counts[p.key] > 0)

@@ -10,6 +10,7 @@ import {
 import type { ExamOut, ExamFormData } from '../types/exam';
 import { emptyForm, examOutToForm, formToPayload } from '../types/exam';
 import { examsApi } from '../services/apiClient';
+import { serverDate } from '../utils/serverDate';
 
 /** Format "YYYY-MM-DD" → "dd/MM/yyyy" for display */
 function fmtExamDate(s: string | null | undefined): string {
@@ -528,7 +529,7 @@ export default function ExamPage() {
                       <td style={{ padding: '11px 14px', fontWeight: 600, color: '#1E1E1E' }}>
                         <div>{exam.name}</div>
                         <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 2 }}>
-                          {new Date(exam.created_at).toLocaleDateString('vi-VN')}
+                          {serverDate(exam.created_at).toLocaleDateString('vi-VN')}
                         </div>
                       </td>
                       <td style={{ padding: '11px 14px', color: '#374151' }}>

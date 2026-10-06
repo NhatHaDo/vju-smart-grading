@@ -31,6 +31,7 @@ import type {
 import type { ExamOut } from '../types/exam';
 import { buildSchemaFromDetail, getRowTemplateKey, buildTemplateOptionsFromRows } from '../utils/templateSchema';
 import type { TemplateFilterOption } from '../utils/templateSchema';
+import { serverDate } from '../utils/serverDate';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -89,7 +90,7 @@ function needsReview(r: OmrGradeResult): boolean {
 
 // Same formatting as ResultsPage.tsx's "Lượt chấm" dropdown, kept in sync.
 function formatGradedAtLabel(iso: string): string {
-  const d = new Date(iso);
+  const d = serverDate(iso);
   if (isNaN(d.getTime())) return iso;
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
