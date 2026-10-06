@@ -1118,7 +1118,7 @@ function QuickGradeCamera({
                           style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6, border: 'none', borderRadius: 9999,
                             padding: '8px 12px', background: '#fff', color: '#111', fontSize: 12.5, fontWeight: 700,
                             fontFamily: 'inherit', cursor: 'pointer', opacity: saving === 'one' ? 0.6 : 1 }}>
-                          <Download size={15} /> {saving === 'one' ? 'Đang tải…' : 'Tải ảnh'}
+                          <Download size={15} /> {saving === 'one' ? 'Đang tải…' : 'Tải ảnh bài này'}
                         </button>
                       ) : (
                         <CheckCircle2 size={20} color="#34D399" style={{ flexShrink: 0 }} />
@@ -1141,13 +1141,29 @@ function QuickGradeCamera({
         )}
       </div>
 
-      {/* Bottom controls */}
+      {/* Bottom controls — 3 columns so the buttons never sit on the round
+          capture button, however long "Tải tất cả (N bài)" gets */}
       {!error && (
         <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 28,
-          padding: '20px 18px calc(20px + env(safe-area-inset-bottom))',
+          display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: 10,
+          padding: '20px 12px calc(20px + env(safe-area-inset-bottom))',
           background: 'rgba(0,0,0,0.55)', position: 'relative', zIndex: 2,
         }}>
+          <div style={{ justifySelf: 'start', minWidth: 0 }}>
+            {results.length > 0 && (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<Download size={14} />}
+                loading={saving === 'zip'}
+                onClick={() => { void downloadAll(); }}
+                title="Tải ảnh đã chấm của tất cả các bài trong lượt này"
+                style={{ whiteSpace: 'normal', lineHeight: 1.2, textAlign: 'left' }}
+              >
+                Tải tất cả ({results.length} bài)
+              </Button>
+            )}
+          </div>
           <button
             onClick={() => captureAndGrade(false)}
             disabled={starting || grading}
@@ -1162,31 +1178,21 @@ function QuickGradeCamera({
           >
             <span style={{ width: 54, height: 54, borderRadius: '50%', background: '#C8102E' }} />
           </button>
-          {results.length > 0 && (
+          <div style={{ justifySelf: 'end' }}>
             <Button
               variant="secondary"
-              icon={<Download size={15} />}
-              loading={saving === 'zip'}
-              onClick={() => { void downloadAll(); }}
-              style={{ position: 'absolute', left: 18 }}
-              title="Tải ảnh đã chấm của tất cả các bài (.zip)"
+              size="sm"
+              icon={<CheckCircle2 size={14} />}
+              onClick={handleExit}
             >
-              Tải ảnh
+              Xong ({results.length})
             </Button>
-          )}
-          <Button
-            variant="secondary"
-            icon={<CheckCircle2 size={15} />}
-            onClick={handleExit}
-            style={{ position: 'absolute', right: 18 }}
-          >
-            Xong ({results.length})
-          </Button>
+          </div>
         </div>
       )}
 
       {!error && !starting && (
-        <div style={{ position: 'absolute', bottom: 96, left: 0, right: 0, textAlign: 'center', color: 'rgba(255,255,255,0.75)', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, pointerEvents: 'none' }}>
+        <div style={{ position: 'absolute', bottom: 'calc(112px + env(safe-area-inset-bottom))', left: 0, right: 0, padding: '0 12px', textAlign: 'center', color: 'rgba(255,255,255,0.75)', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, pointerEvents: 'none' }}>
           <Hand size={12} /> Nút tròn = chấm thủ công dự phòng · để yên là tự động chấm liên tục
         </div>
       )}

@@ -1,5 +1,6 @@
 import { useConfirm } from '../components/modals/useConfirm';
-import { saveGradedImages } from '../utils/gradedImages';
+import { saveGradedImages, saveResultsBundle } from '../utils/gradedImages';
+import { buildResultsExcelFile } from '../utils/exportResultsExcel';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Card from '../components/common/Card';
@@ -841,6 +842,41 @@ export default function ResultsPage() {
     }
   };
 
+  // 2026-10-06: "kiểu tải cả bảng excel + các ảnh trong 1 folder ấy" — one
+  // .zip: the results Excel (same as Xuất Excel) + every bài's graded picture,
+  // for the phiếu shown (kỳ thi / mẫu phiếu / tìm kiếm filters)
+  const [bundling, setBundling] = useState(false);
+  const downloadBundle = async () => {
+    if (!batch) return;
+    if (isAllMode && multipleTemplates) {
+      setPageNotice({ ok: false, text: 'Chọn một mẫu phiếu cụ thể ở ô "Mẫu phiếu" trước khi tải tất cả (mỗi file Excel chỉ cho một mẫu phiếu).' });
+      return;
+    }
+    const rows = visibleScoredRows.map(x => x.r);
+    if (rows.length === 0) return;
+    setBundling(true);
+    setPageNotice(null);
+    try {
+      const excel = await buildResultsExcelFile({
+        batch: { ...batch, templateSchema: selectedTemplateOpt?.templateSchema ?? batch.templateSchema },
+        results: rows, answerKey, corrections,
+        dataSource: dataSource === 'db' ? 'Database' : 'Trình duyệt (localStorage)',
+        examName: selectedExamName ?? batch.examName ?? null,
+        includeReview: true, includeAnswers: true, highlightReview: true,
+      });
+      const d = new Date();
+      const pad = (x: number) => String(x).padStart(2, '0');
+      const folder = `Ket qua ${selectedExamName ?? 'cham'} ${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`;
+      const n = await saveResultsBundle(rows, excel, folder);
+      setPageNotice({ ok: true, text: `Đã tải file Excel và ${n}/${rows.length} ảnh bài chấm.` });
+    } catch (e) {
+      console.error(e);
+      setPageNotice({ ok: false, text: 'Không tải được, thử lại sau.' });
+    } finally {
+      setBundling(false);
+    }
+  };
+
   const handleDeleteRow = async (filename: string, db_id?: number) => {
     if (!(await confirm(<>Xoá kết quả <b>{filename}</b>?</>, { okLabel: 'Xoá', danger: true }))) return;
     const key = String(db_id ?? filename);
@@ -1263,6 +1299,22 @@ export default function ResultsPage() {
           </div>
         )}
 
+        {hasBatch && (
+          <Button variant="primary" icon={<Download size={16} />} loading={bundling} onClick={() => { void downloadBundle(); }}
+            style={{ alignSelf: 'flex-start' }}>
+            Tải tất cả (Excel + ảnh)
+          </Button>
+        )}
+        {pageNotice && (
+          <div style={{ fontSize: 13, borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8,
+            background: pageNotice.ok ? '#ECFDF5' : '#FEF2F2', color: pageNotice.ok ? '#065F46' : '#B91C1C',
+            border: `1px solid ${pageNotice.ok ? '#A7F3D0' : '#FECACA'}` }}>
+            <span style={{ flex: 1 }}>{pageNotice.text}</span>
+            <button type="button" onClick={() => setPageNotice(null)}
+              style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'inherit', display: 'flex' }}><X size={14} /></button>
+          </div>
+        )}
+
         {/* Custom template schema missing warning */}
         {hasBatch && schemaMissing && (
           <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1359,15 +1411,6 @@ export default function ResultsPage() {
                 onClick={() => { void downloadImages(safeResults.filter(r => selectedKeys.has(rowKey(r)))); }}>Tải ảnh</Button>
               <Button size="sm" variant="danger" icon={<Trash2 size={13} />} onClick={() => { void handleBulkDelete(); }}>Xoá đã chọn</Button>
             </div>
-          </div>
-        )}
-        {pageNotice && (
-          <div style={{ fontSize: 13, borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8,
-            background: pageNotice.ok ? '#ECFDF5' : '#FEF2F2', color: pageNotice.ok ? '#065F46' : '#B91C1C',
-            border: `1px solid ${pageNotice.ok ? '#A7F3D0' : '#FECACA'}` }}>
-            <span style={{ flex: 1 }}>{pageNotice.text}</span>
-            <button type="button" onClick={() => setPageNotice(null)}
-              style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'inherit', display: 'flex' }}><X size={14} /></button>
           </div>
         )}
 

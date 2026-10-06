@@ -113,3 +113,35 @@ export async function saveGradedImages(results: OmrGradeResult[], zipName = 'Anh
     `${zipName} ${pad(ts.getDate())}-${pad(ts.getMonth() + 1)} ${pad(ts.getHours())}h${pad(ts.getMinutes())}.zip`);
   return files.length;
 }
+
+/**
+ * "Tải tất cả" on Kết quả (2026-10-06): ONE .zip that opens as one folder —
+ * the results Excel next to an "Anh bai cham" folder with every bài's graded
+ * picture. Phones get the share sheet (save to Tệp / send on Zalo).
+ * Returns how many pictures went in.
+ */
+export async function saveResultsBundle(results: OmrGradeResult[], excel: File, folder: string): Promise<number> {
+  const safe = folder.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'Ket qua cham';
+  const { default: JSZip } = await import('jszip');
+  const zip = new JSZip();
+  const root = zip.folder(safe)!;
+  root.file(excel.name, excel);
+  const pics = root.folder('Anh bai cham')!;
+  let n = 0;
+  for (let i = 0; i < results.length; i++) {
+    const url = gradedImageUrl(results[i]);
+    const blob = url ? await fetchBlob(url) : null;
+    if (blob) { pics.file(gradedImageName(results[i], i), blob); n++; }
+  }
+  const file = new File([await zip.generateAsync({ type: 'blob' })], `${safe}.zip`, { type: 'application/zip' });
+  if (isPhone() && canShareFiles([file])) {
+    try {
+      await navigator.share({ files: [file], title: file.name });
+      return n;
+    } catch (e) {
+      if ((e as Error)?.name === 'AbortError') return n;
+    }
+  }
+  saveAs(file, file.name);
+  return n;
+}

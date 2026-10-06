@@ -28,14 +28,10 @@ export interface ExportOptions {
   templateSchema?:  TemplateSchema | null;
 }
 
-export async function exportResultsExcel(opts: ExportOptions): Promise<void> {
-  if (!opts.results || opts.results.length === 0) {
-    alert('Chưa có kết quả để xuất Excel.');
-    return;
-  }
-
+/** The results workbook as a file (name + bytes), without saving it —
+ *  "Tải tất cả" puts it in a .zip next to the graded pictures. */
+export async function buildResultsExcelFile(opts: ExportOptions): Promise<File> {
   const wb = buildResultsWorkbook(opts);
-
   const now = new Date();
   const p   = (n: number) => String(n).padStart(2, '0');
   const ts  = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}_${p(now.getHours())}${p(now.getMinutes())}`;
@@ -43,10 +39,16 @@ export async function exportResultsExcel(opts: ExportOptions): Promise<void> {
   const examSlug = examName
     ? '_' + examName.replace(/[^a-zA-Z0-9À-ỹ]/g, '_').replace(/_+/g, '_').slice(0, 30)
     : '';
-
   const buf = await wb.xlsx.writeBuffer();
-  saveAs(
-    new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
-    `BangDiem${examSlug}_${ts}.xlsx`,
-  );
+  return new File([buf], `BangDiem${examSlug}_${ts}.xlsx`,
+    { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+export async function exportResultsExcel(opts: ExportOptions): Promise<void> {
+  if (!opts.results || opts.results.length === 0) {
+    alert('Chưa có kết quả để xuất Excel.');
+    return;
+  }
+  const file = await buildResultsExcelFile(opts);
+  saveAs(file, file.name);
 }
