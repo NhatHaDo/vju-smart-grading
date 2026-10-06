@@ -979,17 +979,29 @@ def draw_section_score_summary(
     if not sections or not _PIL_AVAILABLE:
         return image
 
+    # 2026-10-06 "tại sao nó ko hiện điểm ở ngay trên phiếu ?": the box only
+    # said "Tổng: 22.00/30.00" in small print. Now it opens with the điểm on
+    # the 10 scale in big letters ("ĐIỂM: 7.33"), and parts the answer key
+    # has no câu for (P2: 0/0) are left out.
     lines: list[str] = []
     ordered_names = [n for n in _PHAN_ORDER if n in sections] + [
         n for n in sections if n not in _PHAN_ORDER
     ]
     for name in ordered_names:
         sec = sections[name]
+        if not sec.total:
+            continue
         short = _PHAN_SHORT.get(name, name)
         lines.append(f"{short}: {sec.correct}/{sec.total} = {sec.points_earned:.2f}")
     lines.append(f"Tổng: {total_score:.2f}/{max_score:.2f}")
+    headline = None
+    if max_score and max_score > 0:
+        on10 = round(total_score / max_score * 10, 2)
+        headline = f"ĐIỂM: {on10:g}"
 
     font = _resolve_score_font(font_size)
+    big = _resolve_score_font(font_size * 2)
+    big_h = int(line_height * 2) if headline else 0
 
     # cv2 (numpy BGR) → PIL (RGB) để vẽ chữ, rồi chuyển ngược lại.
     pil_img = _PILImage.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
@@ -997,8 +1009,10 @@ def draw_section_score_summary(
 
     x, y = origin
     max_tw = max(draw.textlength(t, font=font) for t in lines)
+    if headline:
+        max_tw = max(max_tw, draw.textlength(headline, font=big))
     pad = 12
-    box_h = line_height * len(lines) + pad
+    box_h = big_h + line_height * len(lines) + pad
 
     # Nền trắng mờ phía sau cho dễ đọc trên nền phiếu, rồi mới vẽ chữ đỏ đè lên.
     overlay = pil_img.copy()
@@ -1007,12 +1021,14 @@ def draw_section_score_summary(
         (x - pad, y - pad, x + max_tw + pad, y - pad + box_h),
         fill=(255, 255, 255),
     )
-    pil_img = _PILImage.blend(pil_img, overlay, 0.75)
+    pil_img = _PILImage.blend(pil_img, overlay, 0.85)
     draw = _PILImageDraw.Draw(pil_img)
 
     text_color_rgb = (CLR_SCORE_TEXT[2], CLR_SCORE_TEXT[1], CLR_SCORE_TEXT[0])
+    if headline:
+        draw.text((x, y - 4), headline, font=big, fill=text_color_rgb)
     for i, text in enumerate(lines):
-        draw.text((x, y + i * line_height), text, font=font, fill=text_color_rgb)
+        draw.text((x, y + big_h + i * line_height), text, font=font, fill=text_color_rgb)
 
     return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 

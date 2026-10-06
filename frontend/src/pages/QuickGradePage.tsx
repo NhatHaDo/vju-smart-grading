@@ -121,33 +121,54 @@ function cornerShift(a: number[][] | undefined, b: number[][] | undefined): numb
   return Math.max(...a.map((p, i) => Math.hypot(p[0] - b[i][0], p[1] - b[i][1])));
 }
 
-/** Same SBD / mã đề and same answers read = the very sheet just graded. */
-function sameReading(a: OmrGradeResult, b: OmrGradeResult): boolean {
-  return JSON.stringify([a.student_info, a.answers]) === JSON.stringify([b.student_info, b.answers]);
-}
-
 // "t thấy nó vẫn ko tự chấm" (stuck on "Đã chấm ✓"): on a real phone the
 // next sheet pushed exactly on top neither moves the corners nor changes the
-// small fingerprint enough. Fallback that can't miss: while a sheet stays in
-// view after grading, it is read again every PROBE_GAP_MS; a reading that
-// differs from the sheet just graded (another SBD / mã đề, or ≥ 10% of the
-// answers) is a new sheet and is counted, the same reading is dropped quietly.
+// small fingerprint enough. Fallback: when the view was disturbed (a hand
+// pushing a sheet: the corners jumped, the frame blurred, the fingerprint
+// drifted) and then held still again, the sheet is read again; a reading
+// that matches a sheet already graded is not counted twice.
+// 2026-10-06 "ko có gì nó cũng chụp chấm": it used to re-read every 1.8 s
+// even with nothing happening — now only after such a disturbance.
 const PROBE_GAP_MS = 1800;
 const SAME_ANSWERS_SHARE = 0.9;
+const DISTURB_MOVE = 2 * HOLD_STILL_MOVE;
+const DISTURB_FP_DIST = NEW_SHEET_FP_DIST / 2;
+// The grade says how much of the chosen sheet it found on the photo
+// (sheet_match): a real sheet ≥ 0.9; no sheet / half a sheet / another form
+// ≤ 0.3; a frame blurred by a moving hand ~0.5–0.7. Below this it is not
+// counted — "ko có gì nó cũng chụp chấm".
+const MIN_SHEET_MATCH = 0.75;
+
+const fullyRead = (v: unknown): v is string => typeof v === 'string' && v !== '' && !v.includes('_');
 
 /** Two readings of one sheet: no info field read differently, ≥ 90% same answers. */
 function similarReading(a: OmrGradeResult, b: OmrGradeResult): boolean {
-  const full = (v: unknown): v is string => typeof v === 'string' && v !== '' && !v.includes('_');
   const ia = (a.student_info ?? {}) as Record<string, unknown>;
   const ib = (b.student_info ?? {}) as Record<string, unknown>;
   for (const k of new Set([...Object.keys(ia), ...Object.keys(ib)])) {
-    if (full(ia[k]) && full(ib[k]) && ia[k] !== ib[k]) return false;
+    if (fullyRead(ia[k]) && fullyRead(ib[k]) && ia[k] !== ib[k]) return false;
   }
   const keys = new Set([...Object.keys(a.answers ?? {}), ...Object.keys(b.answers ?? {})]);
   if (keys.size === 0) return true;
   let same = 0;
   for (const k of keys) if ((a.answers?.[k] ?? '') === (b.answers?.[k] ?? '')) same++;
   return same / keys.size >= SAME_ANSWERS_SHARE;
+}
+
+/** Index of the bài in this session that is this very sheet again, or -1.
+ *  Every bài is checked, not only the last one ("nó còn phát hiện phiếu
+ *  này đã chấm r"). */
+function alreadyGraded(results: OmrGradeResult[], r: OmrGradeResult): number {
+  for (let i = results.length - 1; i >= 0; i--) {
+    if (similarReading(results[i], r)) return i;
+  }
+  return -1;
+}
+
+/** The photo really is the chosen sheet (see MIN_SHEET_MATCH). */
+function isTheSheet(r: OmrGradeResult): boolean {
+  if (r.debug?.prep_method && r.debug.prep_method !== 'markers') return false;
+  return r.sheet_match == null || r.sheet_match >= MIN_SHEET_MATCH;
 }
 
 function buildAnswerKeyPayload(store: AnswerKeyStore): Record<string, unknown> | null {
@@ -743,11 +764,11 @@ function QuickGradeCamera({
   // Tải ảnh: one bài (keeps its result on screen while saving), or all of them —
   // a phone gets the share sheet ("Lưu hình ảnh"), a computer a .jpg / .zip
   const [saving, setSaving] = useState<'one' | 'zip' | null>(null);
-  const flashNotice = (text: string) => {
+  const flashNotice = useCallback((text: string) => {
     setNotice(text);
     if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
     noticeTimerRef.current = window.setTimeout(() => setNotice(null), 3000);
-  };
+  }, []);
   const downloadOne = async (r: OmrGradeResult) => {
     if (bannerTimerRef.current) window.clearTimeout(bannerTimerRef.current);
     setSaving('one');
@@ -782,6 +803,9 @@ function QuickGradeCamera({
   // bước xem trước/xác nhận (bỏ hẳn theo lựa chọn ưu tiên tốc độ).
   const lastGradeAtRef = useRef(0);
   const probeStreakRef = useRef(0);
+  const disturbedRef = useRef(false);
+  const rejectedAtRef = useRef(0);    // last read that was not the sheet (see isTheSheet)
+  const rejectsRef = useRef(0);       // … and how many in a row (waits longer each time)
   /** probe: a re-read of the sheet still in view (see PROBE_GAP_MS) — counted only when it is another sheet. */
   const captureAndGrade = useCallback((auto = false, probe = false) => {
     const video = videoRef.current;
@@ -822,15 +846,21 @@ function QuickGradeCamera({
           showResultBanner(null, `Lỗi chấm: HTTP ${res.status} — ${txt.slice(0, 160)}`);
         } else {
           const data = await res.json() as OmrGradeResult;
-          const prev = resultsRef.current[resultsRef.current.length - 1];
-          if (probe && prev && similarReading(prev, data)) {
-            // still the sheet just graded: nothing to show
-          } else if (auto && prev && sameReading(prev, data)) {
-            // the sheet just graded, seen again: not counted twice
-            setNotice('Phiếu này vừa chấm rồi, đưa phiếu tiếp theo');
-            if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
-            noticeTimerRef.current = window.setTimeout(() => setNotice(null), 2500);
+          const dup = alreadyGraded(resultsRef.current, data);
+          if (auto && !isTheSheet(data)) {
+            // no sheet / half a sheet / blurred / another form: not counted,
+            // and the next steady view is read again
+            waitingClearRef.current = false;
+            gradedRef.current = null;
+            rejectedAtRef.current = Date.now();
+            rejectsRef.current = Math.min(rejectsRef.current + 1, 3);
+            if (!probe) flashNotice('Chưa thấy rõ phiếu — để cả tờ phiếu trong khung, giữ yên máy');
+          } else if (auto && dup >= 0) {
+            // a sheet already graded, seen again: not counted twice
+            rejectsRef.current = 0;
+            flashNotice(`Phiếu này đã chấm rồi (bài ${dup + 1}) — đưa phiếu tiếp theo`);
           } else {
+            rejectsRef.current = 0;
             setResults(rs => [...rs, data]);
             showResultBanner(data, null);
           }
@@ -843,7 +873,7 @@ function QuickGradeCamera({
         lastGradeAtRef.current = Date.now();
       }
     }, 'image/jpeg', 0.92);
-  }, [isCustom, tpl?.id, variant, answerKeyPayload, scoringPayload, showResultBanner]);
+  }, [isCustom, tpl?.id, variant, answerKeyPayload, scoringPayload, showResultBanner, flashNotice]);
 
   // Vòng lặp nhận diện — giữ nguyên cơ chế của CameraCaptureModal (giữ yên
   // READY_STREAK_NEEDED lần liên tiếp mới trigger), chỉ khác ở chỗ trigger
@@ -894,13 +924,20 @@ function QuickGradeCamera({
           const other = !!(fp && graded?.fp && fingerprintDistance(fp, graded.fp) > NEW_SHEET_FP_DIST);
           if (!graded || !(moved || other)) {
             setAutoState('clearing');
-            // fallback: held still a moment → read it again (a new sheet the
-            // quick signs missed is counted, the same one dropped)
-            const held = cornerShift(data.corners, lastSeenRef.current ?? undefined) <= 2 * HOLD_STILL_MOVE;
+            // fallback: the view was disturbed (a sheet being pushed in) and
+            // is held still again → read it once more (a new sheet the quick
+            // signs missed is counted, the same one is not)
+            const step = cornerShift(data.corners, lastSeenRef.current ?? undefined);
+            const held = step <= DISTURB_MOVE;
             lastSeenRef.current = data.corners ?? null;
+            if (!data.ready || !held || (fp && graded?.fp && fingerprintDistance(fp, graded.fp) > DISTURB_FP_DIST)) {
+              disturbedRef.current = true;
+            }
             probeStreakRef.current = data.ready && held ? probeStreakRef.current + 1 : 0;
-            if (probeStreakRef.current >= READY_STREAK_NEEDED && Date.now() - lastGradeAtRef.current >= PROBE_GAP_MS) {
+            if (disturbedRef.current && probeStreakRef.current >= READY_STREAK_NEEDED
+                && Date.now() - lastGradeAtRef.current >= PROBE_GAP_MS) {
               probeStreakRef.current = 0;
+              disturbedRef.current = false;
               gradedRef.current = { corners: data.corners ?? [], fp: decodeFingerprint(data.fingerprint) };
               captureAndGrade(true, true);
             }
@@ -916,12 +953,15 @@ function QuickGradeCamera({
         lastSeenRef.current = data.corners ?? null;
         if (data.ready && (still || readyStreakRef.current === 0)) {
           readyStreakRef.current += 1;
-          setReadyStreak(readyStreakRef.current);
+          setReadyStreak(Math.min(readyStreakRef.current, READY_STREAK_NEEDED));
           setAutoState('holding');
-          if (readyStreakRef.current >= READY_STREAK_NEEDED) {
+          // after a read that was not the sheet, wait a moment before the next one
+          if (readyStreakRef.current >= READY_STREAK_NEEDED && Date.now() - rejectedAtRef.current >= PROBE_GAP_MS * rejectsRef.current) {
             readyStreakRef.current = 0;
             setReadyStreak(0);
             waitingClearRef.current = true;
+            disturbedRef.current = false;
+            probeStreakRef.current = 0;
             gradedRef.current = { corners: data.corners ?? [], fp: decodeFingerprint(data.fingerprint) };
             captureAndGrade(true);
           }

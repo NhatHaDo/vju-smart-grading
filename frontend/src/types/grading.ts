@@ -261,6 +261,8 @@ export interface OmrGradeResult {
   debug:               OmrDebugInfo;
   /** null = not checked (custom template, or detection failed) */
   signatures?:         SignatureCheck[] | null;
+  /** 0–1: share of the template's bubbles found printed on the photo; null = not measured */
+  sheet_match?:        number | null;
   /** client-side only — set after fetch */
   _error?:             string;
   /** client-side only — set after POST /results/batch succeeds; used for DB delete/correction */

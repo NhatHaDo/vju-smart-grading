@@ -161,6 +161,12 @@ class DebugVisualPaths:
     name_dob_crop_path:        str | None = None   # crop of "Họ và tên"/"Ngày sinh" info box (2026-08-06)
 
 
+# A real sheet of the template lands ≥ 0.9 of its bubbles on printed circles
+# (phone photos, 2026-10-06); no sheet / half a sheet / another form ≤ 0.3,
+# a frame blurred by a moving hand ~0.5–0.7.
+SHEET_MATCH_MIN = 0.75
+
+
 # ── Result container ──────────────────────────────────────────────────────
 
 @dataclass
@@ -195,6 +201,11 @@ class OMRResult:
     # Only populated when OMREngine(check_signatures=True) — i.e. fixed VJU
     # presets only, never custom templates (no guaranteed layout there).
     signature_checks: list[SignatureCheck] | None = None
+    # Share of the template's bubbles found printed on the photo (block_snap,
+    # 2026-10-06) — None when not measured (scans read without the warp).
+    # Low = the 4 "corners" were not this sheet's: no sheet in the frame,
+    # half a sheet, another form. Chấm nhanh doesn't count such a frame.
+    sheet_match: float | None = None
 
     @property
     def needs_review(self) -> bool:
@@ -956,8 +967,18 @@ class OMREngine:
         # copy, so reading, the overlays and the debug output all use the
         # same bubble positions; the caller's template object is untouched.
         self.template = self._base_template
+        sheet_match: float | None = None
         if self.enable_block_snap and M_inv is None and prep_method == "markers":
-            self.template, _block_shifts = snap_template(read_image, self._base_template)
+            _snap_stats: dict = {}
+            self.template, _block_shifts = snap_template(read_image, self._base_template, _snap_stats)
+            if _snap_stats.get("total"):
+                sheet_match = _snap_stats["matched"] / _snap_stats["total"]
+                if sheet_match < SHEET_MATCH_MIN:
+                    warnings.append(
+                        f"⚠️ Chỉ thấy {sheet_match:.0%} ô tròn của mẫu phiếu trên ảnh — ảnh có thể "
+                        "không phải phiếu này (chọn nhầm mẫu), bị che/cắt mất một phần hoặc bị nhoè. "
+                        "Nên chụp lại."
+                    )
 
         # ── Steps 4-5: Collect all means → global threshold ───────────────
         all_mean_values: list[float] = []
@@ -1233,6 +1254,7 @@ class OMREngine:
             omr_read_space=omr_read_space,
             _M_inv=M_inv,
             signature_checks=signature_checks,
+            sheet_match=sheet_match,
         )
         return omr_result, aligned_image, bubble_means, visual_image
 

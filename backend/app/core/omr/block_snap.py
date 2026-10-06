@@ -62,8 +62,16 @@ def _circles(gray: np.ndarray, x0: int, y0: int, x1: int, y1: int,
     return c
 
 
-def block_offsets(image: np.ndarray, template: VJUTemplate) -> dict[str, tuple[int, int]]:
-    """{block name: (dx, dy)} for the blocks worth moving; the others are left out."""
+def block_offsets(image: np.ndarray, template: VJUTemplate,
+                  stats: dict | None = None) -> dict[str, tuple[int, int]]:
+    """{block name: (dx, dy)} for the blocks worth moving; the others are left out.
+
+    stats (2026-10-06): filled with "matched"/"total" — how many of the
+    template's bubbles found a printed circle (at the block's best shift).
+    A real sheet of this template lands most of them; a frame with no sheet,
+    half a sheet or another form lands few (see OMRResult.sheet_match)."""
+    if stats is not None:
+        stats.update(matched=0, total=0)
     gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape[:2]
     out: dict[str, tuple[int, int]] = {}
@@ -71,6 +79,8 @@ def block_offsets(image: np.ndarray, template: VJUTemplate) -> dict[str, tuple[i
         bubbles = [b for lbl in block.field_labels for b in template.bubbles_by_label.get(lbl, [])]
         if len(bubbles) < 4:
             continue
+        if stats is not None:
+            stats["total"] += len(bubbles)
         cx = np.array([b.x + b.w / 2 for b in bubbles], dtype=np.float32)
         cy = np.array([b.y + b.h / 2 for b in bubbles], dtype=np.float32)
         step = min(_min_step(cx, cy), _min_step(cy, cx))
@@ -89,19 +99,24 @@ def block_offsets(image: np.ndarray, template: VJUTemplate) -> dict[str, tuple[i
         # printed circle. Sliding a whole row/column loses the edge row of the
         # block, so the true shift wins even when it is half a pitch.
         d = found[None, :, :] - tpl[:, None, :]                              # (bubbles, circles, 2)
-        cand = d.reshape(-1, 2)
-        cand = cand[np.hypot(cand[:, 0], cand[:, 1]) <= lim]
-        if len(cand) == 0:
-            continue
-        cand = np.unique(np.rint(cand), axis=0)
 
         def matched(shift: np.ndarray) -> np.ndarray:
             r = np.hypot(d[..., 0] - shift[0], d[..., 1] - shift[1]).min(axis=1)
             return r <= TOL_PX
 
-        counts = np.array([matched(c).sum() for c in cand])
         zero = int(matched(np.zeros(2)).sum())
+        cand = d.reshape(-1, 2)
+        cand = cand[np.hypot(cand[:, 0], cand[:, 1]) <= lim]
+        if len(cand) == 0:
+            if stats is not None:
+                stats["matched"] += zero
+            continue
+        cand = np.unique(np.rint(cand), axis=0)
+
+        counts = np.array([matched(c).sum() for c in cand])
         top = counts.max()
+        if stats is not None:
+            stats["matched"] += int(max(top, zero))
         if top < max(4, MIN_MATCHED * len(bubbles)) or top <= zero:
             continue
         best = cand[counts == top]
@@ -139,9 +154,10 @@ def shifted_template(template: VJUTemplate, offsets: dict[str, tuple[int, int]])
     return replace(template, field_blocks=blocks, bubbles_by_label=by_label)
 
 
-def snap_template(image: np.ndarray, template: VJUTemplate) -> tuple[VJUTemplate, dict[str, tuple[int, int]]]:
+def snap_template(image: np.ndarray, template: VJUTemplate,
+                  stats: dict | None = None) -> tuple[VJUTemplate, dict[str, tuple[int, int]]]:
     try:
-        offsets = block_offsets(image, template)
+        offsets = block_offsets(image, template, stats)
     except Exception as exc:   # never let refinement break a read
         logger.warning(f"OMR block snap skipped: {exc}")
         return template, {}

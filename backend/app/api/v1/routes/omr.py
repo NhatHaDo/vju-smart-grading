@@ -749,6 +749,9 @@ async def debug_grade(
             if omr_result.signature_checks is not None else None
         ),
         "warnings":           warnings,
+        # 0–1, None = not measured — see OMRResult.sheet_match
+        "sheet_match": (round(omr_result.sheet_match, 3)
+                        if omr_result.sheet_match is not None else None),
         "info_field_columns": info_field_columns,
         "score":              score,
         "debug": {
