@@ -280,6 +280,10 @@ class OMREngine:
                                regression-comparison script).
         """
         self.template = template
+        # 2026-10-06: the template as given — each run starts from it again
+        # (block snap below swaps self.template for a shifted copy, which
+        # used to carry over into the NEXT sheet read by the same engine)
+        self._base_template = template
         self.enable_crop = enable_crop
         self.enable_illumination_flatten = enable_illumination_flatten
         self.debug_overlay_dir = Path(debug_overlay_dir) if debug_overlay_dir else None
@@ -715,6 +719,7 @@ class OMREngine:
         bubble_means: {"label:value": float}.
         """
         warnings: list[str] = []
+        self.template = self._base_template      # never the previous sheet's shifted copy
 
         src = image_source if image_source in VALID_IMAGE_SOURCES else "auto"
         strategy = IMAGE_SOURCE_STRATEGIES[src]
@@ -950,8 +955,9 @@ class OMREngine:
         # Only on the warped read path. self.template becomes the shifted
         # copy, so reading, the overlays and the debug output all use the
         # same bubble positions; the caller's template object is untouched.
+        self.template = self._base_template
         if self.enable_block_snap and M_inv is None and prep_method == "markers":
-            self.template, _block_shifts = snap_template(read_image, self.template)
+            self.template, _block_shifts = snap_template(read_image, self._base_template)
 
         # ── Steps 4-5: Collect all means → global threshold ───────────────
         all_mean_values: list[float] = []

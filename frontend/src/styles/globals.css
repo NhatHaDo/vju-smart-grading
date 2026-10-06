@@ -400,3 +400,17 @@ body {
   }
   .ak-sticky-spacer { display: block; order: 99; height: 56px; }
 }
+
+/* Kết quả: "Đã chọn N phiếu · Tải ảnh · Xoá đã chọn" pinned above the bottom
+   tab bar on phones, where the ticked cards are (2026-10-06) */
+@media (max-width: 768px) {
+  .results-bulk-bar {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: calc(66px + env(safe-area-inset-bottom, 0px));
+    z-index: 90;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    background: #fff !important;
+  }
+}

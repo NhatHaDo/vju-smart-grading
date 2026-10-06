@@ -12,8 +12,13 @@ Algorithm
 1. CLAHE + Gaussian blur → enhance contrast for camera photos
 2. Multi-strategy thresholding (Otsu → Adaptive → Fixed 100) until 4 markers found
 3. Morphological close to fill tiny gaps in printed markers
-4. findContours → filter by area / solidity / aspect-ratio / corner-zone
-5. Assign to quadrant (TL/TR/BL/BR) and pick best per quadrant
+4. findContours (every blob, also those inside a dark desk's "hole")
+   → filter by area / solidity / aspect-ratio
+5. (2026-10-06) Joint pick: the 4 corners chosen TOGETHER — among the
+   marker-like blobs lying on paper, the set making the most rectangle-like,
+   largest, upright quad with no same-sized square just outside it, over all
+   threshold strategies (see _joint_pick). If none, the original pick:
+   corner-zone filter, assign to quadrant (TL/TR/BL/BR), best per quadrant
 6. Validate: area consistency across 4 markers
 7. Compute marker_quality_score and decide whether to apply warp (quality gate)
 8. If template marker positions known AND quality OK:
@@ -281,6 +286,30 @@ def crop_on_markers(
     ]
 
     # ── Try each binary × each relaxation stage until 4 markers found ────
+    # 2026-10-06: the 4 corners chosen together first (see _joint_pick); the
+    # per-quadrant search below is the fallback, unchanged
+    # also the binaries before the morphological close: on a small frame
+    # (Chấm nhanh's 480 px check) the close glues a corner marker to the
+    # printed bubbles right next to it (Phiếu Bộ GD: top-right marker beside
+    # the Mã đề grid), and it is no longer a square of its own
+    # (only on a small frame: at full resolution the unclosed binaries add the
+    # students' filled bubbles, as solid and as big as a marker)
+    small = max(orig_w, orig_h) <= JOINT_SMALL_FRAME
+    joint, joint_stage = _joint_detect(morphed_binaries + (binary_candidates if small else []), orig_w, orig_h,
+                                       expected_aspect, expected_aspect_is_fallback, gray=blurred)
+    if joint is not None:
+        src_pts = np.array([[joint[q]["cx"], joint[q]["cy"]] for q in ("TL", "TR", "BR", "BL")], dtype="float32")
+        marker_info = [{"quad": q, "cx": joint[q]["cx"], "cy": joint[q]["cy"],
+                        "area": joint[q]["area"], "solidity": joint[q]["solidity"]}
+                       for q in ("TL", "TR", "BR", "BL")]
+        logger.info(f"CropOnMarkers: joint pick at stage={joint_stage}")
+        return _do_warp(
+            gray, joint, src_pts, marker_info,
+            target_size, marker_centers_in_template,
+            original_size, joint_stage,
+            min_warp_quality=min_warp_quality,
+        )
+
     for stage_idx, (min_sol, min_asp, max_asp, min_af, max_af, max_zone) in enumerate(_RELAX_STAGES):
         for bin_idx, binary in enumerate(morphed_binaries):
             chosen, src_pts, marker_info = _detect_markers(
@@ -532,7 +561,7 @@ def _refine_worst_quadrant(
             max_zone_y = max_zone * orig_h
 
             for binary in binaries:
-                cnts, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cnts = _blob_contours(binary)
                 for c in cnts:
                     area = cv2.contourArea(c)
                     if area < min_area or area > max_area:
@@ -686,7 +715,7 @@ def _detect_markers(
     max_zone_x = max_zone * orig_w
     max_zone_y = max_zone * orig_h
 
-    cnts, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = _blob_contours(binary)
 
     candidates: list[dict] = []
     for c in cnts:
@@ -947,6 +976,239 @@ def _detect_markers(
                      + ", ".join(f"{q}=({chosen[q]['cx']:.0f},{chosen[q]['cy']:.0f})"
                                   for q in ("TL","TR","BL","BR")))
     return chosen, src_pts, marker_info
+
+
+# ── Joint 4-corner pick (2026-10-06) ──────────────────────────────────────
+# "4 góc phải tạo thành hình chữ nhật hoặc vuông chứ đúng ko ? … sửa sao cho
+# tối ưu": the per-quadrant pick chooses each corner on its own and only
+# checks the shape afterwards, so a sheet printed with many black squares
+# (Phiếu Bộ GD: timing squares along every edge) or held at an angle lost a
+# corner to an inner square. Here the 4 corners are chosen TOGETHER: from
+# the few blobs that stick out furthest towards each corner of the sheet, the
+# set of 4 that makes the most rectangle-like quad (a rectangle seen from a
+# hand-held phone: convex, corners 90° ± ~35°, opposite sides alike, markers
+# of similar size, the page's own width/height) and encloses the most.
+JOINT_TOP_K       = 6       # blobs tried per corner
+JOINT_MAX_ANGLE   = 38.0    # largest allowed corner-angle error (deg)
+JOINT_MIN_SIDES   = 0.55    # shorter / longer of two opposite sides
+JOINT_MAX_SIZE    = 3.0     # largest / smallest marker area
+# What a real corner marker looks like — measured on 696 corner markers of
+# the Bộ GD / Mẫu 40 photos (all variants, full and 480 px): squareness
+# 0.72–1.14, solidity ≥ 0.90, side 2.5–4.5% of the sheet's width, the 4 within
+# 2.5× in area. With some margin. Without these, among the hundreds of blobs
+# of a sheet cut off at the bottom, some 4 (a pen stroke, a "–", a section
+# square) could always be found that make a rectangle of just the right shape.
+JOINT_ASPECT      = (0.65, 1.5)
+JOINT_MIN_SOLID   = 0.85
+JOINT_REL_SIZE    = (0.015, 0.075)
+JOINT_MAX_TILT    = 25.0    # the sheet is held roughly upright: top edge vs horizontal (deg)
+# The corner markers are the OUTERMOST squares of the sheet: a set of inner
+# squares leaves other marker-like blobs outside it. Up to this many are
+# forgiven (dark objects on the desk next to the sheet).
+JOINT_MAX_OUTSIDE = 2
+# …but a square of the corner markers' own size just outside the set (within
+# this share of the set's size) means the set stops short of the sheet's
+# edge — e.g. one corner hidden by a thumb, and a row of inner squares taken
+# for the bottom edge. No sheet then, rather than a wrong one.
+JOINT_NEAR_BAND   = 0.15
+JOINT_SAME_SIZE   = 1.6
+JOINT_STAGES      = (0, 1)  # relaxation stages tried by the joint pick
+JOINT_SMALL_FRAME = 900     # px: a frame this small is also searched before the morphological close
+
+
+def _joint_scores(P: np.ndarray, A: np.ndarray, img_area: float,
+                  expected_aspect: float | None, aspect_limit: float) -> np.ndarray:
+    """Score many candidate quads at once — P: (n, 4, 2) corners TL, TR, BR,
+    BL; A: (n, 4) marker areas. 0 = not a plausible sheet; higher = more
+    rectangle-like and larger."""
+    nxt = np.roll(P, -1, axis=1)                      # P[i+1]
+    e = nxt - P                                       # edges TL→TR, TR→BR, BR→BL, BL→TL
+    e_next = np.roll(e, -1, axis=1)
+    cross = e[..., 0] * e_next[..., 1] - e[..., 1] * e_next[..., 0]
+    ok = np.all(cross > 0, axis=1)                    # convex, clockwise in image coords
+    # roughly upright (a 45°-turned "diamond" of inner squares is not the sheet)
+    tilt_top = np.degrees(np.arctan2(P[:, 1, 1] - P[:, 0, 1], P[:, 1, 0] - P[:, 0, 0]))
+    tilt_left = np.degrees(np.arctan2(P[:, 3, 0] - P[:, 0, 0], P[:, 3, 1] - P[:, 0, 1]))
+    ok &= (np.abs(tilt_top) <= JOINT_MAX_TILT) & (np.abs(tilt_left) <= JOINT_MAX_TILT)
+    # interior angle at each corner: between the edge coming in and the edge going out
+    e_in = -np.roll(e, 1, axis=1)
+    cosang = np.sum(e_in * e, axis=2) / (np.linalg.norm(e_in, axis=2) * np.linalg.norm(e, axis=2) + 1e-9)
+    err = np.abs(np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0))) - 90.0)
+    ok &= err.max(axis=1) <= JOINT_MAX_ANGLE
+    L = np.linalg.norm(e, axis=2)                     # top, right, bottom, left
+    top, rig, bot, lef = L[:, 0], L[:, 1], L[:, 2], L[:, 3]
+    sides = np.minimum(np.minimum(top, bot) / np.maximum(np.maximum(top, bot), 1e-9),
+                       np.minimum(lef, rig) / np.maximum(np.maximum(lef, rig), 1e-9))
+    ok &= sides >= JOINT_MIN_SIDES
+    size_ratio = A.max(axis=1) / np.maximum(A.min(axis=1), 1.0)
+    ok &= size_ratio <= JOINT_MAX_SIZE
+    rel = np.sqrt(A) / np.maximum(((top + bot) / 2)[:, None], 1e-9)
+    ok &= np.all((rel >= JOINT_REL_SIZE[0]) & (rel <= JOINT_REL_SIZE[1]), axis=1)
+    aspect = ((top + bot) / 2) / np.maximum((lef + rig) / 2, 1e-9)
+    if expected_aspect:
+        dev = np.abs(aspect / expected_aspect - 1.0)
+        ok &= dev <= aspect_limit
+        aspect_term = 1.0 - dev / aspect_limit * 0.5
+    else:
+        ok &= (aspect >= 0.35) & (aspect <= 2.9)
+        aspect_term = np.ones(len(P))
+    quad_area = 0.5 * np.abs(np.sum(P[..., 0] * nxt[..., 1] - P[..., 1] * nxt[..., 0], axis=1))
+    rect = np.exp(-np.mean((err / 20.0) ** 2, axis=1))
+    size = np.exp(-np.log(size_ratio) ** 2 / 2)
+    score = (quad_area / img_area) * rect * (0.5 + 0.5 * sides) * (0.6 + 0.4 * size) * aspect_term
+    return np.where(ok, score, 0.0)
+
+
+def _joint_quad_score(p: np.ndarray, areas: np.ndarray, img_area: float,
+                      expected_aspect: float | None, aspect_limit: float) -> float:
+    """_joint_scores for one quad."""
+    return float(_joint_scores(p[None].astype(float), areas[None].astype(float), img_area,
+                               expected_aspect, aspect_limit)[0])
+
+
+def _joint_pick(cands: list[dict], orig_w: int, orig_h: int,
+                expected_aspect: float | None, expected_aspect_is_fallback: bool) -> dict | None:
+    """The 4 corner markers chosen together; None when no set looks like a sheet."""
+    cands = [c for c in cands
+             if JOINT_ASPECT[0] <= c["aspect"] <= JOINT_ASPECT[1] and c["solidity"] >= JOINT_MIN_SOLID]
+    if len(cands) < 4:
+        return None
+    pts = np.array([[c["cx"], c["cy"]] for c in cands], dtype=float)
+    rel = pts - pts.mean(axis=0)
+    # how far each blob reaches towards each corner of the sheet (TL, TR, BR, BL)
+    reach = [-rel[:, 0] - rel[:, 1], rel[:, 0] - rel[:, 1], rel[:, 0] + rel[:, 1], -rel[:, 0] + rel[:, 1]]
+    top = [[i for i in np.argsort(-r)[:JOINT_TOP_K] if r[i] > 0] for r in reach]
+    if any(not t for t in top):
+        return None
+    combos = np.array(np.meshgrid(*top, indexing="ij")).reshape(4, -1).T      # (n, 4) indexes
+    distinct = ((combos[:, 0] != combos[:, 1]) & (combos[:, 0] != combos[:, 2]) & (combos[:, 0] != combos[:, 3])
+                & (combos[:, 1] != combos[:, 2]) & (combos[:, 1] != combos[:, 3]) & (combos[:, 2] != combos[:, 3]))
+    combos = combos[distinct]
+    if len(combos) == 0:
+        return None
+    aspect_limit = (MARKER_MAX_ASPECT_DEVIATION_FALLBACK if expected_aspect_is_fallback
+                    else MARKER_MAX_ASPECT_DEVIATION) if expected_aspect else 1.0
+    areas = np.array([c["area"] for c in cands], dtype=float)
+    scores = _joint_scores(pts[combos], areas[combos], float(orig_w * orig_h), expected_aspect, aspect_limit)
+    for i in np.argsort(-scores)[:20]:
+        if scores[i] <= 0:
+            break
+        quad = pts[combos[i]].astype(np.float32)
+        size = float(np.linalg.norm(quad[1] - quad[0]) + np.linalg.norm(quad[3] - quad[0])) / 2
+        margin = 0.03 * size
+        med_area = float(np.median(areas[combos[i]]))
+        outside, near = 0, 0
+        for k, (x, y) in enumerate(pts):
+            if k in combos[i]:
+                continue
+            dist = cv2.pointPolygonTest(quad.reshape(-1, 1, 2), (float(x), float(y)), True)
+            if dist < -margin:
+                outside += 1
+                if -dist < JOINT_NEAR_BAND * size and 1 / JOINT_SAME_SIZE <= areas[k] / med_area <= JOINT_SAME_SIZE:
+                    near += 1
+        if outside <= JOINT_MAX_OUTSIDE and near == 0:
+            return {q: cands[j] for q, j in zip(("TL", "TR", "BR", "BL"), combos[i])}
+    return None
+
+
+MARKER_RING_PAPER = 0.6   # share of the ring around a marker that must be paper
+
+
+def _on_paper(gray: np.ndarray, x: int, y: int, w: int, h: int) -> bool:
+    """A printed marker has white paper all around it; a dark speck of desk or
+    shadow at the paper's edge does not. The ring around the blob must be
+    mostly bright (printed lines next to a corner marker are allowed)."""
+    H, W = gray.shape[:2]
+    m = max(3, int(0.6 * max(w, h)))
+    if x - m < 0 or y - m < 0 or x + w + m > W or y + h + m > H:
+        return False        # cut by the image edge: can't tell it lies on paper
+    x0, y0, x1, y1 = x - m, y - m, x + w + m, y + h + m
+    patch = gray[y0:y1, x0:x1].astype(np.float32)
+    ring = np.ones(patch.shape, bool)
+    g = max(1, int(0.25 * max(w, h)))
+    ring[max(0, y - g - y0):min(y1, y + h + g) - y0, max(0, x - g - x0):min(x1, x + w + g) - x0] = False
+    inner = gray[y:y + h, x:x + w].astype(np.float32)
+    if not ring.any() or inner.size == 0:
+        return False
+    vals = patch[ring]
+    dark, light = float(np.percentile(inner, 30)), float(np.median(vals))
+    if light - dark < 25:
+        return False
+    # most of the ring is paper (printed lines/bubbles next to a marker are fine)
+    return float(np.mean(vals > dark + 0.5 * (light - dark))) >= MARKER_RING_PAPER
+
+
+def _marker_blobs(binary: np.ndarray, orig_w: int, orig_h: int, stage_idx: int,
+                  gray: np.ndarray | None = None) -> list[dict]:
+    """Every marker-like blob (size, solidity, squareness of this relaxation
+    stage) anywhere on the image — no corner-zone rule: the joint pick decides
+    which 4 are the corners. With `gray`, only blobs lying on paper."""
+    min_sol, min_asp, max_asp, min_af, max_af, _ = _RELAX_STAGES[stage_idx]
+    img_area = orig_w * orig_h
+    mx, my = MARKER_MIN_EDGE_FRAC * orig_w, MARKER_MIN_EDGE_FRAC * orig_h
+    out = []
+    for c in _blob_contours(binary):
+        area = cv2.contourArea(c)
+        if area < min_af * img_area or area > max_af * img_area:
+            continue
+        hull_area = cv2.contourArea(cv2.convexHull(c))
+        if hull_area < 1 or area / hull_area < min_sol:
+            continue
+        x, y, w, h = cv2.boundingRect(c)
+        aspect = w / max(h, 1)
+        if not (min_asp <= aspect <= max_asp):
+            continue
+        cx, cy = x + w / 2, y + h / 2
+        if not (mx < cx < orig_w - mx and my < cy < orig_h - my):
+            continue
+        if gray is not None and not _on_paper(gray, x, y, w, h):
+            continue
+        out.append({"cx": cx, "cy": cy, "area": area, "solidity": area / hull_area, "aspect": aspect,
+                    "x": x, "y": y, "w": w, "h": h})
+    return out
+
+
+def _joint_detect(binaries: list[np.ndarray], orig_w: int, orig_h: int,
+                  expected_aspect: float | None, expected_aspect_is_fallback: bool,
+                  gray: np.ndarray | None = None) -> tuple[dict | None, int]:
+    """The best 4 corners over every threshold strategy (Otsu / adaptive /
+    fixed) and the first relaxation stages — not the first strategy that
+    finds something: a hand shadow can hide one corner from Otsu, which then
+    offers a smaller rectangle of inner squares, while adaptive sees it.
+    Returns (chosen by corner, stage) or (None, -1)."""
+    best, best_score, best_stage = None, 0.0, -1
+    aspect_limit = (MARKER_MAX_ASPECT_DEVIATION_FALLBACK if expected_aspect_is_fallback
+                    else MARKER_MAX_ASPECT_DEVIATION) if expected_aspect else 1.0
+    img_area = float(orig_w * orig_h)
+    for stage in JOINT_STAGES:
+        for binary in binaries:
+            chosen = _joint_pick(_marker_blobs(binary, orig_w, orig_h, stage, gray), orig_w, orig_h,
+                                 expected_aspect, expected_aspect_is_fallback)
+            if chosen is None:
+                continue
+            q = ("TL", "TR", "BR", "BL")
+            pts = np.array([[chosen[k]["cx"], chosen[k]["cy"]] for k in q])
+            areas = np.array([chosen[k]["area"] for k in q], dtype=float)
+            sc = _joint_quad_score(pts, areas, img_area, expected_aspect, aspect_limit) * (1.0 - 0.1 * stage)
+            if sc > best_score:
+                best, best_score, best_stage = chosen, sc, stage
+        if best is not None:
+            break       # a tight-stage answer beats anything looser
+    return best, best_stage
+
+
+def _blob_contours(binary: np.ndarray) -> list:
+    """Outer boundary of every dark blob, INCLUDING blobs that sit inside a
+    hole of another blob (2026-10-06). RETR_EXTERNAL missed every marker on a
+    sheet lying on a dark desk: the desk turns into one big blob around the
+    paper, and the paper (with its markers) is a hole in it, so the markers
+    were never even looked at. RETR_CCOMP lists outer boundaries at the top
+    level whatever they are nested in; hole boundaries (parent ≠ -1) are
+    left out."""
+    cnts, hier = cv2.findContours(binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    if hier is None:
+        return []
+    return [c for c, h in zip(cnts, hier[0]) if h[3] == -1]
 
 
 # ── Perspective warp ──────────────────────────────────────────────────────

@@ -1,3 +1,5 @@
+import { useConfirm } from '../components/modals/useConfirm';
+import { saveGradedImages } from '../utils/gradedImages';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Card from '../components/common/Card';
@@ -818,14 +820,35 @@ export default function ResultsPage() {
 
   // ── Delete / Clear ─────────────────────────────────────────────────────
 
-  const handleDeleteRow = (filename: string, db_id?: number) => {
-    if (!window.confirm(`Xoá kết quả "${filename}"?`)) return;
-    // DB delete (fire-and-forget)
+  // 2026-10-06: "các nút chọn xoá hay xoá tất cả đều ko dùng được (trong chấm
+  // nhanh)" — window.confirm() does nothing inside the Google app / Zalo
+  // browsers teachers use on phones; an in-page dialog instead. Rows are
+  // matched by their own key (db id), not the file name, which can repeat.
+  const [confirmDialog, confirm] = useConfirm();
+  const [pageNotice, setPageNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [savingImages, setSavingImages] = useState(false);
+  const downloadImages = async (rows: OmrGradeResult[]) => {
+    if (rows.length === 0) return;
+    setSavingImages(true);
+    setPageNotice(null);
+    try {
+      const n = await saveGradedImages(rows);
+      if (n > 0) setPageNotice({ ok: true, text: n === rows.length ? `Đã tải ${n} ảnh bài chấm.` : `Đã tải ${n}/${rows.length} ảnh, ${rows.length - n} bài không có ảnh.` });
+    } catch (e) {
+      setPageNotice({ ok: false, text: (e as Error).message });
+    } finally {
+      setSavingImages(false);
+    }
+  };
+
+  const handleDeleteRow = async (filename: string, db_id?: number) => {
+    if (!(await confirm(<>Xoá kết quả <b>{filename}</b>?</>, { okLabel: 'Xoá', danger: true }))) return;
+    const key = String(db_id ?? filename);
     if (db_id) {
-      resultsApi.deleteOne(db_id).catch(e => console.warn('[DB delete]', e));
+      try { await resultsApi.deleteOne(db_id); }
+      catch (e) { setPageNotice({ ok: false, text: 'Không xoá được trên máy chủ, thử lại sau.' }); console.warn('[DB delete]', e); return; }
     }
     setSelectedKeys(prev => {
-      const key = String(db_id ?? filename);
       if (!prev.has(key)) return prev;
       const next = new Set(prev);
       next.delete(key);
@@ -833,7 +856,7 @@ export default function ResultsPage() {
     });
     setBatch(prev => {
       if (!prev) return prev;
-      const newResults = prev.results.filter(r => r.input?.filename !== filename);
+      const newResults = prev.results.filter(r => rowKey(r) !== key);
       if (newResults.length === 0) { clearStorage(); return null; }
       const updated = { ...prev, results: newResults };
       try { localStorage.setItem(LS_KEY, JSON.stringify(updated)); } catch { /* ignore */ }
@@ -867,17 +890,19 @@ export default function ResultsPage() {
     });
   };
 
-  const handleBulkDelete = () => {
+  const handleBulkDelete = async () => {
     const targets = safeResults.filter(r => selectedKeys.has(rowKey(r)));
     if (targets.length === 0) return;
-    if (!window.confirm(`Xoá ${targets.length} phiếu đã chọn? Hành động này không thể hoàn tác.`)) return;
-    for (const r of targets) {
-      if (r.db_id) resultsApi.deleteOne(r.db_id).catch(e => console.warn('[DB bulk delete]', e));
-    }
+    if (!(await confirm(<>Xoá <b>{targets.length} phiếu</b> đã chọn? Không hoàn tác được.</>, { okLabel: 'Xoá', danger: true }))) return;
+    // wait for the server: leaving the page right away must not leave some behind
+    const failed = (await Promise.allSettled(targets.filter(r => r.db_id).map(r => resultsApi.deleteOne(r.db_id!))))
+      .filter(x => x.status === 'rejected').length;
+    if (failed) setPageNotice({ ok: false, text: `${failed} phiếu chưa xoá được trên máy chủ, thử lại sau.` });
     const targetFilenames = new Set(targets.map(r => r.input?.filename ?? ''));
+    const targetKeys = new Set(targets.map(rowKey));
     setBatch(prev => {
       if (!prev) return prev;
-      const newResults = prev.results.filter(r => !targetFilenames.has(r.input?.filename ?? ''));
+      const newResults = prev.results.filter(r => !targetKeys.has(rowKey(r)));
       if (newResults.length === 0) { clearStorage(); return null; }
       const updated = { ...prev, results: newResults };
       try { localStorage.setItem(LS_KEY, JSON.stringify(updated)); } catch { /* ignore */ }
@@ -892,14 +917,26 @@ export default function ResultsPage() {
     setSelectedKeys(new Set());
   };
 
-  const handleClear = () => {
-    const examLabel = selectedExamName ? `"${selectedExamName}"` : 'kỳ thi này';
-    if (!window.confirm(`Xoá tất cả kết quả của ${examLabel}? Hành động này không thể hoàn tác.`)) return;
-    // DB clear: filter by exam_id when known
-    const shouldClearDb = dataSource === 'db' || (batch?.results ?? []).some(r => r.db_id);
-    if (shouldClearDb) {
-      const params = selectedExamId !== null ? { exam_id: selectedExamId } : undefined;
-      resultsApi.deleteAll(params).catch(e => console.warn('[DB deleteAll]', e));
+  const handleClear = async () => {
+    const n = batch?.results?.length ?? 0;
+    const what = selectedExamName ? <>của kỳ thi <b>{selectedExamName}</b></> : <>đang hiện ở đây</>;
+    if (!(await confirm(<>Xoá tất cả <b>{n} phiếu</b> {what}? Không hoàn tác được.</>, { okLabel: 'Xoá tất cả', danger: true }))) return;
+    // DB: the whole kỳ thi when one is chosen; otherwise ONLY the phiếu on
+    // this page (with no kỳ thi, deleteAll() would wipe every result of the
+    // account — e.g. after Chấm nhanh without a kỳ thi)
+    try {
+      if (selectedExamId !== null) {
+        await resultsApi.deleteAll({ exam_id: selectedExamId });
+      } else {
+        const rows = (batch?.results ?? []).filter(r => r.db_id);
+        const failed = (await Promise.allSettled(rows.map(r => resultsApi.deleteOne(r.db_id!))))
+          .filter(x => x.status === 'rejected').length;
+        if (failed) throw new Error(`${failed}`);
+      }
+    } catch (e) {
+      console.warn('[DB clear]', e);
+      setPageNotice({ ok: false, text: 'Chưa xoá hết được trên máy chủ, tải lại trang rồi thử lại.' });
+      return;
     }
     clearStorage();
     try { localStorage.removeItem('vju_pending_grade'); } catch { /* ignore */ }
@@ -1101,7 +1138,7 @@ export default function ResultsPage() {
             </Button>
           )}
           {hasBatch && (
-            <Button variant="secondary" size="sm" icon={<Trash2 size={14} />} onClick={handleClear}
+            <Button variant="secondary" size="sm" icon={<Trash2 size={14} />} onClick={() => { void handleClear(); }}
               style={{ color: '#EF4444', borderColor: '#FECACA' }}>
               Xóa kết quả
             </Button>
@@ -1307,16 +1344,30 @@ export default function ResultsPage() {
         {/* Bulk-action bar — 2026-07-31: "để action hàng loạt nhé, ví dụ a
            muốn xóa vẫn phải xóa từng cái" — select rows via the checkbox
            column and delete them all in one go instead of one confirm per row. */}
+        {/* 2026-10-06: on phones this bar sits fixed at the bottom of the
+            screen (.results-bulk-bar) — it used to stay at the top of the
+            list, out of sight of the cards being ticked further down */}
         {selectedKeys.size > 0 && (
-          <div style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
+          <div className="results-bulk-bar" style={{ ...ALERT_BANNER, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
               <CheckCircle2 size={16} />
               Đã chọn <strong>{selectedKeys.size} phiếu</strong>
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <Button size="sm" variant="outline" onClick={() => setSelectedKeys(new Set())}>Bỏ chọn</Button>
-              <Button size="sm" variant="danger" icon={<Trash2 size={13} />} onClick={handleBulkDelete}>Xoá đã chọn</Button>
+              <Button size="sm" variant="outline" icon={<Download size={13} />} loading={savingImages}
+                onClick={() => { void downloadImages(safeResults.filter(r => selectedKeys.has(rowKey(r)))); }}>Tải ảnh</Button>
+              <Button size="sm" variant="danger" icon={<Trash2 size={13} />} onClick={() => { void handleBulkDelete(); }}>Xoá đã chọn</Button>
             </div>
+          </div>
+        )}
+        {pageNotice && (
+          <div style={{ fontSize: 13, borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8,
+            background: pageNotice.ok ? '#ECFDF5' : '#FEF2F2', color: pageNotice.ok ? '#065F46' : '#B91C1C',
+            border: `1px solid ${pageNotice.ok ? '#A7F3D0' : '#FECACA'}` }}>
+            <span style={{ flex: 1 }}>{pageNotice.text}</span>
+            <button type="button" onClick={() => setPageNotice(null)}
+              style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'inherit', display: 'flex' }}><X size={14} /></button>
           </div>
         )}
 
@@ -1373,13 +1424,25 @@ export default function ResultsPage() {
             ) : (
             <>
             {/* phones: one card per phiếu (see RealCard); the table below is hidden there */}
-            <div className="results-cards" style={{ flexDirection: 'column', gap: 10, padding: '4px 0 8px' }}>
+            <div className="results-cards" style={{ flexDirection: 'column', gap: 10, padding: `4px 0 ${selectedKeys.size > 0 ? 110 : 8}px` }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: '#6B7280', padding: '0 2px' }}>
                 <input type="checkbox"
                   checked={searchedRows.length > 0 && searchedRows.every(({ r }) => selectedKeys.has(rowKey(r)))}
                   onChange={toggleSelectAllVisible} style={{ accentColor: '#C8102E', width: 16, height: 16 }} />
                 Chọn tất cả · bấm vào phiếu để xem chi tiết, sửa
               </label>
+              {/* the page-header buttons are off-screen on a phone: the two
+                  that matter here, right above the cards */}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <Button size="sm" variant="outline" icon={<Download size={13} />} loading={savingImages}
+                  onClick={() => { void downloadImages(searchedRows.map(x => x.r)); }}>
+                  Tải ảnh ({searchedRows.length})
+                </Button>
+                <Button size="sm" variant="secondary" icon={<Trash2 size={13} />} onClick={() => { void handleClear(); }}
+                  style={{ color: '#EF4444', borderColor: '#FECACA' }}>
+                  Xoá tất cả
+                </Button>
+              </div>
               {searchedRows.map(({ r, merged, corr, sc, missingKeyForMaDe, maDeValue, proctors }, i) => (
                 <RealCard
                   key={r.db_id ?? r.input?.filename ?? i}
@@ -1389,7 +1452,7 @@ export default function ResultsPage() {
                   maDeValue={maDeValue}
                   proctors={proctors}
                   onOpen={() => setModalRow(r)}
-                  onDelete={() => handleDeleteRow(r.input?.filename ?? '', r.db_id)}
+                  onDelete={() => { void handleDeleteRow(r.input?.filename ?? '', r.db_id); }}
                   selected={selectedKeys.has(rowKey(r))}
                   onToggleSelect={() => toggleSelectRow(rowKey(r))}
                 />
@@ -1434,7 +1497,7 @@ export default function ResultsPage() {
                       maDeValue={maDeValue}
                       proctors={proctors}
                       onOpen={() => setModalRow(r)}
-                      onDelete={() => handleDeleteRow(r.input?.filename ?? '', r.db_id)}
+                      onDelete={() => { void handleDeleteRow(r.input?.filename ?? '', r.db_id); }}
                       infoFields={activeInfoFields}
                       showTemplateCol={isAllMode}
                       templateLabel={getRowTemplateLabel(r, batch, fetchedTemplateNames)}
@@ -1470,6 +1533,8 @@ export default function ResultsPage() {
           </Card>
         ) : null}
       </div>
+
+      {confirmDialog}
 
       {modalRow && (
         <ResultDetailModal

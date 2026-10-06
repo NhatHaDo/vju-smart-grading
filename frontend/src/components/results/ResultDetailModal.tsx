@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { X, AlertTriangle, CheckCircle2, Pencil, Save, RotateCcw } from 'lucide-react';
+import { X, AlertTriangle, CheckCircle2, Pencil, Save, RotateCcw, Download } from 'lucide-react';
+import { gradedImageUrl, saveGradedImages } from '../../utils/gradedImages';
 import type { OmrGradeResult, AnswerKeyStore, ManualCorrection, InfoFieldColumn, TemplateSchema, TemplateAnswerSection, TemplateInfoField, OmrWarning } from '../../types/grading';
 import { VJU_PRESET_SCHEMA, answersMatch, computeScore, resolveAnswerKeyForMaDe, getMaDeValue } from '../../types/grading';
 import { buildSchemaFromAnswerKeys } from '../../utils/templateSchema';
@@ -92,6 +93,7 @@ function InfoFieldValue({ label, raw, columns }: InfoFieldValueProps) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function ResultDetailModal({ r, correction, answerKey, onClose, templateSchema, onSaveCorrection, onResetCorrection }: Props) {
+  const [imgSaving, setImgSaving] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
   const [editInfo, setEditInfo] = useState<Record<string, string>>({});
   const [editAnswers, setEditAnswers] = useState<Record<string, string>>({});
@@ -401,6 +403,20 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                 );
               })()}
             </div>
+            {/* 2026-10-06: "t ko thấy nút tải về ảnh ở đâu" — the graded picture of this bài */}
+            {gradedImageUrl(r) && (
+              <button
+                onClick={() => {
+                  setImgSaving(true);
+                  saveGradedImages([r]).catch(e => window.alert((e as Error).message)).finally(() => setImgSaving(false));
+                }}
+                disabled={imgSaving}
+                title="Tải ảnh bài đã chấm"
+                style={{ border: 'none', background: 'rgba(255,255,255,0.15)', borderRadius: 8, cursor: 'pointer', color: '#fff', padding: '7px 10px', display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, fontSize: 12, fontWeight: 700, fontFamily: 'inherit', opacity: imgSaving ? 0.6 : 1 }}
+              >
+                <Download size={16} /> {imgSaving ? 'Đang tải…' : 'Tải ảnh'}
+              </button>
+            )}
             <button
               onClick={onClose}
               style={{ border: 'none', background: 'rgba(255,255,255,0.15)', borderRadius: 8, cursor: 'pointer', color: '#fff', padding: 7, display: 'flex', flexShrink: 0 }}

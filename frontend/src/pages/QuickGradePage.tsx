@@ -32,7 +32,7 @@ import { customFormsApi, examPapersApi, examsApi } from '../services/apiClient';
 import type { ExamOut } from '../types/exam';
 import { buildSchemaFromDetail } from '../utils/templateSchema';
 import { maDeFromFileName, parseAnswerKeyWorkbook } from '../utils/answerKeyExcel';
-import { saveAs } from 'file-saver';
+import { saveGradedImages } from '../utils/gradedImages';
 import {
   loadAnswerKey,
   loadAnswerKeyDraft,
@@ -126,6 +126,30 @@ function sameReading(a: OmrGradeResult, b: OmrGradeResult): boolean {
   return JSON.stringify([a.student_info, a.answers]) === JSON.stringify([b.student_info, b.answers]);
 }
 
+// "t thấy nó vẫn ko tự chấm" (stuck on "Đã chấm ✓"): on a real phone the
+// next sheet pushed exactly on top neither moves the corners nor changes the
+// small fingerprint enough. Fallback that can't miss: while a sheet stays in
+// view after grading, it is read again every PROBE_GAP_MS; a reading that
+// differs from the sheet just graded (another SBD / mã đề, or ≥ 10% of the
+// answers) is a new sheet and is counted, the same reading is dropped quietly.
+const PROBE_GAP_MS = 1800;
+const SAME_ANSWERS_SHARE = 0.9;
+
+/** Two readings of one sheet: no info field read differently, ≥ 90% same answers. */
+function similarReading(a: OmrGradeResult, b: OmrGradeResult): boolean {
+  const full = (v: unknown): v is string => typeof v === 'string' && v !== '' && !v.includes('_');
+  const ia = (a.student_info ?? {}) as Record<string, unknown>;
+  const ib = (b.student_info ?? {}) as Record<string, unknown>;
+  for (const k of new Set([...Object.keys(ia), ...Object.keys(ib)])) {
+    if (full(ia[k]) && full(ib[k]) && ia[k] !== ib[k]) return false;
+  }
+  const keys = new Set([...Object.keys(a.answers ?? {}), ...Object.keys(b.answers ?? {})]);
+  if (keys.size === 0) return true;
+  let same = 0;
+  for (const k of keys) if ((a.answers?.[k] ?? '') === (b.answers?.[k] ?? '')) same++;
+  return same / keys.size >= SAME_ANSWERS_SHARE;
+}
+
 function buildAnswerKeyPayload(store: AnswerKeyStore): Record<string, unknown> | null {
   if (isMultiMaDe(store)) {
     return {
@@ -162,45 +186,6 @@ function resolveOverlayUrl(path: string | null | undefined): string | null {
   const idx = Math.max(norm.lastIndexOf('outputs/'), norm.lastIndexOf('uploads/'));
   const relative = idx >= 0 ? norm.slice(idx) : norm.replace(/^\//, '');
   return `/${relative}`;
-}
-
-// ── Tải ảnh đã chấm (2026-10-06) ─────────────────────────────────────────────
-// anh Tú: "thêm nút tải ảnh xuống để tải ảnh này về" + "gửi ảnh các bài": the
-// graded picture (green/red marks, score in the corner) of one bài, or of
-// every bài of the session as one .zip.
-
-function overlayPathOf(r: OmrGradeResult): string | null {
-  return resolveOverlayUrl(r.debug?.overlay_all_path ?? r.debug?.aligned_image_path);
-}
-
-/** "SBD 123456 - Ma de 101 - 8.5 diem.jpg" — whatever the sheet read. */
-function gradedImageName(r: OmrGradeResult, index?: number): string {
-  const parts: string[] = [];
-  if (index != null) parts.push(String(index + 1).padStart(2, '0'));
-  // only fully read numbers ("_" = a column left blank or unreadable)
-  const ok = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '' && !v.includes('_');
-  const info = r.student_info ?? {};
-  const sbd = [info.sbd, info.cccd].find(ok);
-  const maDe = [info.ma_de, info.made].find(ok);
-  if (sbd) parts.push(`SBD ${sbd}`);
-  if (maDe) parts.push(`Ma de ${maDe}`);
-  if (!sbd && !maDe) {
-    // custom templates key their fields by block name (Mẫu 40: mã SV, mã đề)
-    parts.push(...Object.values(info).filter(ok).slice(0, 2));
-  }
-  const d = scoreOn10(r.score);
-  if (d != null) parts.push(`${d} diem`);
-  if (parts.length === (index != null ? 1 : 0)) parts.push('bai cham');
-  return `${parts.join(' - ').replace(/[\\/:*?"<>|]+/g, '_')}.jpg`;
-}
-
-async function fetchGradedImage(r: OmrGradeResult): Promise<Blob | null> {
-  const url = overlayPathOf(r);
-  if (!url) return null;
-  try {
-    const res = await fetch(url);
-    return res.ok ? await res.blob() : null;
-  } catch { return null; }
 }
 
 // ── Setup screen (chọn mẫu phiếu + kỳ thi, bấm Bắt đầu) ─────────────────────
@@ -495,6 +480,7 @@ export default function QuickGradePage() {
   // from the file name ("Dap_an_Ma_de_101.xlsx") or the file's "Đề 101"
   // sheets; a new mã đề is added, an existing one replaced. The result is
   // saved as this sheet's answer key, so Answer Key / Upload see it too.
+  const [sessionSchema, setSessionSchema] = useState<TemplateSchema | null>(null);
   const [importing, setImporting] = useState(false);
   const [importNote, setImportNote] = useState<{ ok: string; warnings: string[] } | null>(null);
 
@@ -609,7 +595,12 @@ export default function QuickGradePage() {
           onImportFiles={files => { void importFiles(files); }}
           importNote={importNote}
           importing={importing}
-          onStart={() => setSessionActive(true)}
+          onStart={() => {
+            // the sheet's layout goes with the results (Kết quả shows its
+            // columns without "Schema … không có trong batch này")
+            void schemaFor(tpl).then(sc => setSessionSchema(tpl?.mode === 'custom' ? sc : null));
+            setSessionActive(true);
+          }}
           exams={exams}
           examId={examId}
           onSelectExam={selectExam}
@@ -635,7 +626,11 @@ export default function QuickGradePage() {
           templateMode: mode,
           customTemplateId:   mode === 'custom' ? (tpl?.id ?? null) : null,
           customTemplateName: mode === 'custom' ? (tpl?.name ?? null) : null,
-          templateSchema: null,
+          templateSchema: sessionSchema,
+          // 2026-10-06: the kỳ thi chosen here goes with the results (they
+          // used to be saved with no kỳ thi)
+          examId:   examId,
+          examName: exams.find(e => e.id === examId)?.name ?? null,
         };
         navigate('/app/results', { state: batch });
       }}
@@ -664,6 +659,8 @@ function QuickGradeCamera({
   const [lastResult, setLastResult] = useState<OmrGradeResult | null>(null);
   const [gradeError, setGradeError] = useState<string | null>(null);
   const [results,  setResults]  = useState<OmrGradeResult[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimerRef = useRef<number | null>(null);
 
   const checkingRef     = useRef(false);
   const waitingClearRef = useRef(false);
@@ -743,38 +740,32 @@ function QuickGradeCamera({
     onExit(resultsRef.current);
   };
 
-  // Tải ảnh: one bài (keeps its result on screen while saving), or all of them
+  // Tải ảnh: one bài (keeps its result on screen while saving), or all of them —
+  // a phone gets the share sheet ("Lưu hình ảnh"), a computer a .jpg / .zip
   const [saving, setSaving] = useState<'one' | 'zip' | null>(null);
+  const flashNotice = (text: string) => {
+    setNotice(text);
+    if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = window.setTimeout(() => setNotice(null), 3000);
+  };
   const downloadOne = async (r: OmrGradeResult) => {
     if (bannerTimerRef.current) window.clearTimeout(bannerTimerRef.current);
     setSaving('one');
-    const blob = await fetchGradedImage(r);
-    setSaving(null);
-    if (blob) saveAs(blob, gradedImageName(r));
-    else alert('Không tải được ảnh của bài này.');
-    bannerTimerRef.current = window.setTimeout(() => { setLastResult(null); setGradeError(null); }, RESULT_BANNER_MS);
+    try { await saveGradedImages([r]); }
+    catch (e) { flashNotice((e as Error).message); }
+    finally {
+      setSaving(null);
+      bannerTimerRef.current = window.setTimeout(() => { setLastResult(null); setGradeError(null); }, RESULT_BANNER_MS);
+    }
   };
   const downloadAll = async () => {
-    const list = resultsRef.current;
-    if (list.length === 0) return;
+    if (resultsRef.current.length === 0) return;
     setSaving('zip');
     try {
-      const { default: JSZip } = await import('jszip');
-      const zip = new JSZip();
-      let n = 0;
-      for (let i = 0; i < list.length; i++) {
-        const blob = await fetchGradedImage(list[i]);
-        if (blob) { zip.file(gradedImageName(list[i], i), blob); n++; }
-      }
-      if (n === 0) { alert('Không tải được ảnh nào.'); return; }
-      const ts = new Date();
-      const pad = (x: number) => String(x).padStart(2, '0');
-      saveAs(await zip.generateAsync({ type: 'blob' }),
-        `Anh bai cham ${pad(ts.getDate())}-${pad(ts.getMonth() + 1)} ${pad(ts.getHours())}h${pad(ts.getMinutes())}.zip`);
-      if (n < list.length) alert(`Đã tải ${n}/${list.length} ảnh, ${list.length - n} bài không có ảnh.`);
-    } finally {
-      setSaving(null);
-    }
+      const n = await saveGradedImages(resultsRef.current);
+      if (n > 0 && n < resultsRef.current.length) flashNotice(`Đã tải ${n}/${resultsRef.current.length} ảnh`);
+    } catch (e) { flashNotice((e as Error).message); }
+    finally { setSaving(null); }
   };
 
   const showResultBanner = useCallback((r: OmrGradeResult | null, err: string | null) => {
@@ -789,9 +780,10 @@ function QuickGradeCamera({
 
   // Chụp full-res khung hình hiện tại rồi gửi CHẤM NGAY — không dừng lại ở
   // bước xem trước/xác nhận (bỏ hẳn theo lựa chọn ưu tiên tốc độ).
-  const [notice, setNotice] = useState<string | null>(null);
-  const noticeTimerRef = useRef<number | null>(null);
-  const captureAndGrade = useCallback((auto = false) => {
+  const lastGradeAtRef = useRef(0);
+  const probeStreakRef = useRef(0);
+  /** probe: a re-read of the sheet still in view (see PROBE_GAP_MS) — counted only when it is another sheet. */
+  const captureAndGrade = useCallback((auto = false, probe = false) => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0 || gradingRef.current) return;
 
@@ -831,7 +823,9 @@ function QuickGradeCamera({
         } else {
           const data = await res.json() as OmrGradeResult;
           const prev = resultsRef.current[resultsRef.current.length - 1];
-          if (auto && prev && sameReading(prev, data)) {
+          if (probe && prev && similarReading(prev, data)) {
+            // still the sheet just graded: nothing to show
+          } else if (auto && prev && sameReading(prev, data)) {
             // the sheet just graded, seen again: not counted twice
             setNotice('Phiếu này vừa chấm rồi, đưa phiếu tiếp theo');
             if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
@@ -846,6 +840,7 @@ function QuickGradeCamera({
       } finally {
         gradingRef.current = false;
         setGrading(false);
+        lastGradeAtRef.current = Date.now();
       }
     }, 'image/jpeg', 0.92);
   }, [isCustom, tpl?.id, variant, answerKeyPayload, scoringPayload, showResultBanner]);
@@ -899,9 +894,19 @@ function QuickGradeCamera({
           const other = !!(fp && graded?.fp && fingerprintDistance(fp, graded.fp) > NEW_SHEET_FP_DIST);
           if (!graded || !(moved || other)) {
             setAutoState('clearing');
+            // fallback: held still a moment → read it again (a new sheet the
+            // quick signs missed is counted, the same one dropped)
+            const held = cornerShift(data.corners, lastSeenRef.current ?? undefined) <= 2 * HOLD_STILL_MOVE;
             lastSeenRef.current = data.corners ?? null;
+            probeStreakRef.current = data.ready && held ? probeStreakRef.current + 1 : 0;
+            if (probeStreakRef.current >= READY_STREAK_NEEDED && Date.now() - lastGradeAtRef.current >= PROBE_GAP_MS) {
+              probeStreakRef.current = 0;
+              gradedRef.current = { corners: data.corners ?? [], fp: decodeFingerprint(data.fingerprint) };
+              captureAndGrade(true, true);
+            }
             return;
           }
+          probeStreakRef.current = 0;
           waitingClearRef.current = false;
           readyStreakRef.current = 0;
         }
@@ -945,7 +950,7 @@ function QuickGradeCamera({
     : autoState === 'holding'  ? '#F59E0B'
     : '#9CA3AF';
 
-  const statusText = grading
+  const statusText = grading && autoState !== 'clearing'
     ? 'Đang chấm…'
     : notice ? notice
     : autoState === 'clearing' ? 'Đã chấm ✓ — đưa phiếu tiếp theo vào'
@@ -1166,7 +1171,7 @@ function QuickGradeCamera({
               style={{ position: 'absolute', left: 18 }}
               title="Tải ảnh đã chấm của tất cả các bài (.zip)"
             >
-              Ảnh (.zip)
+              Tải ảnh
             </Button>
           )}
           <Button
