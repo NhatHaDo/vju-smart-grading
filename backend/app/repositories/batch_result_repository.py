@@ -247,6 +247,22 @@ class BatchResultRepository:
         delete_overlay_files_for(debug_paths_json)
         return True
 
+    def delete_many(self, ids: list[int], owner_id: int | None = None) -> int:
+        """Delete these rows (only those `owner_id` may touch, when given) in
+        one transaction; returns how many were deleted. Ids not found / not
+        visible are skipped. Debug overlay files go too, as in delete()."""
+        if not ids:
+            return 0
+        q = self.db.query(BatchResult).filter(BatchResult.id.in_(ids))
+        if owner_id is not None:
+            owned_exam_ids = self.db.query(Exam.id).filter(Exam.owner_id == owner_id).scalar_subquery()
+            q = q.filter(BatchResult.exam_id.in_(owned_exam_ids))
+        debug_paths_jsons = [r.debug_paths_json for r in q.with_entities(BatchResult.debug_paths_json).all()]
+        count = q.delete(synchronize_session=False)
+        self.db.commit()
+        delete_overlay_files_for_many(debug_paths_jsons)
+        return count
+
     def delete_all(self, filters: BatchResultFilters | None = None) -> int:
         """
         Delete all rows matching filters (or all rows if filters is None/empty).

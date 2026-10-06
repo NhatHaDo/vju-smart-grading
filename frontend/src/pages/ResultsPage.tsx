@@ -938,14 +938,30 @@ export default function ResultsPage() {
     });
   };
 
+  // 2026-10-06 "mấy nút xoá ở đây ko hoạt động": one DELETE per phiếu, all
+  // at once (155–230 requests) was refused by the web server in front of the
+  // app. Now the ids go in one request (a few for very long lists).
+  const deleteOnServer = async (rows: OmrGradeResult[]) => {
+    const ids = rows.map(r => r.db_id).filter((id): id is number => typeof id === 'number');
+    for (let i = 0; i < ids.length; i += 2000) {
+      await resultsApi.deleteMany(ids.slice(i, i + 2000));
+    }
+  };
+  const errText = (e: unknown) =>
+    e instanceof ApiError ? `lỗi ${e.status}` : ((e as Error)?.message || 'lỗi mạng');
+
   const handleBulkDelete = async () => {
     const targets = safeResults.filter(r => selectedKeys.has(rowKey(r)));
     if (targets.length === 0) return;
     if (!(await confirm(<>Xoá <b>{targets.length} phiếu</b> đã chọn? Không hoàn tác được.</>, { okLabel: 'Xoá', danger: true }))) return;
-    // wait for the server: leaving the page right away must not leave some behind
-    const failed = (await Promise.allSettled(targets.filter(r => r.db_id).map(r => resultsApi.deleteOne(r.db_id!))))
-      .filter(x => x.status === 'rejected').length;
-    if (failed) setPageNotice({ ok: false, text: `${failed} phiếu chưa xoá được trên máy chủ, thử lại sau.` });
+    // wait for the server: leaving the page right away must not leave some
+    // behind. One request for all of them (see deleteOnServer).
+    try {
+      await deleteOnServer(targets);
+    } catch (e) {
+      setPageNotice({ ok: false, text: `Chưa xoá được trên máy chủ (${errText(e)}), thử lại sau.` });
+      return;
+    }
     const targetFilenames = new Set(targets.map(r => r.input?.filename ?? ''));
     const targetKeys = new Set(targets.map(rowKey));
     setBatch(prev => {
@@ -976,14 +992,11 @@ export default function ResultsPage() {
       if (selectedExamId !== null) {
         await resultsApi.deleteAll({ exam_id: selectedExamId });
       } else {
-        const rows = (batch?.results ?? []).filter(r => r.db_id);
-        const failed = (await Promise.allSettled(rows.map(r => resultsApi.deleteOne(r.db_id!))))
-          .filter(x => x.status === 'rejected').length;
-        if (failed) throw new Error(`${failed}`);
+        await deleteOnServer(batch?.results ?? []);
       }
     } catch (e) {
       console.warn('[DB clear]', e);
-      setPageNotice({ ok: false, text: 'Chưa xoá hết được trên máy chủ, tải lại trang rồi thử lại.' });
+      setPageNotice({ ok: false, text: `Chưa xoá được trên máy chủ (${errText(e)}), tải lại trang rồi thử lại.` });
       return;
     }
     clearStorage();

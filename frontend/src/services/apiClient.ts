@@ -383,6 +383,13 @@ export const resultsApi = {
   deleteOne: (id: number) =>
     request<void>(`/api/v1/results/${id}`, { method: 'DELETE' }),
 
+  /** Several phiếu in ONE request (a burst of single deletes gets refused by the web server). */
+  deleteMany: (ids: number[]) =>
+    request<{ deleted: number }>('/api/v1/results/delete-many', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    }),
+
   deleteAll: (params?: { exam_id?: number }) => {
     const q = new URLSearchParams();
     if (params?.exam_id != null) q.set('exam_id', String(params.exam_id));

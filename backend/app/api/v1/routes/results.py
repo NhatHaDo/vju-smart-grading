@@ -22,6 +22,7 @@ Design notes
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.security.permissions import require_roles
@@ -191,6 +192,32 @@ def delete_result(
     _assert_visible(repo, row, current_user)
     repo.delete(result_id)
     return {"ok": True, "deleted_id": result_id}
+
+
+# ── POST /results/delete-many ─────────────────────────────────────────────────
+# 2026-10-06 "mấy nút xoá ở đây ko hoạt động": Xoá đã chọn / Xoá tất cả sent
+# one DELETE per phiếu, all at once — 155–230 requests in a burst, which the
+# web server in front (Apache on Virtualmin) refuses past a point, so the
+# deletes failed. Now the page sends the whole list in ONE request.
+
+class DeleteManyRequest(BaseModel):
+    ids: list[int] = Field(default_factory=list, max_length=10_000)
+
+
+@router.post(
+    "/delete-many",
+    summary="Xoá nhiều kết quả trong một lần (theo danh sách id)",
+)
+def delete_many_results(
+    payload:      DeleteManyRequest,
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_roles("admin", "teacher")),
+) -> dict:
+    """Ids that no longer exist (already deleted) or that this user may not
+    touch are skipped — the page counts the phiếu as gone either way."""
+    repo = BatchResultRepository(db)
+    count = repo.delete_many(sorted(set(payload.ids)), owner_id=_owner_scope(current_user))
+    return {"deleted": count}
 
 
 # ── DELETE /results ────────────────────────────────────────────────────────────
