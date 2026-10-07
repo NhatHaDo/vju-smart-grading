@@ -15,6 +15,23 @@
     <link rel="icon" type="image/png" href="/vju-seal.png" />
     <link rel="apple-touch-icon" href="/vju-seal.png" />
     <title>VJU Smart Grading</title>
+    <!-- 2026-10-07 hiệu ứng mở app (components/layout/AppIntro.tsx): trong app
+         iPhone, trang giữ nền đỏ như màn hình chờ cho tới khi hiệu ứng chạy,
+         để không nháy trắng lúc đang tải. Chỉ một lần mỗi lần mở app;
+         ?intro=1 để xem thử trên trình duyệt. -->
+    <style>html.vju-intro, html.vju-intro body { background: #AA2222; }</style>
+    <script>
+      (function () {
+        try {
+          var C = window.Capacitor;
+          var inApp = !!(C && C.isNativePlatform && C.isNativePlatform());
+          var force = /[?&]intro=1(&|$)/.test(location.search);
+          if ((inApp && !sessionStorage.getItem('vju_intro_done')) || force) {
+            document.documentElement.classList.add('vju-intro');
+          }
+        } catch (e) { /* no intro */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

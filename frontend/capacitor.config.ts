@@ -13,6 +13,9 @@ const config: CapacitorConfig = {
   ios: {
     contentInset: 'always',
   },
+  // Màu nền khung web trước khi trang tải xong — đỏ như màn hình chờ, để
+  // màn hình chờ → hiệu ứng mở app (AppIntro) không bị nháy trắng ở giữa
+  backgroundColor: '#AA2222',
 };
 
 export default config;
