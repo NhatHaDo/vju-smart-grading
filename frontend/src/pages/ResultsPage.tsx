@@ -732,10 +732,13 @@ export default function ResultsPage() {
       return;
     }
 
-    // No fresh batch: resolve examId from localStorage, then load DB
-    const lsBatch = loadFromStorage();
-    const resolvedExamId   = lsBatch?.examId   ?? null;
-    const resolvedExamName = lsBatch?.examName ?? null;
+    // No fresh batch: resolve examId from localStorage, then load DB.
+    // "Xem kết quả" on the Dashboard sends { openExam }: show that kỳ thi
+    // (and nothing from an earlier lượt if it has no results yet).
+    const openExam = (rawState as { openExam?: { id: number; name: string } } | null)?.openExam ?? null;
+    const lsBatch = openExam ? null : loadFromStorage();
+    const resolvedExamId   = openExam?.id   ?? lsBatch?.examId   ?? null;
+    const resolvedExamName = openExam?.name ?? lsBatch?.examName ?? null;
     if (resolvedExamId !== null) {
       setSelectedExamId(resolvedExamId);
       setSelectedExamName(resolvedExamName);

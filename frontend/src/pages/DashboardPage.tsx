@@ -9,7 +9,7 @@
  * "18/90" progress and "-0.08" average bugs.
  */
 import { useState, useEffect, useMemo } from 'react';
-import { ClipboardList, ScanLine, AlertTriangle, TrendingUp, Calendar, Database, WifiOff, RefreshCw } from 'lucide-react';
+import { ClipboardList, ScanLine, AlertTriangle, TrendingUp, Calendar, Database, WifiOff, RefreshCw, ChevronDown, Pencil, BarChart3 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { StatCard } from '../components/common/Card';
 import Card from '../components/common/Card';
@@ -22,7 +22,7 @@ import { dbRowToOmrResult } from '../utils/resultMapping';
 import { buildSchemaFromDetail, buildTemplateOptionsFromRows, getRowTemplateKey } from '../utils/templateSchema';
 import { scoreRows } from '../utils/analyticsLive';
 import type { ExamOut } from '../types/exam';
-import { semesterLabel } from '../constants/examMeta';
+import { semesterLabel, lecturerDisplay } from '../constants/examMeta';
 import { useAuth } from '../app/providers';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -160,6 +160,8 @@ export default function DashboardPage() {
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [exams,     setExams]     = useState<ExamOut[]>([]);
   const [results,   setResults]   = useState<BatchResultOut[]>([]);
+  // the recent kỳ thi opened on a phone (its details shown under its row)
+  const [openExamId, setOpenExamId] = useState<number | null>(null);
 
   const load = async () => {
     setLoadState('loading');
@@ -514,7 +516,9 @@ export default function DashboardPage() {
           {/* 2026-10-07 "thế còn cái này thì sao": on a phone the 5-column table
               had to be scrolled sideways. Each kỳ thi is one short row there:
               name, môn · học kỳ · ngày thi below it, tiến độ on the right;
-              tapping it opens the Kỳ thi page. The table stays on a computer. */}
+              tapping it shows the kỳ thi's details right under it ("ấn vào thì
+              nó ra cái bảng chi tiết"), with Sửa kỳ thi / Xem kết quả.
+              The table stays on a computer. */}
           {progressByExam.length > 0 && (
             <div className="dash-recent-list">
               {[...progressByExam]
@@ -527,11 +531,23 @@ export default function DashboardPage() {
                     exam.semester ? semesterLabel(exam.semester) : '',
                     exam.exam_date ? fmtDate(exam.exam_date) : '',
                   ].filter(Boolean).join(' · ');
+                  const open = openExamId === exam.id;
+                  const when = [exam.exam_date ? fmtDate(exam.exam_date) : '', exam.exam_time ?? ''].filter(Boolean).join(' ');
+                  const details: [string, string][] = [
+                    ['Môn học',    [exam.subject, exam.exam_code].filter(Boolean).join(' · ') || '—'],
+                    ['Học kỳ',     [exam.semester ? semesterLabel(exam.semester) : '', exam.academic_year ?? ''].filter(Boolean).join(' · ') || '—'],
+                    ['Ngày thi',   when || '—'],
+                    ['Phòng',      exam.room || '—'],
+                    ['Giảng viên', lecturerDisplay(exam)],
+                    ['SV',         sc !== null ? String(sc) : '—'],
+                    ['Tiến độ',    `${graded}/${sc ?? '—'} phiếu`],
+                  ];
                   return (
+                    <div key={exam.id}>
                     <button
-                      key={exam.id}
                       type="button"
-                      onClick={() => navigate('/app/exams')}
+                      onClick={() => setOpenExamId(open ? null : exam.id)}
+                      aria-expanded={open}
                       style={{
                         display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left',
                         padding: '12px 16px', border: 'none', borderTop: '1px solid #F3F4F6',
@@ -548,7 +564,35 @@ export default function DashboardPage() {
                       >
                         {graded}/{sc ?? '—'}
                       </Badge>
+                      <ChevronDown size={16} color="#9CA3AF" style={{ flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 200ms' }} />
                     </button>
+                    {open && (
+                      <div style={{ margin: '0 16px 14px', border: '1px solid #EEE', borderRadius: 10, overflow: 'hidden' }}>
+                        {details.map(([k, v], j) => (
+                          <div key={k} style={{ display: 'flex', gap: 12, padding: '8px 12px', fontSize: 13, background: j % 2 ? '#FAFAFA' : '#fff' }}>
+                            <span style={{ width: 84, flexShrink: 0, color: '#6B7280', fontWeight: 600 }}>{k}</span>
+                            <span style={{ flex: 1, minWidth: 0, color: '#1E1E1E', textAlign: 'right', overflowWrap: 'anywhere' }}>{v}</span>
+                          </div>
+                        ))}
+                        <div style={{ display: 'flex', gap: 8, padding: '10px 12px', borderTop: '1px solid #F3F4F6' }}>
+                          <button
+                            type="button"
+                            onClick={() => navigate('/app/exams', { state: { editExamId: exam.id } })}
+                            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '9px 0', borderRadius: 9999, border: '1.5px solid #E5E7EB', background: '#fff', color: '#374151', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                          >
+                            <Pencil size={13} /> Sửa kỳ thi
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => navigate('/app/results', { state: { openExam: { id: exam.id, name: exam.name } } })}
+                            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '9px 0', borderRadius: 9999, border: 'none', background: '#C8102E', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                          >
+                            <BarChart3 size={13} /> Xem kết quả
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    </div>
                   );
                 })}
             </div>

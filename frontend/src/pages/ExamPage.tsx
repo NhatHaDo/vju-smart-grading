@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Pencil, Trash2, Search } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
 import ExamDatePicker from '../components/common/ExamDatePicker';
@@ -83,6 +83,7 @@ function ConfirmRow({ label, value }: { label: string; value: string | number | 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function ExamPage() {
   const navigate = useNavigate();
+  const location = useLocation();
 
   // ── Exam list state ──
   const [exams,    setExams]   = useState<ExamOut[]>([]);
@@ -153,6 +154,18 @@ export default function ExamPage() {
     // the page scrolls inside the app shell, not the window: bring the form up
     document.querySelector('.exam-wiz-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
+
+  // "Sửa kỳ thi" on the Dashboard sends { editExamId }: open that kỳ thi's
+  // form once the list has loaded, then drop the request so a reload or
+  // going back doesn't open it again
+  const editRequest = (location.state as { editExamId?: number } | null)?.editExamId ?? null;
+  useEffect(() => {
+    if (editRequest === null || loading) return;
+    const exam = exams.find(e => e.id === editRequest);
+    navigate(location.pathname, { replace: true, state: null });
+    if (exam) startEdit(exam);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editRequest, loading, exams]);
 
   // ── Validation ──
   const validateStep1 = (): string => {
