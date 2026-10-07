@@ -54,10 +54,10 @@ export default function LoginPage() {
   };
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', fontFamily: '"Be Vietnam Pro","Segoe UI",sans-serif' }}>
+    <div className="auth-page" style={{ display: 'flex', minHeight: '100vh', fontFamily: '"Be Vietnam Pro","Segoe UI",sans-serif' }}>
 
       {/* ── Left: form panel ── */}
-      <div style={{
+      <div className="auth-form" style={{
         width: 420, flexShrink: 0, background: '#fff',
         display: 'flex', flexDirection: 'column', justifyContent: 'center',
         padding: '48px 40px', boxShadow: '4px 0 28px rgba(0,0,0,0.10)',
@@ -191,7 +191,7 @@ export default function LoginPage() {
       </div>
 
       {/* ── Right: flower canvas panel ── */}
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+      <div className="auth-art" style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         {/* Canvas full background with gradient + blobs + flowers */}
         <FlowerCanvas variant="auth" drawBg={true} />
 

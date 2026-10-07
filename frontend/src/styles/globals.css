@@ -414,3 +414,28 @@ body {
     background: #fff !important;
   }
 }
+
+/* 2026-10-07 "nó cứ bị zoom xong mất hết nội dung": on phones, a text box
+   under 16px makes iOS zoom the page in when tapped. Every input on a touch
+   screen gets 16px (inline styles set 13–15px, hence !important). */
+@media (hover: none) and (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* 2026-10-07 "nó bị nnay khó chịu": Đăng nhập / Đăng ký / Quên mật khẩu put a
+   420 px form next to a decorative panel — wider than a phone, so the page
+   scrolled sideways and the red panel showed at the edge. On a phone the
+   form takes the whole width and the decorative panel is left out. */
+@media (max-width: 640px) {
+  .auth-page .auth-form {
+    width: 100% !important;
+    flex-shrink: 1 !important;
+    padding: 64px 22px 32px !important;
+    box-shadow: none !important;
+  }
+  .auth-page .auth-art { display: none !important; }
+}

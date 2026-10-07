@@ -42,10 +42,10 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', fontFamily: '"Be Vietnam Pro","Segoe UI",sans-serif' }}>
+    <div className="auth-page" style={{ display: 'flex', minHeight: '100vh', fontFamily: '"Be Vietnam Pro","Segoe UI",sans-serif' }}>
 
       {/* ── Left: form panel ── */}
-      <div style={{
+      <div className="auth-form" style={{
         width: 420, flexShrink: 0, background: '#fff',
         display: 'flex', flexDirection: 'column', justifyContent: 'center',
         padding: '48px 40px', boxShadow: '4px 0 28px rgba(0,0,0,0.10)',
@@ -143,7 +143,7 @@ export default function ForgotPasswordPage() {
       </div>
 
       {/* ── Right: flower canvas panel ── */}
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+      <div className="auth-art" style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <FlowerCanvas variant="auth" drawBg={true} />
         <div style={{ position: 'absolute', inset: 0, zIndex: 5, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '0 48px' }}>
           <div style={{ width: 108, height: 108, borderRadius: '50%', background: 'rgba(255,255,255,0.15)', border: '2px solid rgba(255,255,255,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 28, padding: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.25)' }}>
