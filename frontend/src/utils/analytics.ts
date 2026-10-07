@@ -136,7 +136,10 @@ const CLASSIFICATIONS: { name: string; min: number; color: string }[] = [
 
 export function computeClassification(scores: number[]): ClassificationSlice[] {
   return CLASSIFICATIONS.map(c => {
-    const next = CLASSIFICATIONS.find(x => x.min > c.min);
+    // the band just above this one (the list goes from the top band down —
+    // find() used to pick "Xuất sắc" as the upper end of every band, so a
+    // bài was counted in several bands at once)
+    const next = CLASSIFICATIONS.filter(x => x.min > c.min).sort((x, y) => x.min - y.min)[0];
     const count = next
       ? scores.filter(s => s >= c.min && s < next.min).length
       : scores.filter(s => s >= c.min).length;

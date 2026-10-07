@@ -3,15 +3,15 @@
  * =================
  * Thống kê & Phân tích — VJU Smart Grading
  *
- * Data priority:
- *  1. localStorage `vju_last_batch_grade` + `vju_answer_key`
- *  2. Mock data fallback (UI always renders)
+ * Data: the phiếu saved on the server (GET /results), filtered by kỳ thi and
+ * lượt chấm, each scored like the Kết quả page (its own mẫu phiếu, the đáp án
+ * of its own mã đề, thang 10) — see utils/analyticsLive.ts. No made-up numbers.
  *
  * Sections:
- *  A. Header + exam filter dropdown
- *  B. 4 KPI cards
+ *  A. Header + Kỳ thi / Lượt chấm filters
+ *  B. 4 KPI cards (điểm TB compared with the lượt chấm before)
  *  C. Score distribution (BarChart) + Classification donut (PieChart)
- *  D. Trend AreaChart + Subject grouped BarChart
+ *  D. Trend by lượt chấm + comparison by mã đề
  *  E. Hardest questions table
  */
 
@@ -19,25 +19,19 @@ import { useState, useMemo, useEffect } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   PieChart, Pie, Cell, Legend,
-  AreaChart, Area, ResponsiveContainer,
+  LineChart, Line, ResponsiveContainer,
 } from 'recharts';
-import { BarChart3, TrendingUp, Users, Percent, AlertCircle, ChevronDown, Loader2 } from 'lucide-react';
+import { BarChart3, TrendingUp, Users, Percent, AlertCircle, Loader2 } from 'lucide-react';
 
-import { loadAnswerKey, getMaDeValue, VJU_PRESET_SCHEMA } from '../types/grading';
-import type { BatchGradeState } from '../types/grading';
-import { resultsApi } from '../services/apiClient';
+import { loadAnswerKey, type OmrGradeResult, type TemplateSchema } from '../types/grading';
+import { resultsApi, examsApi, customFormsApi } from '../services/apiClient';
+import type { ExamOut } from '../types/exam';
 import { dbRowToOmrResult } from '../utils/resultMapping';
-import {
-  loadBatchFromStorage,
-  allScores,
-  computeKpi,
-  computeDistribution,
-  computeClassification,
-  computeSubjectStats,
-  computeHardQuestions,
-  getTrendData,
-} from '../utils/analytics';
-import type { KpiData, HardQuestion } from '../utils/analytics';
+import { buildSchemaFromDetail, buildTemplateOptionsFromRows, getRowTemplateKey } from '../utils/templateSchema';
+import { serverDate } from '../utils/serverDate';
+import { computeDistribution, computeClassification } from '../utils/analytics';
+import type { HardQuestion } from '../utils/analytics';
+import { scoreRows, scoresOf, kpiOf, hardQuestionsOf, byLot, byMaDe } from '../utils/analyticsLive';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -174,183 +168,176 @@ function LoadingState() {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export default function AnalyticsPage() {
-  const [examFilter, setExamFilter] = useState<string>('all');
-  const [dropdownOpen, setDropdownOpen] = useState(false);
+/** "07/10 00:57" */
+function lotTime(iso: string): string {
+  const d = serverDate(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
-  // ── Load data ──────────────────────────────────────────────────────────────
-  // 2026-07-31: "sao cái trang thống kê phân tích này kì vậy? rõ là có dữ
-  // liệu mà" — Results page correctly showed 66 phiếu (it fetches the real
-  // DB via GET /results), but this page only ever read the local browser
-  // cache `vju_last_batch_grade`, which is populated solely by the last
-  // grading run done *in this exact browser tab* and gets wiped on account
-  // switch/logout (see providers.tsx). Any other session — including this
-  // one, which never ran a batch grade locally — saw an empty state despite
-  // the server holding plenty of graded results. Fetch from the DB first,
-  // same as ResultsPage/ReviewErrorsPage/ExcelPreviewPage already do; fall
-  // back to the local cache only if the DB call fails or is empty.
-  const [batch, setBatch] = useState<BatchGradeState | null>(null);
-  const [loadingBatch, setLoadingBatch] = useState(true);
+const selectCls = 'px-3 py-2 bg-white border border-gray-200 rounded-xl text-sm text-gray-700 shadow-sm max-w-full';
+
+export default function AnalyticsPage() {
+  // ── Load data: every phiếu saved on the server + the kỳ thi names ─────────
+  const [rows, setRows]       = useState<{ r: OmrGradeResult; examId: number | null }[]>([]);
+  const [exams, setExams]     = useState<ExamOut[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [schemas, setSchemas] = useState<Map<number, TemplateSchema>>(new Map());
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const resp = await resultsApi.list({ limit: 500 });
-        if (!cancelled && resp.items.length > 0) {
-          const converted = resp.items.map(dbRowToOmrResult);
-          const first = resp.items[0];
-          setBatch({
-            templateVariant: (first.template_variant as BatchGradeState['templateVariant']) ?? 'sbd8',
-            results:  converted,
-            gradedAt: first.graded_at,
-            examId:   first.exam_id ?? null,
-          });
-          return;
-        }
-      } catch {
-        // fall through to localStorage below
-      }
-      if (!cancelled) setBatch(loadBatchFromStorage());
-    })().finally(() => { if (!cancelled) setLoadingBatch(false); });
+    examsApi.list().then(e => { if (!cancelled) setExams(e); }).catch(() => {});
+    resultsApi.list({ limit: 1000 })
+      .then(resp => {
+        if (cancelled) return;
+        setRows(resp.items.map(it => ({ r: dbRowToOmrResult(it), examId: it.exam_id ?? null })));
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, []);
 
+  // custom mẫu phiếu: their fields (where SBD / mã đề / câu are)
+  useEffect(() => {
+    const ids = [...new Set(rows.map(x => x.r).filter(r => r.template_type === 'custom' && r.template_id != null)
+      .map(r => r.template_id as number))].filter(id => !schemas.has(id));
+    if (!ids.length) return;
+    Promise.all(ids.map(id => customFormsApi.get(id).then(d => [id, buildSchemaFromDetail(d)] as const).catch(() => null)))
+      .then(got => setSchemas(prev => {
+        const next = new Map(prev);
+        for (const g of got) if (g) next.set(g[0], g[1]);
+        return next;
+      }));
+  }, [rows]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const answerKey = useMemo(() => loadAnswerKey(), []);
 
-  const hasRealData = batch !== null && batch.results.length > 0;
-  // Custom templates key their "Mã đề" info field by block name, not the
-  // fixed "ma_de" key VJU preset uses — schema tells getMaDeValue() which.
-  const schema = batch?.templateSchema ?? VJU_PRESET_SCHEMA;
+  // ── Filters: kỳ thi, then lượt chấm (default: the latest one) ─────────────
+  const [examFilter, setExamFilter] = useState<string>('all');   // 'all' | 'none' | exam id
+  const [lotFilter, setLotFilter]   = useState<string>('latest'); // 'latest' | 'all' | graded_at
 
-  // 2026-07-31: "sao có cai này vậy" — a brand-new account with zero graded
-  // batches was seeing full-looking charts (30 SV, 7.24 điểm TB...) because
-  // this page silently fell back to hardcoded MOCK_* demo numbers whenever
-  // there was no real batch, instead of an empty state like every other page
-  // uses. Kept the small "dữ liệu minh hoạ" label as the only tell — too
-  // easy to miss. Now: no data → no mock numbers, just the EmptyState below.
-  const scores = useMemo(() => {
-    if (!hasRealData) return [];
-    return allScores(batch!.results, answerKey, schema);
-  }, [batch, answerKey, hasRealData, schema]);
+  const examRows = useMemo(() => rows.filter(x =>
+    examFilter === 'all' ? true : examFilter === 'none' ? x.examId == null : String(x.examId) === examFilter,
+  ), [rows, examFilter]);
 
-  // KPI
-  const kpi: KpiData = useMemo(() => {
-    if (!hasRealData) return { avgScore: null, totalStudents: 0, passRate: null, hardQuestionsCount: null };
-    return computeKpi(batch!.results, answerKey, schema);
-  }, [batch, answerKey, hasRealData, schema]);
+  const lots = useMemo(() => {
+    const m = new Map<string, OmrGradeResult[]>();
+    for (const { r } of examRows) if (r.graded_at) m.set(r.graded_at, [...(m.get(r.graded_at) ?? []), r]);
+    return [...m.entries()].sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([iso, rs]) => ({
+        iso, count: rs.length,
+        source: rs.every(r => r.input?.filename?.startsWith('cham-nhanh_')) ? 'Chấm nhanh' : 'Tải ảnh lên',
+      }));
+  }, [examRows]);
+  const lotIso = lotFilter === 'latest' ? (lots[0]?.iso ?? null) : lotFilter === 'all' ? null : lotFilter;
 
-  // Distribution
-  const distribution = useMemo(() => computeDistribution(scores), [scores]);
+  const schemaOf = useMemo(() => {
+    const opts = buildTemplateOptionsFromRows(rows.map(x => x.r), null, schemas);
+    return (r: OmrGradeResult): TemplateSchema =>
+      opts.find(o => o.key === getRowTemplateKey(r, null))?.templateSchema ?? { infoFields: [], answerSections: [] };
+  }, [rows, schemas]);
 
-  // Classification
+  const scoredExam = useMemo(() => scoreRows(examRows, answerKey, schemaOf), [examRows, answerKey, schemaOf]);
+  const shown = useMemo(() => lotIso ? scoredExam.filter(x => x.gradedAt === lotIso) : scoredExam, [scoredExam, lotIso]);
+  const hasData = shown.length > 0;
+
+  const scores         = useMemo(() => scoresOf(shown), [shown]);
+  const kpi            = useMemo(() => kpiOf(shown), [shown]);
+  const distribution   = useMemo(() => computeDistribution(scores), [scores]);
   const classification = useMemo(() => {
     const slices = computeClassification(scores);
-    return slices.length > 0 ? slices : [{ name: 'Chưa có dữ liệu', value: 1, color: '#E0E0E0' }];
+    return slices.length > 0 ? slices : [{ name: 'Chưa có điểm', value: 1, color: '#E0E0E0' }];
   }, [scores]);
+  const hardQuestions: HardQuestion[] = useMemo(() => hardQuestionsOf(shown).slice(0, 5), [shown]);
+  const trend          = useMemo(() => byLot(scoredExam, lotTime), [scoredExam]);
+  const maDeStats      = useMemo(() => byMaDe(shown), [shown]);
 
-  // Trend
-  const trendData = useMemo(() => getTrendData(), []);
+  // điểm TB compared with the lượt chấm just before the one shown
+  const vsPrev = useMemo(() => {
+    if (!lotIso || kpi.avgScore == null) return null;
+    const i = trend.findIndex(p => p.key === lotIso);
+    const prev = i > 0 ? trend[i - 1] : null;
+    if (!prev || prev.avgScore == null) return null;
+    return { diff: Math.round((kpi.avgScore - prev.avgScore) * 100) / 100, label: prev.label };
+  }, [lotIso, kpi.avgScore, trend]);
 
-  // Subject stats
-  const subjectStats = useMemo(
-    () => computeSubjectStats(batch?.results ?? [], answerKey, schema),
-    [batch, answerKey, schema],
-  );
-
-  // Hard questions
-  const hardQuestions: HardQuestion[] = useMemo(() => {
-    if (!hasRealData) return [];
-    return (computeHardQuestions(batch!.results, answerKey, schema) ?? []).slice(0, 5);
-  }, [batch, answerKey, hasRealData, schema]);
-
-  // Exam filter options from batch
-  const examOptions = useMemo(() => {
-    if (!hasRealData) return [];
-    const variants = Array.from(new Set(
-      batch!.results.map(r => getMaDeValue(r.student_info, schema)).filter(Boolean) as string[]
-    ));
-    return variants;
-  }, [batch, hasRealData, schema]);
+  const noKey = hasData && scores.length === 0;
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 
-        {/* ── A. Header ── */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+        {/* ── A. Header + filters ── */}
+        <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4 mb-8">
           <div>
             <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
               <BarChart3 size={24} style={{ color: VJU_RED }} />
               Thống kê &amp; Phân tích
             </h1>
             <p className="text-sm text-gray-500 mt-1">
-              Tổng quan kết quả chấm thi, phân phối điểm và câu hỏi cần chú ý
+              Điểm thang 10, tính giống trang Kết quả — theo kỳ thi và lượt chấm bạn chọn
             </p>
           </div>
-
-          {/* Exam filter dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setDropdownOpen(v => !v)}
-              className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-700 shadow-sm hover:border-red-300 transition-colors"
-            >
-              {examFilter === 'all' ? 'Tất cả' : `Mã đề ${examFilter}`}
-              <ChevronDown size={14} className={`transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
-            </button>
-            {dropdownOpen && (
-              <div className="absolute right-0 mt-1 w-40 bg-white border border-gray-100 rounded-xl shadow-lg z-50 py-1">
-                <button
-                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                  onClick={() => { setExamFilter('all'); setDropdownOpen(false); }}
-                >
-                  Tất cả
-                </button>
-                {examOptions.map(opt => (
-                  <button
-                    key={opt}
-                    className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                    onClick={() => { setExamFilter(opt); setDropdownOpen(false); }}
-                  >
-                    Mã đề {opt}
-                  </button>
-                ))}
-              </div>
-            )}
+          <div className="flex flex-col sm:flex-row gap-2 min-w-0">
+            <label className="flex flex-col gap-1 min-w-0">
+              <span className="text-xs font-semibold text-gray-500">Kỳ thi</span>
+              <select className={selectCls} value={examFilter}
+                onChange={e => { setExamFilter(e.target.value); setLotFilter('latest'); }}>
+                <option value="all">Tất cả kỳ thi</option>
+                <option value="none">Không gắn kỳ thi</option>
+                {exams.map(ex => <option key={ex.id} value={String(ex.id)}>{ex.name}</option>)}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 min-w-0">
+              <span className="text-xs font-semibold text-gray-500">Lượt chấm</span>
+              <select className={selectCls} value={lotFilter} onChange={e => setLotFilter(e.target.value)}>
+                <option value="latest">Lượt mới nhất{lots[0] ? ` (${lotTime(lots[0].iso)})` : ''}</option>
+                <option value="all">Tất cả lượt chấm ({examRows.length} phiếu)</option>
+                {lots.map(l => <option key={l.iso} value={l.iso}>{lotTime(l.iso)} · {l.source} · {l.count} phiếu</option>)}
+              </select>
+            </label>
           </div>
         </div>
 
-        {/* Loading (DB fetch in flight), then empty state, then real charts */}
-        {loadingBatch && <LoadingState />}
-        {!loadingBatch && !hasRealData && <EmptyState />}
+        {loading && <LoadingState />}
+        {!loading && !hasData && <EmptyState />}
 
-        {!loadingBatch && hasRealData && (
+        {!loading && hasData && (
         <>
+        {noKey && (
+          <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Chưa tính được điểm: các phiếu này chưa có đáp án cho mã đề của chúng. Vào trang Đáp án (hoặc chọn bộ đáp án ở Chấm nhanh) cho đúng mẫu phiếu và mã đề.
+          </div>
+        )}
+
         {/* ── B. KPI Cards ── */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <KpiCard
             icon={<TrendingUp size={18} />}
             title="Điểm TB"
             value={kpi.avgScore !== null ? kpi.avgScore.toFixed(2) : '—'}
-            sub="↑ 0.4 so với kỳ trước"
-            subColor="text-emerald-500"
+            sub={vsPrev
+              ? `${vsPrev.diff >= 0 ? '↑' : '↓'} ${Math.abs(vsPrev.diff).toFixed(2)} so với lượt ${vsPrev.label}`
+              : 'thang 10'}
+            subColor={vsPrev ? (vsPrev.diff >= 0 ? 'text-emerald-500' : 'text-red-400') : 'text-gray-400'}
           />
           <KpiCard
             icon={<Users size={18} />}
-            title="Tổng SV"
+            title="Số bài"
             value={kpi.totalStudents.toLocaleString('vi-VN')}
-            sub="bài đã chấm"
+            sub={scores.length < kpi.totalStudents ? `${scores.length} bài có điểm` : 'bài đã chấm'}
           />
           <KpiCard
             icon={<Percent size={18} />}
-            title="Tỉ lệ qua"
+            title="Tỉ lệ đạt"
             value={kpi.passRate !== null ? `${kpi.passRate.toFixed(1)}%` : '—'}
             sub="điểm ≥ 5.0"
           />
           <KpiCard
             icon={<AlertCircle size={18} />}
-            title="Câu lỗi"
+            title="Câu khó"
             value={kpi.hardQuestionsCount !== null ? String(kpi.hardQuestionsCount) : '—'}
             sub="tỉ lệ sai > 55%"
             subColor="text-red-400"
@@ -359,12 +346,7 @@ export default function AnalyticsPage() {
 
         {/* ── C. Distribution + Classification ── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-          {/* Bar chart — distribution */}
-          <AnalyticsCard
-            title="Phân phối điểm"
-            desc="Số lượng bài theo khoảng điểm"
-            className="lg:col-span-2"
-          >
+          <AnalyticsCard title="Phân phối điểm" desc="Số bài theo khoảng điểm (thang 10)" className="lg:col-span-2">
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={distribution} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
@@ -372,30 +354,17 @@ export default function AnalyticsPage() {
                 <YAxis tick={{ fontSize: 11, fill: '#9CA3AF' }} allowDecimals={false} />
                 <Tooltip content={<CustomTooltip />} cursor={{ fill: '#FEF2F2' }} />
                 <Bar dataKey="count" name="Số bài" radius={[4, 4, 0, 0]}>
-                  {distribution.map((d, i) => (
-                    <Cell key={i} fill={d.fill} />
-                  ))}
+                  {distribution.map((d, i) => <Cell key={i} fill={d.fill} />)}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
           </AnalyticsCard>
 
-          {/* Donut — classification */}
           <AnalyticsCard title="Xếp loại" desc="Theo thang điểm 10">
             <ResponsiveContainer width="100%" height={160}>
               <PieChart>
-                <Pie
-                  data={classification}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={45}
-                  outerRadius={72}
-                  paddingAngle={2}
-                  dataKey="value"
-                >
-                  {classification.map((c, i) => (
-                    <Cell key={i} fill={c.color} />
-                  ))}
+                <Pie data={classification} cx="50%" cy="50%" innerRadius={45} outerRadius={72} paddingAngle={2} dataKey="value">
+                  {classification.map((c, i) => <Cell key={i} fill={c.color} />)}
                 </Pie>
                 <Tooltip content={<CustomTooltip />} />
               </PieChart>
@@ -404,85 +373,51 @@ export default function AnalyticsPage() {
           </AnalyticsCard>
         </div>
 
-        {/* ── D. Trend + Subject comparison ── */}
+        {/* ── D. Trend by lượt chấm + by mã đề ── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-          {/* Area chart — trend */}
-          <AnalyticsCard title="Xu hướng kết quả" desc="Theo tháng T1 → T6">
-            <ResponsiveContainer width="100%" height={200}>
-              <AreaChart data={trendData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="gradAvg" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor={VJU_RED} stopOpacity={0.18} />
-                    <stop offset="95%" stopColor={VJU_RED} stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="gradPass" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="#F4A4B0" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="#F4A4B0" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
-                <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#9CA3AF' }} />
-                <YAxis tick={{ fontSize: 11, fill: '#9CA3AF' }} />
-                <Tooltip content={<CustomTooltip />} />
-                <Legend
-                  iconType="circle"
-                  iconSize={8}
-                  wrapperStyle={{ fontSize: 11, color: '#6B7280', paddingTop: 8 }}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="avgScore"
-                  name="Điểm TB"
-                  stroke={VJU_RED}
-                  strokeWidth={2}
-                  fill="url(#gradAvg)"
-                  dot={{ r: 3, fill: VJU_RED, strokeWidth: 0 }}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="passRate"
-                  name="Tỉ lệ qua (%)"
-                  stroke="#E85A6A"
-                  strokeWidth={2}
-                  fill="url(#gradPass)"
-                  dot={{ r: 3, fill: '#E85A6A', strokeWidth: 0 }}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+          <AnalyticsCard title="Xu hướng theo lượt chấm"
+            desc={`Điểm TB (thang 10) và tỉ lệ đạt của từng lượt${examFilter === 'all' ? '' : ' trong kỳ thi đã chọn'}`}>
+            {trend.length < 2 ? (
+              <p className="text-sm text-gray-400 py-10 text-center">Cần ít nhất 2 lượt chấm để xem xu hướng.</p>
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={trend} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#9CA3AF' }} />
+                  <YAxis yAxisId="d" domain={[0, 10]} tick={{ fontSize: 11, fill: '#9CA3AF' }} />
+                  <YAxis yAxisId="p" orientation="right" domain={[0, 100]} unit="%" tick={{ fontSize: 11, fill: '#9CA3AF' }} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, color: '#6B7280', paddingTop: 8 }} />
+                  <Line yAxisId="d" type="monotone" dataKey="avgScore" name="Điểm TB" stroke={VJU_RED} strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                  <Line yAxisId="p" type="monotone" dataKey="passRate" name="Tỉ lệ đạt (%)" stroke="#E85A6A" strokeDasharray="4 3" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
           </AnalyticsCard>
 
-          {/* Grouped bar chart — subject comparison */}
-          <AnalyticsCard title="So sánh theo môn" desc="Điểm TB và tỉ lệ qua (%)">
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={subjectStats} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+          <AnalyticsCard title="So sánh theo mã đề" desc="Điểm TB (thang 10) và tỉ lệ đạt của từng mã đề">
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={maDeStats} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
-                <XAxis dataKey="subject" tick={{ fontSize: 10, fill: '#9CA3AF' }} />
-                <YAxis tick={{ fontSize: 11, fill: '#9CA3AF' }} />
+                <XAxis dataKey="maDe" tick={{ fontSize: 11, fill: '#9CA3AF' }} />
+                <YAxis yAxisId="d" domain={[0, 10]} tick={{ fontSize: 11, fill: '#9CA3AF' }} />
+                <YAxis yAxisId="p" orientation="right" domain={[0, 100]} unit="%" tick={{ fontSize: 11, fill: '#9CA3AF' }} />
                 <Tooltip content={<CustomTooltip />} cursor={{ fill: '#FEF2F2' }} />
-                <Legend
-                  iconType="circle"
-                  iconSize={8}
-                  wrapperStyle={{ fontSize: 11, color: '#6B7280', paddingTop: 8 }}
-                />
-                <Bar dataKey="avgScore" name="Điểm TB" fill={VJU_RED} radius={[3, 3, 0, 0]} barSize={12} />
-                <Bar dataKey="passRate" name="Tỉ lệ qua (%)" fill="#F4A4B0" radius={[3, 3, 0, 0]} barSize={12} />
+                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, color: '#6B7280', paddingTop: 8 }} />
+                <Bar yAxisId="d" dataKey="avgScore" name="Điểm TB" fill={VJU_RED} radius={[3, 3, 0, 0]} barSize={14} />
+                <Bar yAxisId="p" dataKey="passRate" name="Tỉ lệ đạt (%)" fill="#F4A4B0" radius={[3, 3, 0, 0]} barSize={14} />
               </BarChart>
             </ResponsiveContainer>
           </AnalyticsCard>
         </div>
 
         {/* ── E. Hard questions table ── */}
-        <AnalyticsCard
-          title="Top câu hỏi khó nhất"
-          desc="Các câu có tỉ lệ trả lời sai cao nhất"
-        >
+        <AnalyticsCard title="Top câu hỏi khó nhất" desc="Các câu có tỉ lệ sai/bỏ trống cao nhất">
           {hardQuestions.length === 0 ? (
             <EmptyState />
           ) : (
             <div>
-              {hardQuestions.map((q, i) => (
-                <HardQuestionRow key={q.questionId} rank={i + 1} q={q} />
-              ))}
+              {hardQuestions.map((q, i) => <HardQuestionRow key={q.questionId} rank={i + 1} q={q} />)}
             </div>
           )}
         </AnalyticsCard>
