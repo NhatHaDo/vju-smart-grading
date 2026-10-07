@@ -190,6 +190,28 @@ body {
   .dash-table-scroll table { min-width: 640px; }
 }
 
+/* 2026-10-07 Dashboard "Kỳ thi gần đây" / "Điểm trung bình theo môn" on a
+   phone: the recent kỳ thi are short rows in place of the wide table, and
+   each subject is one row — name on the left, điểm on the right, bar below. */
+.dash-recent-list { display: none; }
+@media (max-width: 768px) {
+  .dash-table-scroll { display: none; }
+  .dash-recent-list  { display: block; }
+  .dash-subject-grid { grid-template-columns: minmax(0, 1fr) !important; gap: 8px !important; }
+  .dash-subject-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 12px;
+    text-align: left !important;
+    padding: 10px 14px !important;
+  }
+  .dash-subject-label { order: 1; margin-top: 0 !important; font-size: 13px !important; color: #374151 !important; }
+  .dash-subject-value { order: 2; min-height: 0 !important; }
+  .dash-subject-value:not(.dash-subject-none) { font-size: 20px !important; }
+  .dash-subject-bar   { order: 3; grid-column: 1 / -1; }
+}
+
 @media (max-width: 420px) {
   .dash-stat-grid    { grid-template-columns: 1fr 1fr !important; gap: 10px !important; }
   .dash-subject-grid { grid-template-columns: 1fr !important; }

@@ -22,6 +22,7 @@ import { dbRowToOmrResult } from '../utils/resultMapping';
 import { buildSchemaFromDetail, buildTemplateOptionsFromRows, getRowTemplateKey } from '../utils/templateSchema';
 import { scoreRows } from '../utils/analyticsLive';
 import type { ExamOut } from '../types/exam';
+import { semesterLabel } from '../constants/examMeta';
 import { useAuth } from '../app/providers';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -129,13 +130,18 @@ function SubjectBar({ label, avg, color, maxScore = 10 }: {
 }) {
   const display = avg !== null && avg >= 0 ? avg.toFixed(2) : '—';
   const pct     = avg !== null && avg >= 0 ? Math.min(100, (avg / maxScore) * 100) : 0;
+  // 2026-10-07: a subject with nothing scored yet says so ("—" read as a
+  // broken number); on a phone each subject is one row (globals.css)
+  const has = avg !== null && avg >= 0;
   return (
-    <div style={{ textAlign: 'center', background: '#F9FAFB', borderRadius: 10, padding: '14px 10px' }}>
-      <div style={{ fontSize: 26, fontWeight: 800, color: avg !== null && avg >= 0 ? '#1E1E1E' : '#9CA3AF' }}>
-        {display}
+    <div className="dash-subject-item" style={{ textAlign: 'center', background: '#F9FAFB', borderRadius: 10, padding: '14px 10px' }}>
+      <div className={has ? 'dash-subject-value' : 'dash-subject-value dash-subject-none'} style={has
+        ? { fontSize: 26, fontWeight: 800, color: '#1E1E1E' }
+        : { fontSize: 13, fontWeight: 600, color: '#9CA3AF', minHeight: 31, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {has ? display : 'Chưa có điểm'}
       </div>
-      <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>{label}</div>
-      <div style={{ height: 4, borderRadius: 2, marginTop: 8, background: '#E5E7EB', overflow: 'hidden' }}>
+      <div className="dash-subject-label" style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>{label}</div>
+      <div className="dash-subject-bar" style={{ height: 4, borderRadius: 2, marginTop: 8, background: '#E5E7EB', overflow: 'hidden' }}>
         <div style={{ height: '100%', borderRadius: 2, background: color, width: `${pct}%`, transition: 'width 600ms' }} />
       </div>
     </div>
@@ -259,6 +265,8 @@ export default function DashboardPage() {
       : null;
     subjectScores.push({ label: subj, avg, color: SUBJECT_COLORS[colorIdx++ % SUBJECT_COLORS.length] });
   }
+  // subjects that have a score first ("Chưa có điểm" ones after them)
+  subjectScores.sort((a, b) => Number(b.avg !== null) - Number(a.avg !== null));
 
   // Donut slices
   const sheetStatusData: Slice[] = [
@@ -480,7 +488,7 @@ export default function DashboardPage() {
                       const sc = getExamStudentCount(exam);
                       const studentStr    = sc !== null ? String(sc) : '—';
                       const progressLabel = sc !== null ? `${graded}/${sc}` : `${graded}/—`;
-                      const subjectLabel  = [exam.subject, exam.semester].filter(Boolean).join(' · ') || '—';
+                      const subjectLabel  = [exam.subject, exam.semester ? semesterLabel(exam.semester) : ''].filter(Boolean).join(' · ') || '—';
                       return (
                         <tr key={i} style={{ borderBottom: '1px solid #F3F4F6', background: '#fff' }}>
                           <td style={{ padding: '11px 16px', fontWeight: 600, color: '#1E1E1E' }}>{exam.name}</td>
@@ -500,6 +508,49 @@ export default function DashboardPage() {
                     })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* 2026-10-07 "thế còn cái này thì sao": on a phone the 5-column table
+              had to be scrolled sideways. Each kỳ thi is one short row there:
+              name, môn · học kỳ · ngày thi below it, tiến độ on the right;
+              tapping it opens the Kỳ thi page. The table stays on a computer. */}
+          {progressByExam.length > 0 && (
+            <div className="dash-recent-list">
+              {[...progressByExam]
+                .sort((a, b) => b.exam.created_at.localeCompare(a.exam.created_at))
+                .slice(0, 8)
+                .map(({ exam, graded }) => {
+                  const sc = getExamStudentCount(exam);
+                  const sub = [
+                    exam.subject,
+                    exam.semester ? semesterLabel(exam.semester) : '',
+                    exam.exam_date ? fmtDate(exam.exam_date) : '',
+                  ].filter(Boolean).join(' · ');
+                  return (
+                    <button
+                      key={exam.id}
+                      type="button"
+                      onClick={() => navigate('/app/exams')}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left',
+                        padding: '12px 16px', border: 'none', borderTop: '1px solid #F3F4F6',
+                        background: '#fff', cursor: 'pointer', fontFamily: 'inherit',
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: '#1E1E1E', lineHeight: 1.35 }}>{exam.name}</div>
+                        <div style={{ fontSize: 12, color: '#6B7280', marginTop: 3 }}>{sub || '—'}</div>
+                      </div>
+                      <Badge
+                        color={progressBadgeColor(graded, sc)}
+                        title={`${graded} phiếu đã chấm / ${sc ?? '?'} sinh viên dự kiến`}
+                      >
+                        {graded}/{sc ?? '—'}
+                      </Badge>
+                    </button>
+                  );
+                })}
             </div>
           )}
         </Card>
