@@ -1,11 +1,12 @@
-import { useState, useEffect } from 'react';
-import { X, AlertTriangle, CheckCircle2, Pencil, Save, RotateCcw, Download } from 'lucide-react';
-import { gradedImageUrl, saveGradedImages } from '../../utils/gradedImages';
+import { useState, useEffect, useRef } from 'react';
+import { X, AlertTriangle, CheckCircle2, Pencil, Save, RotateCcw, Download, ChevronLeft, ChevronRight, Maximize2 } from 'lucide-react';
+import { gradedImageUrl, saveGradedImages, debugImageUrl } from '../../utils/gradedImages';
 import type { OmrGradeResult, AnswerKeyStore, ManualCorrection, InfoFieldColumn, TemplateSchema, TemplateAnswerSection, TemplateInfoField, OmrWarning } from '../../types/grading';
 import { VJU_PRESET_SCHEMA, answersMatch, computeScore, resolveAnswerKeyForMaDe, getMaDeValue } from '../../types/grading';
 import { buildSchemaFromAnswerKeys } from '../../utils/templateSchema';
 import { getInfoFieldValue, correctionHasChanges } from '../../utils/resultMapping';
 import SheetImageViewer from './SheetImageViewer';
+import ZoomableImage from './ZoomableImage';
 
 type Filter = 'all' | 'correct' | 'wrong' | 'blank' | 'warn';
 const CHOICES = ['—', 'A', 'B', 'C', 'D'];
@@ -25,6 +26,22 @@ interface Props {
    *  shouldn't allow edits). */
   onSaveCorrection?: (filename: string, c: ManualCorrection) => void;
   onResetCorrection?: (filename: string) => void;
+  /** Which bài this is in the list shown, and how to open the one before /
+   *  after it (2026-10-07, phone layout's ‹ Bài trước / Bài sau ›). */
+  nav?: { index: number; total: number; onPrev?: () => void; onNext?: () => void };
+}
+
+/** The phone layout (2026-10-07) below this width; the computer one above. */
+function useIsPhone(): boolean {
+  const query = '(max-width: 768px)';
+  const [phone, setPhone] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
+  useEffect(() => {
+    const m = window.matchMedia(query);
+    const on = () => setPhone(m.matches);
+    m.addEventListener('change', on);
+    return () => m.removeEventListener('change', on);
+  }, []);
+  return phone;
 }
 
 // 2026-08-03: "màu match với ảnh detect thì mới dễ nhìn chứ" — "warn" (Cần
@@ -92,8 +109,14 @@ function InfoFieldValue({ label, raw, columns }: InfoFieldValueProps) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function ResultDetailModal({ r, correction, answerKey, onClose, templateSchema, onSaveCorrection, onResetCorrection }: Props) {
+export default function ResultDetailModal({ r, correction, answerKey, onClose, templateSchema, onSaveCorrection, onResetCorrection, nav }: Props) {
   const [imgSaving, setImgSaving] = useState(false);
+  const isPhone = useIsPhone();
+  const [phoneTab, setPhoneTab] = useState<'image' | 'answers' | 'info'>('image');
+  const [imgKind, setImgKind] = useState<'graded' | 'original'>('graded');
+  const [zoomOpen, setZoomOpen] = useState(false);
+  const [navNote, setNavNote] = useState<string | null>(null);
+  const swipe = useRef<{ x: number; y: number } | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
   const [editInfo, setEditInfo] = useState<Record<string, string>>({});
   const [editAnswers, setEditAnswers] = useState<Record<string, string>>({});
@@ -305,80 +328,10 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
     { key: 'warn',    label: 'Cần xem',  color: '#C2410C' },
   ];
 
-  return (
-    <div
-      className="result-detail-overlay"
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 2000, padding: '16px',
-      }}
-      onClick={e => e.target === e.currentTarget && onClose()}
-    >
-      <div
-        className="result-detail-modal"
-        style={{
-          background: '#fff', borderRadius: 16,
-          width: '95vw', height: '92vh',
-          maxWidth: 1600,
-          boxShadow: '0 32px 100px rgba(0,0,0,0.3)',
-          overflow: 'hidden',
-          display: 'flex', flexDirection: 'column',
-        }}
-      >
 
-        {/* ── Red header ── */}
-        <div style={{ background: '#C8102E', padding: '14px 20px', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
-                <span style={{ fontWeight: 700, color: '#fff', fontSize: 15 }}>{r.input?.filename ?? '—'}</span>
-                {hasWarning && (
-                  <span style={{ background: '#FCD34D', color: '#78350F', fontSize: 10, fontWeight: 700, borderRadius: 9999, padding: '2px 8px', display: 'flex', alignItems: 'center', gap: 3 }}>
-                    <AlertTriangle size={10} /> {warnList.length} cảnh báo
-                  </span>
-                )}
-                {corrected && (
-                  <span style={{ background: '#D1FAE5', color: '#065F46', fontSize: 10, fontWeight: 700, borderRadius: 9999, padding: '2px 8px', display: 'flex', alignItems: 'center', gap: 3 }}>
-                    <CheckCircle2 size={10} /> Đã sửa tay
-                  </span>
-                )}
-                {r._error && (
-                  <span style={{ background: '#FEE2E2', color: '#991B1B', fontSize: 10, fontWeight: 700, borderRadius: 9999, padding: '2px 8px' }}>Lỗi API</span>
-                )}
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 18px' }}>
-                {schema.infoFields.map(field => {
-                  // Once a field has been manually corrected, the per-column digit
-                  // breakdown below (yellow-highlighted ambiguous digits etc.) still
-                  // reflects the ORIGINAL OMR read — corrections only patch the flat
-                  // string, not that column-by-column data. Showing the raw breakdown
-                  // here would silently ignore the correction and display stale data,
-                  // so once corrected we just show the plain corrected string instead.
-                  const isFieldCorrected = correction?.corrected_student_info?.[field.key] !== undefined;
-                  return (
-                    <div key={field.key} style={{ fontSize: 12 }}>
-                      <span style={{ color: 'rgba(255,255,255,0.6)' }}>{field.displayName}: </span>
-                      <InfoFieldValue
-                        label={field.displayName}
-                        raw={getInfoFieldValue(student_info, r.info_field_columns, field) || student_info?.[field.key] || null}
-                        columns={isFieldCorrected ? undefined : r.info_field_columns?.[field.key]}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-              {/* "ở góc trên bên trái: có 2 chữ kí, cần xác định được điều
-                 này ở mỗi bài với OMR" — mean-pixel ink check in the 4
-                 CÁN BỘ COI THI/CHẤM THI boxes. null/undefined = not
-                 checked (custom template), not "all missing".
-                 2026-07-31: "thế thì cần tick làm gì? nếu ko tick thì ko
-                 phát hiện chứ nhỉ" — a missing box only gets the alarming
-                 "✗ chưa ký" treatment if "Có cán bộ coi thi/chấm thi" is
-                 ticked for this row's mã đề on Answer Key; an unticked role
-                 isn't expected here at all, so its empty box isn't shown as
-                 a problem. Present (✓) boxes still show regardless — that's
-                 just good news, never confusing. */}
+  // ── Pieces shared by the computer layout and the phone layout ─────────────
+  const signaturesBlock = (
+    <>
               {(() => {
                 const isRoleRequired = (key: string) =>
                   !!rowAnswerKey?.proctors?.[key.startsWith('coi_thi') ? 'coi_thi' : 'cham_thi'];
@@ -402,93 +355,10 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                   </div>
                 );
               })()}
-            </div>
-            {/* 2026-10-06: "t ko thấy nút tải về ảnh ở đâu" — the graded picture of this bài */}
-            {gradedImageUrl(r) && (
-              <button
-                onClick={() => {
-                  setImgSaving(true);
-                  saveGradedImages([r]).catch(e => window.alert((e as Error).message)).finally(() => setImgSaving(false));
-                }}
-                disabled={imgSaving}
-                title="Tải ảnh bài đã chấm"
-                style={{ border: 'none', background: 'rgba(255,255,255,0.15)', borderRadius: 8, cursor: 'pointer', color: '#fff', padding: '7px 10px', display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, fontSize: 12, fontWeight: 700, fontFamily: 'inherit', opacity: imgSaving ? 0.6 : 1 }}
-              >
-                <Download size={16} /> {imgSaving ? 'Đang tải…' : 'Tải ảnh'}
-              </button>
-            )}
-            <button
-              onClick={onClose}
-              style={{ border: 'none', background: 'rgba(255,255,255,0.15)', borderRadius: 8, cursor: 'pointer', color: '#fff', padding: 7, display: 'flex', flexShrink: 0 }}
-            >
-              <X size={18} />
-            </button>
-          </div>
-        </div>
-
-        {/* ── Sticky action bar — 2026-07-31: always visible when this row is
-           editable (no more separate "edit mode" to enter first). Every cell
-           below is directly clickable; this bar is just where you commit
-           ("Lưu sửa") or discard ("Hủy") whatever you've changed. ── */}
-        {canEdit && (
-          <div className="result-detail-actionbar" style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', background: '#FFF9F9', borderBottom: '1px solid #FECACA' }}>
-            <span className="result-detail-actionbar-hint" style={{ fontSize: 12, fontWeight: 700, color: '#C8102E', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Pencil size={13} /> Bấm trực tiếp vào ô câu nào cần sửa — nhớ bấm "Lưu sửa" sau khi xong
-            </span>
-            <div className="result-detail-actionbar-spacer" style={{ flex: 1 }} />
-            <button onClick={handleSaveEdit} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#C8102E', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-              <Save size={13} /> Lưu sửa
-            </button>
-            {onResetCorrection && (
-              <button onClick={handleResetEdit} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#fff', color: '#6B7280', border: '1.5px solid #E5E7EB', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
-                <RotateCcw size={13} /> Reset về kết quả gốc
-              </button>
-            )}
-            <button
-              onClick={seedEditsFromCurrent}
-              disabled={!hasUnsavedChanges}
-              title={hasUnsavedChanges ? 'Bỏ các thay đổi chưa lưu (chưa bấm "Lưu sửa"), quay về đáp án đang lưu' : 'Chưa có thay đổi nào để huỷ'}
-              style={{
-                background: '#fff',
-                color: hasUnsavedChanges ? '#6B7280' : '#D1D5DB',
-                border: `1.5px solid ${hasUnsavedChanges ? '#E5E7EB' : '#F3F4F6'}`,
-                borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600,
-                cursor: hasUnsavedChanges ? 'pointer' : 'not-allowed',
-                fontFamily: 'inherit',
-              }}
-            >
-              Hủy sửa
-            </button>
-          </div>
-        )}
-
-        {/* ── Body: 38 / 62 split (stacks to 1 column on mobile — see
-           .result-detail-body in globals.css) ── */}
-        <div className="result-detail-body" style={{ flex: 1, display: 'grid', gridTemplateColumns: '38% 62%', minHeight: 0 }}>
-
-          {/* ── Left panel: score + answers + debug ── */}
-          <div className="result-detail-left" style={{ borderRight: '1px solid #F3F4F6', overflowY: 'auto', padding: '18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-
-            {/* Score cards */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-              {sc ? [
-                { label: 'Đúng',  val: sc.correct, color: '#065F46', bg: '#D1FAE5' },
-                { label: 'Sai',   val: sc.wrong,   color: '#991B1B', bg: '#FEE2E2' },
-                { label: 'Trống', val: sc.blank,   color: '#92400E', bg: '#FEF9C3' },
-              ].map(s => (
-                <div key={s.label} style={{ background: s.bg, borderRadius: 10, padding: '10px 8px', textAlign: 'center' }}>
-                  <div style={{ fontSize: 10, color: s.color, fontWeight: 700, marginBottom: 2 }}>{s.label}</div>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.val}</div>
-                </div>
-              )) : (
-                <div style={{ gridColumn: '1/-1', fontSize: 12, color: missingKeyForMaDe ? '#CA8A04' : '#9CA3AF', textAlign: 'center', padding: '10px 0' }}>
-                  {missingKeyForMaDe
-                    ? `Chưa nhập đáp án cho Mã đề ${maDeValue ?? '?'} ở trang Answer Key`
-                    : 'Chưa có Answer Key'}
-                </div>
-              )}
-            </div>
-
+    </>
+  );
+  const partialKeyNote = (
+    <>
             {isPartialKey && (
               <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 10, padding: '8px 12px', fontSize: 11.5, color: '#92400E', lineHeight: 1.5 }}>
                 Đề <strong>{maDeValue ?? '?'}</strong> mới nhập <strong>{keyFilledCount}/{allAnswerLabels.length}</strong> câu ở Answer Key —
@@ -497,25 +367,22 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
               </div>
             )}
 
-            {sc && (
-              <div style={{ background: '#F9FAFB', borderRadius: 10, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 13, color: '#374151', fontWeight: 600 }}>Điểm</span>
-                <span style={{ fontSize: 24, fontWeight: 800, color: '#C8102E' }}>{sc.total}</span>
-              </div>
-            )}
-
+    </>
+  );
+  const infoEditBlock = (
+    <>
             {/* Editable student-info block — shown whenever this row is editable */}
             {canEdit && schema.infoFields.length > 0 && (
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Thông tin sinh viên</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
                   {schema.infoFields.map(field => (
-                    <div key={field.key} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <div key={field.key} style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
                       <label style={{ fontSize: 10, fontWeight: 600, color: '#6B7280' }}>{field.displayName}</label>
                       <input
                         value={editInfo[field.key] ?? ''}
                         onChange={e => setEditInfo(prev => ({ ...prev, [field.key]: e.target.value }))}
-                        style={{ padding: '6px 9px', borderRadius: 7, border: '1.5px solid #E5E7EB', fontSize: 12, fontFamily: 'monospace', outline: 'none' }}
+                        style={{ width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '6px 9px', borderRadius: 7, border: '1.5px solid #E5E7EB', fontSize: 12, fontFamily: 'monospace', outline: 'none' }}
                       />
                     </div>
                   ))}
@@ -523,6 +390,10 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
               </div>
             )}
 
+    </>
+  );
+  const answersBlock = (
+    <>
             {/* Filter + answer grid — every cell is directly clickable to
                edit when canEdit (2026-07-31: no more separate "edit mode"
                gate); falls back to plain read-only colored boxes when this
@@ -673,6 +544,10 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
               </div>
             </div>
 
+    </>
+  );
+  const warningsBlock = (
+    <>
             {/* Warnings */}
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Cảnh báo</div>
@@ -688,6 +563,374 @@ export default function ResultDetailModal({ r, correction, answerKey, onClose, t
                   ))
               }
             </div>
+
+    </>
+  );
+
+
+  // ── Phone layout (2026-10-07) ──────────────────────────────────────────────
+  // "cái này cũng bị zoom to ra ko fit màn hình … gợi ý cho t cách trình bày
+  // khác mà vẫn đủ tt": the computer layout (answers beside a small picture
+  // with zoom buttons) ran off a phone screen. On a phone: the điểm on top,
+  // then one of 3 tabs — Ảnh (the picture across the screen, tap to open it
+  // full screen and pinch-zoom), Đáp án, Thông tin — and ‹ Bài trước / Bài
+  // sau › at the bottom. Same data, same editing as the computer layout.
+  if (isPhone) {
+    const gradedUrl = gradedImageUrl(r);
+    const originalUrl = debugImageUrl(debug.original_image_path ?? r.input?.saved_as);
+    const imgUrl = imgKind === 'graded' ? (gradedUrl ?? originalUrl) : (originalUrl ?? gradedUrl);
+    const go = (fn?: () => void) => {
+      if (!fn) return;
+      if (hasUnsavedChanges) { setNavNote('Bấm "Lưu sửa" hoặc "Hủy sửa" trước khi sang bài khác'); return; }
+      fn();
+    };
+    const identity = schema.infoFields
+      .map(f => ({ name: f.displayName, val: getInfoFieldValue(student_info, r.info_field_columns, f) || student_info?.[f.key] || null }))
+      .filter(x => x.val && x.val !== maDeValue)   // mã đề is already in the title
+      .slice(0, 2);
+    const tabBtn = (key: typeof phoneTab, label: string, badge?: number) => (
+      <button key={key} type="button" onClick={() => setPhoneTab(key)} style={{
+        flex: 1, padding: '10px 4px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit',
+        fontSize: 14, fontWeight: 700, color: phoneTab === key ? '#C8102E' : '#6B7280',
+        borderBottom: `2.5px solid ${phoneTab === key ? '#C8102E' : 'transparent'}`,
+      }}>
+        {label}{badge ? <span style={{ marginLeft: 5, fontSize: 11, color: '#B45309' }}>⚠{badge}</span> : null}
+      </button>
+    );
+    const navBtn: React.CSSProperties = {
+      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '10px 8px',
+      border: '1.5px solid #E5E7EB', borderRadius: 10, background: '#fff', fontSize: 13, fontWeight: 700,
+      fontFamily: 'inherit', color: '#374151', cursor: 'pointer', flex: 1,
+    };
+    return (
+      <div className="result-detail-phone" style={{
+        position: 'fixed', inset: 0, zIndex: 2000, background: '#fff',
+        display: 'flex', flexDirection: 'column',
+        paddingTop: 'env(safe-area-inset-top, 0px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+      }}>
+        {/* điểm + who this is */}
+        <div style={{ background: '#C8102E', color: '#fff', padding: '10px 12px 12px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button type="button" onClick={onClose} aria-label="Đóng" style={{ border: 'none', background: 'rgba(255,255,255,0.18)', color: '#fff', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+              <X size={20} />
+            </button>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 800, fontSize: 15, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {nav ? `Bài ${nav.index + 1}/${nav.total}` : 'Chi tiết bài'}
+                {maDeValue ? ` · Mã đề ${maDeValue}` : ''}
+              </div>
+              <div style={{ fontSize: 11.5, opacity: 0.85, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {identity.length ? identity.map(x => `${x.name} ${x.val}`).join(' · ') : (r.input?.filename ?? '')}
+              </div>
+            </div>
+            {sc && <div style={{ fontSize: 26, fontWeight: 900, lineHeight: 1, flexShrink: 0 }}>{sc.total}</div>}
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap', fontSize: 12, fontWeight: 700 }}>
+            {sc ? (
+              <>
+                <span style={{ background: '#D1FAE5', color: '#065F46', borderRadius: 9999, padding: '3px 10px' }}>✓ Đúng {sc.correct}</span>
+                <span style={{ background: '#FEE2E2', color: '#991B1B', borderRadius: 9999, padding: '3px 10px' }}>✗ Sai {sc.wrong}</span>
+                <span style={{ background: '#FEF9C3', color: '#92400E', borderRadius: 9999, padding: '3px 10px' }}>○ Trống {sc.blank}</span>
+              </>
+            ) : (
+              <span style={{ background: '#FEF3C7', color: '#92400E', borderRadius: 9999, padding: '3px 10px' }}>
+                {missingKeyForMaDe ? `Chưa có đáp án Mã đề ${maDeValue ?? '?'}` : 'Chưa có đáp án'}
+              </span>
+            )}
+            {corrected && <span style={{ background: 'rgba(255,255,255,0.18)', borderRadius: 9999, padding: '3px 10px' }}>Đã sửa tay</span>}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', borderBottom: '1px solid #F3F4F6', flexShrink: 0 }}>
+          {tabBtn('image', 'Ảnh')}
+          {tabBtn('answers', 'Đáp án', warnList.length || undefined)}
+          {tabBtn('info', 'Thông tin')}
+        </div>
+
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+          {phoneTab === 'image' && (
+            <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', background: '#F3F4F6', borderRadius: 10, padding: 3, alignSelf: 'center' }}>
+                {([['graded', 'Ảnh chấm'], ['original', 'Ảnh gốc']] as const).map(([k, label]) => (
+                  <button key={k} type="button" onClick={() => setImgKind(k)} style={{
+                    border: 'none', borderRadius: 8, padding: '6px 16px', fontSize: 13, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer',
+                    background: imgKind === k ? '#fff' : 'transparent', color: imgKind === k ? '#C8102E' : '#6B7280',
+                    boxShadow: imgKind === k ? '0 1px 3px rgba(0,0,0,0.12)' : 'none',
+                  }}>{label}</button>
+                ))}
+              </div>
+              {imgUrl ? (
+                <div
+                  style={{ position: 'relative' }}
+                  onTouchStart={e => { swipe.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }}
+                  onTouchEnd={e => {
+                    const st = swipe.current; swipe.current = null;
+                    if (!st) return;
+                    const dx = e.changedTouches[0].clientX - st.x, dy = e.changedTouches[0].clientY - st.y;
+                    if (Math.abs(dx) > 70 && Math.abs(dy) < 50) go(dx < 0 ? nav?.onNext : nav?.onPrev);
+                  }}
+                >
+                  <img src={imgUrl} alt="Ảnh bài chấm" onClick={() => setZoomOpen(true)}
+                    style={{ width: '100%', display: 'block', borderRadius: 10, border: '1px solid #E5E7EB', background: '#F9FAFB' }} />
+                  <button type="button" onClick={() => setZoomOpen(true)} style={{
+                    position: 'absolute', right: 8, bottom: 8, border: 'none', borderRadius: 9999, padding: '6px 12px',
+                    background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 12, fontWeight: 700, fontFamily: 'inherit',
+                    display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+                  }}>
+                    <Maximize2 size={13} /> Phóng to
+                  </button>
+                </div>
+              ) : (
+                <div style={{ padding: '40px 0', textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>Bài này không có ảnh</div>
+              )}
+              {nav && nav.total > 1 && <div style={{ textAlign: 'center', fontSize: 11.5, color: '#9CA3AF' }}>Vuốt ngang trên ảnh để chuyển bài</div>}
+            </div>
+          )}
+
+          {phoneTab === 'answers' && (
+            <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {partialKeyNote}
+              {canEdit && <div style={{ fontSize: 12, color: '#6B7280' }}>Chạm vào ô câu để sửa đáp án, xong bấm <b>Lưu sửa</b> ở dưới.</div>}
+              {answersBlock}
+              {warningsBlock}
+              {canEdit && onResetCorrection && corrected && (
+                <button type="button" onClick={handleResetEdit} style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 6, background: '#fff', color: '#6B7280', border: '1.5px solid #E5E7EB', borderRadius: 8, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  <RotateCcw size={13} /> Reset về kết quả gốc
+                </button>
+              )}
+            </div>
+          )}
+
+          {phoneTab === 'info' && (
+            <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {canEdit ? infoEditBlock : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                  {schema.infoFields.map(f => (
+                    <div key={f.key}>
+                      <div style={{ fontSize: 11, color: '#6B7280', fontWeight: 600 }}>{f.displayName}</div>
+                      <div style={{ fontFamily: 'monospace', fontWeight: 700 }}>{getInfoFieldValue(student_info, r.info_field_columns, f) || student_info?.[f.key] || '—'}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {(r.signatures ?? []).length > 0 && (
+                <div style={{ background: '#C8102E', borderRadius: 10, padding: '2px 10px 8px' }}>{signaturesBlock}</div>
+              )}
+              <div style={{ fontSize: 11.5, color: '#9CA3AF', wordBreak: 'break-all' }}>Tệp: {r.input?.filename ?? '—'}</div>
+            </div>
+          )}
+        </div>
+
+        {/* bottom: save edits, or move between bài */}
+        <div style={{ flexShrink: 0, borderTop: '1px solid #F3F4F6', padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 8, background: '#fff' }}>
+          {navNote && hasUnsavedChanges && <div style={{ fontSize: 12, color: '#B45309', textAlign: 'center' }}>{navNote}</div>}
+          {canEdit && hasUnsavedChanges ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="button" onClick={() => { seedEditsFromCurrent(); setNavNote(null); }} style={navBtn}>Hủy sửa</button>
+              <button type="button" onClick={() => { handleSaveEdit(); setNavNote(null); }} style={{ ...navBtn, background: '#C8102E', borderColor: '#C8102E', color: '#fff' }}>
+                <Save size={15} /> Lưu sửa
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="button" disabled={!nav?.onPrev} onClick={() => go(nav?.onPrev)} style={{ ...navBtn, opacity: nav?.onPrev ? 1 : 0.4 }}>
+                <ChevronLeft size={17} /> Bài trước
+              </button>
+              {gradedImageUrl(r) && (
+                <button type="button" disabled={imgSaving} aria-label="Tải ảnh"
+                  onClick={() => { setImgSaving(true); saveGradedImages([r]).catch(e => window.alert((e as Error).message)).finally(() => setImgSaving(false)); }}
+                  style={{ ...navBtn, flex: '0 0 auto', padding: '10px 14px', opacity: imgSaving ? 0.6 : 1 }}>
+                  <Download size={16} />
+                </button>
+              )}
+              <button type="button" disabled={!nav?.onNext} onClick={() => go(nav?.onNext)} style={{ ...navBtn, opacity: nav?.onNext ? 1 : 0.4 }}>
+                Bài sau <ChevronRight size={17} />
+              </button>
+            </div>
+          )}
+        </div>
+
+        {zoomOpen && imgUrl && <ZoomableImage src={imgUrl} alt="Ảnh bài chấm" onClose={() => setZoomOpen(false)} />}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="result-detail-overlay"
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 2000, padding: '16px',
+      }}
+      onClick={e => e.target === e.currentTarget && onClose()}
+    >
+      <div
+        className="result-detail-modal"
+        style={{
+          background: '#fff', borderRadius: 16,
+          width: '95vw', height: '92vh',
+          maxWidth: 1600,
+          boxShadow: '0 32px 100px rgba(0,0,0,0.3)',
+          overflow: 'hidden',
+          display: 'flex', flexDirection: 'column',
+        }}
+      >
+
+        {/* ── Red header ── */}
+        <div style={{ background: '#C8102E', padding: '14px 20px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                <span style={{ fontWeight: 700, color: '#fff', fontSize: 15 }}>{r.input?.filename ?? '—'}</span>
+                {hasWarning && (
+                  <span style={{ background: '#FCD34D', color: '#78350F', fontSize: 10, fontWeight: 700, borderRadius: 9999, padding: '2px 8px', display: 'flex', alignItems: 'center', gap: 3 }}>
+                    <AlertTriangle size={10} /> {warnList.length} cảnh báo
+                  </span>
+                )}
+                {corrected && (
+                  <span style={{ background: '#D1FAE5', color: '#065F46', fontSize: 10, fontWeight: 700, borderRadius: 9999, padding: '2px 8px', display: 'flex', alignItems: 'center', gap: 3 }}>
+                    <CheckCircle2 size={10} /> Đã sửa tay
+                  </span>
+                )}
+                {r._error && (
+                  <span style={{ background: '#FEE2E2', color: '#991B1B', fontSize: 10, fontWeight: 700, borderRadius: 9999, padding: '2px 8px' }}>Lỗi API</span>
+                )}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 18px' }}>
+                {schema.infoFields.map(field => {
+                  // Once a field has been manually corrected, the per-column digit
+                  // breakdown below (yellow-highlighted ambiguous digits etc.) still
+                  // reflects the ORIGINAL OMR read — corrections only patch the flat
+                  // string, not that column-by-column data. Showing the raw breakdown
+                  // here would silently ignore the correction and display stale data,
+                  // so once corrected we just show the plain corrected string instead.
+                  const isFieldCorrected = correction?.corrected_student_info?.[field.key] !== undefined;
+                  return (
+                    <div key={field.key} style={{ fontSize: 12 }}>
+                      <span style={{ color: 'rgba(255,255,255,0.6)' }}>{field.displayName}: </span>
+                      <InfoFieldValue
+                        label={field.displayName}
+                        raw={getInfoFieldValue(student_info, r.info_field_columns, field) || student_info?.[field.key] || null}
+                        columns={isFieldCorrected ? undefined : r.info_field_columns?.[field.key]}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              {/* "ở góc trên bên trái: có 2 chữ kí, cần xác định được điều
+                 này ở mỗi bài với OMR" — mean-pixel ink check in the 4
+                 CÁN BỘ COI THI/CHẤM THI boxes. null/undefined = not
+                 checked (custom template), not "all missing".
+                 2026-07-31: "thế thì cần tick làm gì? nếu ko tick thì ko
+                 phát hiện chứ nhỉ" — a missing box only gets the alarming
+                 "✗ chưa ký" treatment if "Có cán bộ coi thi/chấm thi" is
+                 ticked for this row's mã đề on Answer Key; an unticked role
+                 isn't expected here at all, so its empty box isn't shown as
+                 a problem. Present (✓) boxes still show regardless — that's
+                 just good news, never confusing. */}
+              {signaturesBlock}
+            </div>
+            {/* 2026-10-06: "t ko thấy nút tải về ảnh ở đâu" — the graded picture of this bài */}
+            {gradedImageUrl(r) && (
+              <button
+                onClick={() => {
+                  setImgSaving(true);
+                  saveGradedImages([r]).catch(e => window.alert((e as Error).message)).finally(() => setImgSaving(false));
+                }}
+                disabled={imgSaving}
+                title="Tải ảnh bài đã chấm"
+                style={{ border: 'none', background: 'rgba(255,255,255,0.15)', borderRadius: 8, cursor: 'pointer', color: '#fff', padding: '7px 10px', display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, fontSize: 12, fontWeight: 700, fontFamily: 'inherit', opacity: imgSaving ? 0.6 : 1 }}
+              >
+                <Download size={16} /> {imgSaving ? 'Đang tải…' : 'Tải ảnh'}
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              style={{ border: 'none', background: 'rgba(255,255,255,0.15)', borderRadius: 8, cursor: 'pointer', color: '#fff', padding: 7, display: 'flex', flexShrink: 0 }}
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* ── Sticky action bar — 2026-07-31: always visible when this row is
+           editable (no more separate "edit mode" to enter first). Every cell
+           below is directly clickable; this bar is just where you commit
+           ("Lưu sửa") or discard ("Hủy") whatever you've changed. ── */}
+        {canEdit && (
+          <div className="result-detail-actionbar" style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', background: '#FFF9F9', borderBottom: '1px solid #FECACA' }}>
+            <span className="result-detail-actionbar-hint" style={{ fontSize: 12, fontWeight: 700, color: '#C8102E', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Pencil size={13} /> Bấm trực tiếp vào ô câu nào cần sửa — nhớ bấm "Lưu sửa" sau khi xong
+            </span>
+            <div className="result-detail-actionbar-spacer" style={{ flex: 1 }} />
+            <button onClick={handleSaveEdit} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#C8102E', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+              <Save size={13} /> Lưu sửa
+            </button>
+            {onResetCorrection && (
+              <button onClick={handleResetEdit} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#fff', color: '#6B7280', border: '1.5px solid #E5E7EB', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                <RotateCcw size={13} /> Reset về kết quả gốc
+              </button>
+            )}
+            <button
+              onClick={seedEditsFromCurrent}
+              disabled={!hasUnsavedChanges}
+              title={hasUnsavedChanges ? 'Bỏ các thay đổi chưa lưu (chưa bấm "Lưu sửa"), quay về đáp án đang lưu' : 'Chưa có thay đổi nào để huỷ'}
+              style={{
+                background: '#fff',
+                color: hasUnsavedChanges ? '#6B7280' : '#D1D5DB',
+                border: `1.5px solid ${hasUnsavedChanges ? '#E5E7EB' : '#F3F4F6'}`,
+                borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600,
+                cursor: hasUnsavedChanges ? 'pointer' : 'not-allowed',
+                fontFamily: 'inherit',
+              }}
+            >
+              Hủy sửa
+            </button>
+          </div>
+        )}
+
+        {/* ── Body: 38 / 62 split (stacks to 1 column on mobile — see
+           .result-detail-body in globals.css) ── */}
+        <div className="result-detail-body" style={{ flex: 1, display: 'grid', gridTemplateColumns: '38% 62%', minHeight: 0 }}>
+
+          {/* ── Left panel: score + answers + debug ── */}
+          <div className="result-detail-left" style={{ borderRight: '1px solid #F3F4F6', overflowY: 'auto', padding: '18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+            {/* Score cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+              {sc ? [
+                { label: 'Đúng',  val: sc.correct, color: '#065F46', bg: '#D1FAE5' },
+                { label: 'Sai',   val: sc.wrong,   color: '#991B1B', bg: '#FEE2E2' },
+                { label: 'Trống', val: sc.blank,   color: '#92400E', bg: '#FEF9C3' },
+              ].map(s => (
+                <div key={s.label} style={{ background: s.bg, borderRadius: 10, padding: '10px 8px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 10, color: s.color, fontWeight: 700, marginBottom: 2 }}>{s.label}</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.val}</div>
+                </div>
+              )) : (
+                <div style={{ gridColumn: '1/-1', fontSize: 12, color: missingKeyForMaDe ? '#CA8A04' : '#9CA3AF', textAlign: 'center', padding: '10px 0' }}>
+                  {missingKeyForMaDe
+                    ? `Chưa nhập đáp án cho Mã đề ${maDeValue ?? '?'} ở trang Answer Key`
+                    : 'Chưa có Answer Key'}
+                </div>
+              )}
+            </div>
+
+            {partialKeyNote}
+
+            {sc && (
+              <div style={{ background: '#F9FAFB', borderRadius: 10, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 13, color: '#374151', fontWeight: 600 }}>Điểm</span>
+                <span style={{ fontSize: 24, fontWeight: 800, color: '#C8102E' }}>{sc.total}</span>
+              </div>
+            )}
+
+            {infoEditBlock}
+
+            {answersBlock}
+
+            {warningsBlock}
 
           </div>
 

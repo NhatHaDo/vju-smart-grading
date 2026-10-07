@@ -1658,8 +1658,17 @@ export default function ResultsPage() {
 
       {confirmDialog}
 
-      {modalRow && (
+      {modalRow && (() => {
+        // ‹ Bài trước / Bài sau › on a phone: the bài in the order the list shows
+        const i = searchedRows.findIndex(x => rowKey(x.r) === rowKey(modalRow));
+        return (
         <ResultDetailModal
+          key={rowKey(modalRow)}
+          nav={i >= 0 ? {
+            index: i, total: searchedRows.length,
+            onPrev: i > 0 ? () => setModalRow(searchedRows[i - 1].r) : undefined,
+            onNext: i < searchedRows.length - 1 ? () => setModalRow(searchedRows[i + 1].r) : undefined,
+          } : undefined}
           r={modalRow}
           correction={corrections[correctionKey(batch?.gradedAt, modalRow.input?.filename ?? '')]}
           answerKey={answerKey}
@@ -1668,7 +1677,8 @@ export default function ResultsPage() {
           onSaveCorrection={handleSaveCorrection}
           onResetCorrection={handleResetCorrection}
         />
-      )}
+        );
+      })()}
 
       {showExcelPreview && batch && (
         <ExcelPreviewModal

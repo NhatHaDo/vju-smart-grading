@@ -439,3 +439,11 @@ body {
   }
   .auth-page .auth-art { display: none !important; }
 }
+
+/* 2026-10-07 "2 cái thẻ này nó dài dài là phải kéo à ?": a grid column
+   grows to its widest content (a long kỳ thi name), so the Dashboard cards
+   ran past the phone screen. Columns may shrink; long names are cut (…). */
+.dash-bottom-grid > * { min-width: 0; }
+@media (max-width: 768px) {
+  .dash-bottom-grid { grid-template-columns: minmax(0, 1fr) !important; }
+}

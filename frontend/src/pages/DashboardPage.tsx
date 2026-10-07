@@ -8,7 +8,7 @@
  * No mock data. Mock arrays that were here previously caused the
  * "18/90" progress and "-0.08" average bugs.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { ClipboardList, ScanLine, AlertTriangle, TrendingUp, Calendar, Database, WifiOff, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { StatCard } from '../components/common/Card';
@@ -16,7 +16,11 @@ import Card from '../components/common/Card';
 import PageHeader from '../components/layout/PageHeader';
 import Button from '../components/common/Button';
 import Badge from '../components/common/Badge';
-import { examsApi, resultsApi, type BatchResultOut } from '../services/apiClient';
+import { examsApi, resultsApi, customFormsApi, type BatchResultOut } from '../services/apiClient';
+import { loadAnswerKey, type OmrGradeResult, type TemplateSchema } from '../types/grading';
+import { dbRowToOmrResult } from '../utils/resultMapping';
+import { buildSchemaFromDetail, buildTemplateOptionsFromRows, getRowTemplateKey } from '../utils/templateSchema';
+import { scoreRows } from '../utils/analyticsLive';
 import type { ExamOut } from '../types/exam';
 import { useAuth } from '../app/providers';
 
@@ -171,6 +175,36 @@ export default function DashboardPage() {
 
   useEffect(() => { load(); }, []);
 
+  // 2026-10-07 "Điểm TB 0.00": the saved total_score of a phiếu isn't its
+  // điểm (it was 0 for phiếu saved before their đáp án could be matched).
+  // Score every phiếu like Kết quả / Thống kê do: its own mẫu phiếu, the đáp
+  // án of its own mã đề, thang 10.
+  const [schemas, setSchemas] = useState<Map<number, TemplateSchema>>(new Map());
+  const omrRows = useMemo(
+    () => results.map(it => ({ r: dbRowToOmrResult(it), examId: it.exam_id ?? null })),
+    [results],
+  );
+  useEffect(() => {
+    const ids = [...new Set(omrRows.map(x => x.r)
+      .filter(r => r.template_type === 'custom' && r.template_id != null)
+      .map(r => r.template_id as number))].filter(id => !schemas.has(id));
+    if (!ids.length) return;
+    Promise.all(ids.map(id => customFormsApi.get(id).then(d => [id, buildSchemaFromDetail(d)] as const).catch(() => null)))
+      .then(got => setSchemas(prev => {
+        const next = new Map(prev);
+        for (const g of got) if (g) next.set(g[0], g[1]);
+        return next;
+      }));
+  }, [omrRows]); // eslint-disable-line react-hooks/exhaustive-deps
+  const scoreById = useMemo(() => {
+    const opts = buildTemplateOptionsFromRows(omrRows.map(x => x.r), null, schemas);
+    const schemaOf = (r: OmrGradeResult): TemplateSchema =>
+      opts.find(o => o.key === getRowTemplateKey(r, null))?.templateSchema ?? { infoFields: [], answerSections: [] };
+    const m = new Map<number, number | null>();
+    for (const x of scoreRows(omrRows, loadAnswerKey(), schemaOf)) if (x.r.db_id != null) m.set(x.r.db_id, x.score);
+    return m;
+  }, [omrRows, schemas]);
+
   // ── Derived stats ─────────────────────────────────────────────────────────
 
   const totalExams  = exams.length;
@@ -181,8 +215,8 @@ export default function DashboardPage() {
 
   // Average score: only valid scores >= 0
   const validScores = results
-    .map(r => Number(r.total_score))
-    .filter(s => Number.isFinite(s) && s >= 0);
+    .map(r => scoreById.get(r.id))
+    .filter((s): s is number => s != null && Number.isFinite(s));
   const avgScore = validScores.length
     ? validScores.reduce((a, b) => a + b, 0) / validScores.length
     : null;
@@ -205,8 +239,8 @@ export default function DashboardPage() {
   // Subject average: group results by their exam's subject
   const subjectMap = new Map<string, number[]>();
   for (const r of results) {
-    const score = Number(r.total_score);
-    if (!Number.isFinite(score) || score < 0) continue;
+    const score = scoreById.get(r.id);
+    if (score == null || !Number.isFinite(score)) continue;
     const exam = examById.get(r.exam_id ?? -1);
     const subject = exam?.subject?.trim() || null;
     if (!subject) continue;
@@ -352,7 +386,7 @@ export default function DashboardPage() {
         )}
 
         {/* ── Bottom row: bar chart + donut ────────────────────────────────── */}
-        <div className="dash-bottom-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div className="dash-bottom-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
 
           {/* Bar chart: progress per exam */}
           <Card>
@@ -367,7 +401,7 @@ export default function DashboardPage() {
                 Chưa có kỳ thi
               </div>
             ) : (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', height: 80, marginBottom: 12 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', minHeight: 80, marginBottom: 12 }}>
                 {recentExams.map(({ exam, graded }, i) => {
                   const sc  = getExamStudentCount(exam);
                   // 2026-08-04: chấm bù/chấm lại có thể khiến graded > sĩ số
@@ -380,12 +414,16 @@ export default function DashboardPage() {
                   const pct = Math.min(1, pctRaw);
                   const h = Math.max(8, pct * 80);
                   return (
-                    <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                    <div key={i} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                      {/* the number itself — a 0-phiếu kỳ thi used to be just a pale stripe */}
+                      <span style={{ fontSize: 11, fontWeight: 700, color: graded > 0 ? '#C8102E' : '#9CA3AF' }}>
+                        {graded}{sc !== null && sc > 0 ? `/${sc}` : ''}
+                      </span>
                       <div
                         style={{ width: '100%', borderRadius: 4, background: graded > 0 ? '#C8102E' : '#FEECEC', height: h }}
                         title={`${exam.name}: ${graded}/${sc ?? '?'} phiếu`}
                       />
-                      <span style={{ fontSize: 9, color: '#9CA3AF', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
+                      <span title={exam.name} style={{ fontSize: 9, color: '#9CA3AF', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
                         {exam.name}
                       </span>
                     </div>
