@@ -56,7 +56,11 @@ import {
   type BatchGradeState,
   type AnswerKeyStore,
   type LastUsedTemplate,
+  type SavedAnswerKeyEntry,
+  loadAnswerKeyLibrary,
+  upsertAutoLibraryEntry,
 } from '../types/grading';
+import { serverDate } from '../utils/serverDate';
 
 // Đường dẫn TƯƠNG ĐỐI, không phải VITE_API_BASE tuyệt đối — giống lý do đã
 // ghi trong CameraCaptureModal.tsx: test qua cloudflared trên điện thoại thì
@@ -280,8 +284,26 @@ function SheetCards({ options, tpl, variant, onPick, disabled }: {
   );
 }
 
+/** "21:30 06/10" — when an answer key was saved. */
+function fmtSaved(iso: string): string {
+  const d = serverDate(iso);
+  if (isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())} ${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
+}
+
+/** "Toán 12 – Giữa kỳ · mã đề 101, 102 · lưu 21:30 06/10" */
+function libraryLabel(e: SavedAnswerKeyEntry): string {
+  const codes = e.store.byMaDe ? Object.keys(e.store.byMaDe).sort() : [];
+  const what = codes.length
+    ? `mã đề ${codes.join(', ')}`
+    : `${Object.values(e.store.answers ?? {}).filter(Boolean).length} câu`;
+  return `${e.name} · ${what} · lưu ${fmtSaved(e.savedAt)}`;
+}
+
 function SetupScreen({
   store, tpl, variant, sheets, onPickSheet, onEditAnswers, onImportFiles, importNote, importing, onStart, exams, examId, onSelectExam, examInfo,
+  library, libraryId, onPickLibrary,
 }: {
   store: AnswerKeyStore | null;
   tpl: LastUsedTemplate | null;
@@ -299,6 +321,11 @@ function SetupScreen({
   onSelectExam: (id: number | null) => void;
   /** Set when the chosen kỳ thi has bộ đề trộn attached (null = none / loading). */
   examInfo: { loading: boolean; papers: string[]; versions: string[]; sheetName?: string } | null;
+  /** The Thư viện đáp án entries saved for the chosen sheet, newest first. */
+  library: SavedAnswerKeyEntry[];
+  /** The entry picked here ('' = the sheet's answer key in use). */
+  libraryId: string;
+  onPickLibrary: (id: string) => void;
 }) {
   const mode = tpl?.mode ?? 'vju';
   const hasAnswers = !!store && (
@@ -306,7 +333,8 @@ function SetupScreen({
   );
   const firstSet = store?.byMaDe ? Object.values(store.byMaDe)[0]?.answers : undefined;
   const questionCount = Object.keys(firstSet ?? store?.answers ?? {}).length;
-  const maDeCount = store?.byMaDe ? Object.keys(store.byMaDe).length : 0;
+  const maDeCodes = store?.byMaDe ? Object.keys(store.byMaDe).sort() : [];
+  const maDeCount = maDeCodes.length;
   const templateLabel = mode === 'custom'
     ? (tpl?.name ?? 'Custom template')
     : TEMPLATE_VARIANT_LABEL[variant];
@@ -357,6 +385,22 @@ function SetupScreen({
           )}
         </div>
 
+        {/* 2026-10-07 "sao ở chấm nhanh ko chọn bộ đáp án thư viện đáp án
+            (theo cái mẫu phiếu)": any answer key saved in the Thư viện đáp án
+            for this sheet can be picked right here (it becomes the sheet's
+            answer key, as "Nạp" on the Answer Key page does). */}
+        {!fromPapers && library.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+            <span style={{ fontSize: 12, color: '#6B7280', fontWeight: 600 }}>Bộ đáp án (Thư viện đáp án của mẫu phiếu này)</span>
+            <select value={libraryId} onChange={e => onPickLibrary(e.target.value)}
+              style={{ width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8,
+                border: '1.5px solid #D1D5DB', fontSize: 14, fontFamily: 'inherit', background: '#fff' }}>
+              <option value="">Đáp án đang dùng{store?.updatedAt ? ` (lưu ${fmtSaved(store.updatedAt)})` : ''}</option>
+              {library.map(e => <option key={e.id} value={e.id}>{libraryLabel(e)}</option>)}
+            </select>
+          </div>
+        )}
+
         {!hasAnswers ? (
           <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 10, padding: '12px 14px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <AlertTriangle size={16} color="#C2410C" style={{ flexShrink: 0 }} />
@@ -372,7 +416,8 @@ function SetupScreen({
           <div style={{ background: '#F9FAFB', border: '1px solid #EEF0F2', borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <div style={{ flex: '1 1 200px', fontSize: 13, color: '#374151' }}>
               <strong>{templateLabel}</strong> — {questionCount} câu đã có đáp án
-              {maDeCount > 0 && <> · {maDeCount} mã đề</>}
+              {maDeCount > 0 && <> · mã đề {maDeCodes.join(', ')}</>}
+              {store?.updatedAt && !fromPapers && <span style={{ color: '#9CA3AF' }}> · lưu {fmtSaved(store.updatedAt)}</span>}
             </div>
             {!fromPapers && (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -444,6 +489,16 @@ export default function QuickGradePage() {
 
   const [customSheets, setCustomSheets] = useState<SheetOption[]>([]);
 
+  // Thư viện đáp án (Answer Key page) — the entries for the chosen sheet
+  const [library, setLibrary] = useState<SavedAnswerKeyEntry[]>(() => loadAnswerKeyLibrary());
+  const [libraryId, setLibraryId] = useState('');
+  const tplKey = tpl ? templateStoreKeyFor(tpl.mode, tpl.id) : null;
+  const sheetLibrary = useMemo(
+    () => library.filter(e => e.templateKey === tplKey),
+    [library, tplKey],
+  );
+  useEffect(() => { setLibraryId(''); setLibrary(loadAnswerKeyLibrary()); }, [tplKey, examId]);
+
   useEffect(() => {
     const last = loadLastUsedTemplate();
     setStore(last ? savedKeyFor(last) : loadAnswerKey());
@@ -487,7 +542,10 @@ export default function QuickGradePage() {
   tplRef.current = tpl;
   useEffect(() => {
     if (examId != null) return;
-    const onFocus = () => { if (tplRef.current) setStore(savedKeyFor(tplRef.current)); };
+    const onFocus = () => {
+      setLibrary(loadAnswerKeyLibrary());
+      if (tplRef.current) setStore(savedKeyFor(tplRef.current));
+    };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [examId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -575,6 +633,8 @@ export default function QuickGradePage() {
       saveLastUsedTemplate(t);
       saveAnswerKey(next, templateStoreKeyFor(t.mode, t.id));
       saveAnswerKeyDraft(templateStoreKeyFor(t.mode, t.id), next);
+      keepInLibrary(t, next);
+      setLibraryId('');
       setStore(next);
       setImportNote({
         ok: `Đã nạp ${done.join(', ')}` + (replaced.length ? ` (đề ${replaced.join(', ')} thay bằng file mới)` : ''),
@@ -583,6 +643,35 @@ export default function QuickGradePage() {
     } finally {
       setImporting(false);
     }
+  };
+
+  /** Keep a library copy of the sheet's answer key in use, like "Lưu Answer
+   *  Key" does — so it can be picked again after another one replaced it. */
+  const keepInLibrary = (t: LastUsedTemplate, s: AnswerKeyStore) => {
+    const key = templateStoreKeyFor(t.mode, t.id);
+    const label = t.mode === 'custom' ? (t.name ?? 'Mẫu phiếu') : TEMPLATE_VARIANT_LABEL[variant];
+    const has = Object.values(s.answers ?? {}).some(Boolean)
+      || Object.values(s.byMaDe ?? {}).some(set => Object.values(set.answers).some(Boolean));
+    if (has) setLibrary(upsertAutoLibraryEntry(`none|${key}`, { name: label, templateKey: key, templateLabel: label, store: s }));
+  };
+
+  /** A Thư viện đáp án entry picked: it becomes the sheet's answer key. */
+  const pickLibrary = (id: string) => {
+    if (!tpl) return;
+    const key = templateStoreKeyFor(tpl.mode, tpl.id);
+    if (!id) { setLibraryId(''); setStore(savedKeyFor(tpl)); return; }
+    const entry = sheetLibrary.find(e => e.id === id);
+    if (!entry) return;
+    // the one in use until now stays in the library
+    if (!libraryId && store) keepInLibrary(tpl, store);
+    // keeps the time it was saved, so the summary matches the list
+    const next: AnswerKeyStore = { ...entry.store, updatedAt: entry.savedAt };
+    saveLastUsedTemplate(tpl);
+    saveAnswerKey(next, key);
+    saveAnswerKeyDraft(key, next);
+    setStore(next);
+    setLibraryId(id);
+    setImportNote(null);
   };
 
   /** Answer Key opens on the chosen sheet (it starts on the last used one). */
@@ -644,6 +733,9 @@ export default function QuickGradePage() {
           examId={examId}
           onSelectExam={selectExam}
           examInfo={examInfo}
+          library={sheetLibrary}
+          libraryId={libraryId}
+          onPickLibrary={pickLibrary}
         />
       </>
     );
