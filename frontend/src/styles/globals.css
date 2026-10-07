@@ -447,3 +447,28 @@ body {
 @media (max-width: 768px) {
   .dash-bottom-grid { grid-template-columns: minmax(0, 1fr) !important; }
 }
+
+/* 2026-10-07 "mấy thẻ này nó đang ko cân đối … cái danh sách để nnay lại
+   phải kéo ?" (Kỳ thi page): on a phone the page and the form card get
+   smaller margins, the three step names wrap under their circle instead of
+   running into each other, and the kỳ thi list is shown as cards (one per
+   kỳ thi) in place of the wide table. */
+.exam-cards { display: none; }
+@media (max-width: 768px) {
+  .exam-page-body { padding: 16px 12px !important; }
+  /* margin: 0 auto in a column flexbox shrinks the card to its content —
+     narrower than the list below it; on a phone it takes the full width */
+  .exam-wiz-card { width: 100%; box-sizing: border-box; padding: 20px 16px 18px !important; }
+  .exam-list-card { padding: 16px 14px !important; }
+  .exam-stepper { margin-bottom: 20px !important; }
+  .exam-step-label {
+    white-space: normal !important;
+    width: 76px;
+    line-height: 1.25;
+  }
+  .exam-list-head { flex-wrap: wrap; }
+  .exam-list-search { flex: 1 1 100%; }
+  .exam-list-search input { width: 100% !important; box-sizing: border-box; }
+  .exam-table { display: none; }
+  .exam-cards { display: flex; flex-direction: column; gap: 10px; }
+}

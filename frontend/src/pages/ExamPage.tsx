@@ -150,6 +150,8 @@ export default function ExamPage() {
     setAnimDir('right');
     setAnimKey(k => k + 1);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    // the page scrolls inside the app shell, not the window: bring the form up
+    document.querySelector('.exam-wiz-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   // ── Validation ──
@@ -269,7 +271,7 @@ export default function ExamPage() {
         subtitle="Quản lý kỳ thi, môn học, lớp và thông tin giảng viên"
       />
 
-      <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div className="exam-page-body" style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 20 }}>
 
         {/* ── Auth error banner ────────────────────────────────────────────── */}
         {authErr && (
@@ -287,10 +289,10 @@ export default function ExamPage() {
         )}
 
         {/* ── Wizard card ─────────────────────────────────────────────────── */}
-        <div style={W.card}>
+        <div className="exam-wiz-card" style={W.card}>
 
           {/* Stepper */}
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'center', marginBottom: 28 }}>
+          <div className="exam-stepper" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'center', marginBottom: 28 }}>
             {STEP_LABELS.map((label, i) => {
               const done   = i < step;
               const active = i === step;
@@ -316,7 +318,7 @@ export default function ExamPage() {
                     }}>
                       {done ? '✓' : i + 1}
                     </div>
-                    <span style={{ fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', color: (active || done) ? '#C8102E' : '#9CA3AF' }}>
+                    <span className="exam-step-label" style={{ fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', textAlign: 'center', color: (active || done) ? '#C8102E' : '#9CA3AF' }}>
                       {label}
                     </span>
                   </div>
@@ -487,10 +489,10 @@ export default function ExamPage() {
         </div>
 
         {/* ── Exam list ────────────────────────────────────────────────────── */}
-        <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14, padding: 20 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 12 }}>
+        <div className="exam-list-card" style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14, padding: 20 }}>
+          <div className="exam-list-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 12 }}>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#1E1E1E' }}>Danh sách kỳ thi</h3>
-            <div style={{ position: 'relative' }}>
+            <div className="exam-list-search" style={{ position: 'relative' }}>
               <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF', pointerEvents: 'none' }} />
               <input
                 value={search}
@@ -514,7 +516,8 @@ export default function ExamPage() {
               {exams.length === 0 ? 'Chưa có kỳ thi nào. Hãy tạo kỳ thi đầu tiên ở trên.' : 'Không tìm thấy kỳ thi phù hợp.'}
             </div>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
+            <>
+            <div className="exam-table" style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: '#C8102E' }}>
@@ -572,6 +575,53 @@ export default function ExamPage() {
                 </tbody>
               </table>
             </div>
+
+            {/* 2026-10-07 "cái danh sách để nnay lại phải kéo ?": on a phone each
+                kỳ thi is a card with everything the table row has, so nothing
+                has to be scrolled sideways. The table stays on a computer. */}
+            <div className="exam-cards">
+              {filtered.map(exam => {
+                const when = [exam.exam_date ? fmtExamDate(exam.exam_date) : '', exam.exam_time ?? '', exam.room ?? '']
+                  .filter(Boolean).join(' · ');
+                return (
+                  <div key={exam.id} style={{ border: '1px solid #EEE', borderRadius: 12, padding: '12px 14px', background: '#fff' }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#1E1E1E', lineHeight: 1.35 }}>{exam.name}</div>
+                    <div style={{ fontSize: 13, color: '#374151', marginTop: 4 }}>
+                      {exam.subject || '—'}{exam.exam_code ? <span style={{ color: '#9CA3AF' }}> · {exam.exam_code}</span> : null}
+                    </div>
+                    <div style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>
+                      {exam.semester ? semesterLabel(exam.semester) : '—'}{exam.academic_year ? ` · ${exam.academic_year}` : ''}
+                    </div>
+                    <div style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>
+                      GV: {lecturerDisplay(exam) || '—'}{when ? <span style={{ color: '#9CA3AF' }}> · {when}</span> : null}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: '#374151', background: '#F3F4F6', borderRadius: 9999, padding: '3px 10px' }}>
+                        {exam.total_students} SV · {exam.graded_count} phiếu
+                      </span>
+                      <span style={{ fontSize: 11, color: '#9CA3AF' }}>Tạo {serverDate(exam.created_at).toLocaleDateString('vi-VN')}</span>
+                      <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                        <button
+                          title="Sửa"
+                          onClick={() => startEdit(exam)}
+                          style={{ border: '1.5px solid #E5E7EB', borderRadius: 9999, padding: '6px 14px', background: '#fff', color: '#374151', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}
+                        >
+                          <Pencil size={12} /> Sửa
+                        </button>
+                        <button
+                          title="Xoá"
+                          onClick={() => void handleDelete(exam)}
+                          style={{ border: '1.5px solid #FECACA', borderRadius: 9999, padding: '6px 14px', background: '#fff', color: '#C8102E', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}
+                        >
+                          <Trash2 size={12} /> Xoá
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            </>
           )}
         </div>
       </div>
