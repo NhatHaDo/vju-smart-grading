@@ -384,18 +384,19 @@ class ExamPaperService:
         self.db.commit()
 
     # ── For grading (step 6.2) ────────────────────────────────────────────
-    def exam_answer_key(self, exam_id: int, sheet: object = None) -> dict:
+    def exam_answer_key(self, exam_id: int, sheet: object = None, shared: bool = False) -> dict:
         """Answer key of every mã đề attached to this kỳ thi, in the grading
         labels of the answer sheet each bộ đề was mixed for:
         {"byMaDe": {code: {label: value}}, "papers": [names], "versions": [codes],
         "sheets": [template ids], "sheetNames": {id: name}}. sheet = only the bộ đề mixed for that sheet
         (a Mẫu 40 bộ đề must not lock the đáp án of a Phiếu Bộ GD đợt chấm, and
-        back). Empty byMaDe = nothing attached."""
+        back). Empty byMaDe = nothing attached. shared = read through a signed
+        mã QR đáp án (answer_qr.py): the kỳ thi owner's bộ đề, for any teacher."""
         exam = self.db.get(Exam, exam_id)
         if not exam:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy kỳ thi")
         papers = self.db.query(ExamPaper).filter(ExamPaper.exam_id == exam_id).order_by(ExamPaper.id).all()
-        papers = [p for p in papers if self._mine(p.owner_id)]
+        papers = [p for p in papers if (p.owner_id == exam.owner_id if shared else self._mine(p.owner_id))]
         want = None
         if sheet is not None:
             asked = get_layout(self.db, sheet)

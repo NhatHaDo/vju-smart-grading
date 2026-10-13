@@ -13,11 +13,12 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { ChevronDown, ChevronRight, Dices, Download, FileText, FileUp, Plus, Shuffle, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Dices, Download, FileText, FileUp, Plus, QrCode, Shuffle, Trash2, X } from 'lucide-react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import Modal from '../components/modals/Modal';
 import PageHeader from '../components/layout/PageHeader';
+import AnswerQrModal from '../components/common/AnswerQrModal';
 import { ApiError, examPapersApi, examsApi, questionBankApi } from '../services/apiClient';
 import type { AnswerSheetSpec, ExamPaperOut, MixOptions, ParsedFileInfo, PartCounts, QuestionCategoryOut, QuestionType } from '../services/apiClient';
 import type { ExamOut } from '../types/exam';
@@ -615,6 +616,7 @@ function PaperCard({ paper, exams, onChanged, onDeleted, onError }: {
 }) {
   const [showKey, setShowKey] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [qrOpen, setQrOpen] = useState(false);
   const sheets = useSheets();
 
   const run = async (tag: string, fn: () => Promise<void>) => {
@@ -669,6 +671,11 @@ function PaperCard({ paper, exams, onChanged, onDeleted, onError }: {
           onClick={() => download('zip', `${safeName(paper.name)}.zip`)}>Tải tất cả (.zip)</Button>
         <Button size="sm" variant="outline" icon={<FileText size={13} />} loading={busy === 'answer-key/docx'}
           onClick={() => download('answer-key/docx', `${safeName(paper.name)} - Dap an.docx`)}>Đáp án (Word)</Button>
+        {paper.exam_id != null && (
+          <Button size="sm" variant="outline" icon={<QrCode size={13} />} onClick={() => setQrOpen(true)}>Mã QR đáp án</Button>
+        )}
+        <AnswerQrModal open={qrOpen} onClose={() => setQrOpen(false)} examId={paper.exam_id}
+          examName={exams.find(e => e.id === paper.exam_id)?.name} />
         <Button size="sm" variant="secondary" icon={<Trash2 size={13} />} style={{ color: '#EF4444', borderColor: '#FECACA' }}
           onClick={() => { if (confirm(`Xóa bộ đề "${paper.name}" và ${paper.versions.length} mã đề?`)) run('delete', async () => { await examPapersApi.delete(paper.id); onDeleted(); }); }} />
       </div>
@@ -1027,6 +1034,7 @@ export default function ExamPapersPage() {
   const [papers, setPapers] = useState<ExamPaperOut[] | null>(null);
   const [exams, setExams] = useState<ExamOut[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState<string[]>([]);
 
@@ -1054,7 +1062,10 @@ export default function ExamPapersPage() {
       <PageHeader
         title="Trộn đề"
         subtitle="Trộn đề Word thành nhiều mã đề hoặc trộn từ ngân hàng câu hỏi, rồi gắn vào kỳ thi để chấm tự động theo mã đề"
-        actions={<Button size="sm" variant="outline" icon={<Plus size={13} />} onClick={() => setCreateOpen(true)}>Trộn từ ngân hàng câu hỏi</Button>}
+        actions={<>
+          <Button size="sm" variant="outline" icon={<Plus size={13} />} onClick={() => setCreateOpen(true)}>Trộn từ ngân hàng câu hỏi</Button>
+          <Button size="sm" variant="outline" icon={<QrCode size={13} />} onClick={() => setQrOpen(true)}>Tạo QR đáp án từ Excel</Button>
+        </>}
       />
       <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {error && (
@@ -1086,6 +1097,8 @@ export default function ExamPapersPage() {
           ))}
         </div>
       </div>
+
+      <AnswerQrModal open={qrOpen} onClose={() => setQrOpen(false)} />
 
       {createOpen && (
         <CreateModal exams={exams} onClose={() => setCreateOpen(false)}

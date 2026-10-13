@@ -256,6 +256,7 @@ export const authApi = {
 // ── Exams ─────────────────────────────────────────────────────────────────────
 
 import type { ExamOut, ExamCreatePayload } from '../types/exam';
+import type { AnswerKeyStore } from '../types/grading';
 
 export const examsApi = {
   list:   ()                              => request<ExamOut[]>('/api/v1/exams'),
@@ -766,6 +767,35 @@ export const examPapersApi = {
     request<{ byMaDe: Record<string, Record<string, string>>; papers: string[]; versions: string[]; sheets?: AnswerSheet[];
               sheetNames?: Record<string, string> }>(
       `/api/v1/exam-papers/exam-answer-key/${examId}${sheet != null ? `?sheet=${sheet}` : ''}`),
+  /** Mã QR đáp án of a kỳ thi (PNG) — scanned in Chấm nhanh to load its answer key. */
+  answerQr: async (examId: number): Promise<Blob> => {
+    const res = await requestRaw(`/api/v1/exam-papers/exam-answer-key/${examId}/qr`);
+    return (await rawOrThrow(res)).blob();
+  },
+  /** The answer key a scanned mã QR đáp án points to (works for any teacher):
+   *  a kỳ thi's bộ đề trộn, or đáp án made from an Excel file. */
+  sharedAnswerKey: (qrText: string) =>
+    request<
+      | { kind: 'exam'; byMaDe: Record<string, Record<string, string>>; papers: string[]; versions: string[]; sheets?: AnswerSheet[];
+          sheetNames?: Record<string, string>; examId: number; examName: string; mine: boolean }
+      | { kind: 'share'; name: string; store: AnswerKeyStore;
+          template: { mode: 'vju' | 'custom'; id: number | null; name: string | null; variant: string | null } }
+    >(`/api/v1/exam-papers/shared-answer-key/${encodeURIComponent(qrText)}`),
+  /** Tạo mã QR đáp án từ file Excel: the answers are kept on the server. */
+  createAnswerQr: (body: { name: string; template_mode: 'vju' | 'custom'; template_id: number | null;
+                           template_name: string | null; variant: string | null; store: AnswerKeyStore }) =>
+    request<{ id: number; qrText: string }>('/api/v1/exam-papers/answer-qr', { method: 'POST', body: JSON.stringify(body) }),
+  answerQrPng: async (id: number): Promise<Blob> => {
+    const res = await requestRaw(`/api/v1/exam-papers/answer-qr/${id}/png`);
+    return (await rawOrThrow(res)).blob();
+  },
+  /** Every QR text found in a photo / screenshot. */
+  qrDecode: async (file: File): Promise<string[]> => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await requestRaw('/api/v1/exam-papers/qr-decode', { method: 'POST', body: fd });
+    return ((await (await rawOrThrow(res)).json()) as { texts: string[] }).texts;
+  },
   /** Answer sheets a bộ đề can be mixed for: the shared ones, then the teacher's own. */
   sheets: () => request<AnswerSheetSpec[]>('/api/v1/exam-papers/sheets'),
   download: async (path: string): Promise<Blob> => {

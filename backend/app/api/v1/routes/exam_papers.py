@@ -4,6 +4,7 @@ from one uploaded đề file; Word export; attach to a kỳ thi; answer key per
 mã đề for grading. See app/services/exam_mixer.py for the mixing rules.
 """
 import io
+import json
 import re
 import zipfile
 from typing import Literal
@@ -15,10 +16,13 @@ from sqlalchemy.orm import Session
 
 from app.core.security.permissions import require_roles
 from app.database import get_db
+from app.models.answer_key_share import AnswerKeyShare
+from app.models.exam import Exam
 from app.models.user import User
 from app.services.exam_mixer import PART_LIMITS, Snapshot, answer_key_docx, usable
 from app.services.exam_paper_service import ExamPaperService
 from app.services.question_bank_service import _fingerprint
+from app.services import answer_qr
 from app.services import question_assets as qa
 from app.services.question_io import LOST, QTYPES, apply_picked_answers, decode_text, mcq_rows, parse_docx, parse_txt
 from app.services.sheet_layouts import list_layouts
@@ -272,6 +276,80 @@ def exam_answer_key(exam_id: int, sheet: str | None = None, svc: ExamPaperServic
     return svc.exam_answer_key(exam_id, sheet)
 
 
+# ── Mã QR đáp án (services/answer_qr.py) ─────────────────────────────────────
+
+@router.get("/exam-answer-key/{exam_id}/qr")
+def exam_answer_qr(exam_id: int, svc: ExamPaperService = Depends(_svc)):
+    """PNG of the kỳ thi's mã QR đáp án — scanned in Chấm nhanh to load the
+    answers of every mã đề (on this or another teacher's phone)."""
+    exam = svc._exam_or_404(exam_id)
+    return _file_response(answer_qr.png(answer_qr.token(exam.id)), f"Ma QR dap an - {_safe(exam.name)}.png", "image/png")
+
+
+class AnswerQrIn(BaseModel):
+    """Đáp án read from an Excel file on the phone / computer (an AnswerKeyStore)."""
+    name:          str = Field(min_length=1, max_length=255)
+    template_mode: Literal["vju", "custom"] = "custom"
+    template_id:   int | None = None
+    template_name: str | None = Field(default=None, max_length=255)
+    variant:       str | None = Field(default=None, max_length=10)
+    store:         dict
+
+
+@router.post("/answer-qr", status_code=201)
+def create_answer_qr(body: AnswerQrIn, svc: ExamPaperService = Depends(_svc)):
+    """Tạo mã QR đáp án từ file Excel (like qrda.chamthi.com): keep the
+    answers on the server, the QR points to them."""
+    data = json.dumps(body.store, ensure_ascii=False)
+    if len(data) > 400_000:
+        raise HTTPException(413, "Đáp án quá lớn")
+    row = AnswerKeyShare(owner_id=svc.user.id, name=body.name.strip(), template_mode=body.template_mode,
+                         template_id=body.template_id, template_name=body.template_name, variant=body.variant,
+                         store_json=data)
+    svc.db.add(row)
+    svc.db.commit()
+    return {"id": row.id, "qrText": answer_qr.share_token(row.id)}
+
+
+@router.get("/answer-qr/{share_id}/png")
+def answer_qr_png(share_id: int, svc: ExamPaperService = Depends(_svc)):
+    row = svc.db.get(AnswerKeyShare, share_id)
+    if row is None or not svc._mine(row.owner_id):
+        raise HTTPException(404, "Không tìm thấy mã QR")
+    return _file_response(answer_qr.png(answer_qr.share_token(row.id)), f"Ma QR dap an - {_safe(row.name)}.png", "image/png")
+
+
+@router.get("/shared-answer-key/{qr_text:path}")
+def shared_answer_key(qr_text: str, sheet: str | None = None, svc: ExamPaperService = Depends(_svc)):
+    """The answer key a scanned mã QR đáp án points to (any signed-in teacher):
+    kind "exam" = a kỳ thi's bộ đề trộn, kind "share" = đáp án from Excel."""
+    ref = answer_qr.parse(qr_text)
+    not_ours = HTTPException(404, "Mã QR không phải mã đáp án của VJU Smart Grading")
+    if ref is None:
+        raise not_ours
+    if ref[0] == "share":
+        row = svc.db.get(AnswerKeyShare, ref[1])
+        if row is None:
+            raise not_ours
+        return {"kind": "share", "name": row.name, "store": json.loads(row.store_json),
+                "template": {"mode": row.template_mode, "id": row.template_id, "name": row.template_name,
+                             "variant": row.variant}}
+    exam = svc.db.get(Exam, ref[1])
+    if exam is None:
+        raise not_ours
+    key = svc.exam_answer_key(exam.id, sheet, shared=True)
+    return {**key, "kind": "exam", "examId": exam.id, "examName": exam.name, "mine": svc._mine(exam.owner_id)}
+
+
+@router.post("/qr-decode")
+async def qr_decode(file: UploadFile = File(...), svc: ExamPaperService = Depends(_svc)):
+    """Every QR text in a photo or screenshot (Chấm nhanh → Quét mã QR / Ảnh QR)."""
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES * 2:
+        raise HTTPException(413, "Ảnh quá lớn")
+    return {"texts": answer_qr.decode(data)}
+
+
 # ── One bộ đề ────────────────────────────────────────────────────────────────
 
 @router.get("/{paper_id}")
@@ -327,4 +405,6 @@ def export_zip(paper_id: int, svc: ExamPaperService = Depends(_svc)):
         for code, snaps in versions.items():
             z.writestr(f"Ma de {_safe(code)}.docx", svc.version_word(p, code, snaps, subtitle))
         z.writestr("Dap an.docx", answer_key_docx(p.name, versions))
+        if p.exam_id is not None:       # quét trong Chấm nhanh để nạp đáp án của kỳ thi
+            z.writestr("Ma QR dap an.png", answer_qr.png(answer_qr.token(p.exam_id)))
     return _file_response(buf.getvalue(), f"{_safe(p.name)}.zip", "application/zip")

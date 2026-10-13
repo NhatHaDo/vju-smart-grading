@@ -10,3 +10,4 @@ from app.models.question_bank import QuestionCategory, Question, QuestionCategor
 from app.models.user_state import UserState     # noqa: F401
 from app.models.exam_paper import ExamPaper, ExamPaperVersion  # noqa: F401
 from app.models.question_asset import QuestionAsset  # noqa: F401
+from app.models.answer_key_share import AnswerKeyShare  # noqa: F401

@@ -1,7 +1,8 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Pencil, Trash2, Search, ChevronRight } from 'lucide-react';
+import { Pencil, Trash2, Search, ChevronRight, QrCode } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
+import AnswerQrModal from '../components/common/AnswerQrModal';
 import ExamDatePicker from '../components/common/ExamDatePicker';
 import {
   SEMESTER_OPTIONS, LECTURER_TITLE_OPTIONS, FACULTY_OPTIONS, TRAINING_PROGRAMS, CAMPUS_OPTIONS,
@@ -97,6 +98,7 @@ export default function ExamPage() {
   const [editingId,  setEditingId]  = useState<number | null>(null);
   // phone: the list is the home screen; the form opens with "+ Tạo kỳ thi" or Sửa
   const [formOpen,   setFormOpen]   = useState(false);
+  const [qrExam,     setQrExam]     = useState<ExamOut | null>(null);
   const [formError,  setFormError]  = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [step,       setStep]       = useState(0);
@@ -294,6 +296,7 @@ export default function ExamPage() {
       />
 
       <div className="exam-page-body" style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <AnswerQrModal open={qrExam !== null} onClose={() => setQrExam(null)} examId={qrExam?.id} examName={qrExam?.name} />
 
         {/* ── Auth error banner ────────────────────────────────────────────── */}
         {authErr && (
@@ -577,6 +580,13 @@ export default function ExamPage() {
                       </td>
                       <td style={{ padding: '11px 14px' }}>
                         <div style={{ display: 'flex', gap: 6 }}>
+                          <button
+                            title="Mã QR đáp án (quét ở Chấm nhanh)"
+                            onClick={() => setQrExam(exam)}
+                            style={{ border: '1.5px solid #E5E7EB', borderRadius: 9999, padding: '4px 10px', background: '#fff', color: '#374151', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}
+                          >
+                            <QrCode size={12} /> QR
+                          </button>
                           <button
                             title="Sửa"
                             onClick={() => startEdit(exam)}

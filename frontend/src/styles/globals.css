@@ -555,6 +555,11 @@ body {
 }
 .exam-hub-answers { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; padding: 10px 12px; }
 .exam-hub-ans { font-size: 13px; background: #F9FAFB; border-radius: 6px; padding: 4px 6px; text-align: center; white-space: nowrap; }
+.exam-hub-qr { border-top: 1px dashed #E5E7EB; padding-top: 10px; margin-top: 2px; }
+.exam-hub-qr-btn {
+  display: inline-flex; align-items: center; gap: 6px; border: 1.5px solid #E5E7EB; border-radius: 9999px;
+  padding: 7px 14px; background: #fff; color: #374151; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600;
+}
 .exam-hub-summary { background: #fff; border: 1px solid #EEE; border-radius: 14px; padding: 10px 14px 12px; }
 .exam-hub-edit {
   margin-top: 8px; display: inline-flex; align-items: center; gap: 6px;

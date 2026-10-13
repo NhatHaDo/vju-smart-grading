@@ -24,7 +24,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Zap, X, Hand, Camera as CameraIcon, ArrowLeft, AlertTriangle, CheckCircle2, ListChecks, Settings2, LayoutTemplate, FileUp, Download } from 'lucide-react';
+import { Zap, X, Hand, Camera as CameraIcon, ArrowLeft, AlertTriangle, CheckCircle2, ListChecks, Settings2, LayoutTemplate, FileUp, Download, ScanQrCode, Image as ImageIcon } from 'lucide-react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import PageHeader from '../components/layout/PageHeader';
@@ -303,7 +303,7 @@ function libraryLabel(e: SavedAnswerKeyEntry): string {
 
 function SetupScreen({
   store, tpl, variant, sheets, onPickSheet, onEditAnswers, onImportFiles, importNote, importing, onStart, exams, examId, onSelectExam, examInfo,
-  library, libraryId, onPickLibrary,
+  library, libraryId, onPickLibrary, onQrImage, qrBusy,
 }: {
   store: AnswerKeyStore | null;
   tpl: LastUsedTemplate | null;
@@ -326,6 +326,9 @@ function SetupScreen({
   /** The entry picked here ('' = the sheet's answer key in use). */
   libraryId: string;
   onPickLibrary: (id: string) => void;
+  /** A photo / screenshot of a mã QR đáp án picked → its answer key. */
+  onQrImage: (file: File) => void;
+  qrBusy: boolean;
 }) {
   const mode = tpl?.mode ?? 'vju';
   const hasAnswers = !!store && (
@@ -340,6 +343,13 @@ function SetupScreen({
     : TEMPLATE_VARIANT_LABEL[variant];
   const fromPapers = examId != null && !!examInfo && !examInfo.loading && examInfo.versions.length > 0;
   const fileRef = useRef<HTMLInputElement>(null);
+  const qrCamRef = useRef<HTMLInputElement>(null);
+  const qrPicRef = useRef<HTMLInputElement>(null);
+  const qrPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (f) onQrImage(f);
+  };
   const importButton = (primary: boolean) => (
     <Button size="sm" variant={primary ? 'primary' : 'secondary'} icon={<FileUp size={14} />} loading={importing}
       onClick={() => fileRef.current?.click()}>
@@ -383,6 +393,20 @@ function SetupScreen({
               ✓ Đáp án tự động từ bộ đề <b>{examInfo!.papers.join(', ')}</b>: {examInfo!.versions.length} mã đề ({examInfo!.versions.join(', ')})
             </span>
           )}
+        </div>
+
+        {/* Mã QR đáp án (trang kỳ thi / file ZIP trộn đề): like QM's
+            "Quét mã QR" / "Ảnh QR" — loads every mã đề's answers at once. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: '#6B7280', fontWeight: 600, flexBasis: '100%' }}>Có mã QR đáp án? (trang kỳ thi → Đáp án → Mã QR đáp án)</span>
+          <Button size="sm" variant="secondary" icon={<ScanQrCode size={14} />} loading={qrBusy} onClick={() => qrCamRef.current?.click()}>
+            Quét mã QR
+          </Button>
+          <Button size="sm" variant="secondary" icon={<ImageIcon size={14} />} disabled={qrBusy} onClick={() => qrPicRef.current?.click()}>
+            Ảnh QR
+          </Button>
+          <input ref={qrCamRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={qrPicked} />
+          <input ref={qrPicRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={qrPicked} />
         </div>
 
         {/* 2026-10-07 "sao ở chấm nhanh ko chọn bộ đáp án thư viện đáp án
@@ -645,6 +669,83 @@ export default function QuickGradePage() {
     }
   };
 
+  /** Mã QR đáp án scanned / picked: the kỳ thi's answer key from the server.
+   *  Own kỳ thi → chosen as the kỳ thi (results go to it); another teacher's
+   *  → its answers become this sheet's answer key, like an imported file. */
+  const [qrBusy, setQrBusy] = useState(false);
+  const qrImage = async (file: File) => {
+    setImportNote(null);
+    setQrBusy(true);
+    try {
+      let texts: string[];
+      try { texts = await examPapersApi.qrDecode(file); }
+      catch { setImportNote({ ok: '', warnings: ['Không gửi được ảnh, kiểm tra mạng rồi thử lại.'] }); return; }
+      if (texts.length === 0) {
+        setImportNote({ ok: '', warnings: ['Không thấy mã QR trong ảnh. Chụp gần hơn, đủ sáng, để cả mã QR nằm trong khung.'] });
+        return;
+      }
+      let k: Awaited<ReturnType<typeof examPapersApi.sharedAnswerKey>> | null = null;
+      for (const t of texts) {
+        try { k = await examPapersApi.sharedAnswerKey(t); break; } catch { /* not ours — try the next one */ }
+      }
+      if (!k) {
+        setImportNote({ ok: '', warnings: ['Mã QR này không phải mã đáp án của VJU Smart Grading.'] });
+        return;
+      }
+      if (k.kind === 'share') {         // đáp án made from an Excel file
+        const t: LastUsedTemplate = { mode: k.template.mode, id: k.template.id, name: k.template.name };
+        const next: AnswerKeyStore = { ...k.store, updatedAt: new Date().toISOString() };
+        const codes = Object.keys(next.byMaDe ?? {}).sort();
+        setTpl(t);
+        if (k.template.variant === 'sbd4' || k.template.variant === 'sbd8') setVariant(k.template.variant);
+        setStore(next);
+        setLibraryId('');
+        setExamId(null);
+        setExamInfo(null);
+        saveLastUsedTemplate(t);
+        saveAnswerKey(next, templateStoreKeyFor(t.mode, t.id));
+        saveAnswerKeyDraft(templateStoreKeyFor(t.mode, t.id), next);
+        keepInLibrary(t, next);
+        setImportNote({
+          ok: `Đã nạp đáp án từ mã QR: ${k.name}${codes.length ? ` · ${codes.length} mã đề (${codes.join(', ')})` : ''}`
+            + (k.template.name ? ` · ${k.template.name}` : ''),
+          warnings: [],
+        });
+        return;
+      }
+      if (k.versions.length === 0) {
+        setImportNote({ ok: '', warnings: [`Kỳ thi "${k.examName}" chưa có bộ đề trộn nào nên mã QR chưa có đáp án.`] });
+        return;
+      }
+      const next = paperStore(k);
+      const st = sheetTemplate(k.sheets, k.sheetNames);
+      const t: LastUsedTemplate = { mode: st.mode, id: st.id, name: st.name };
+      const ek = k;
+      const own = ek.mine && exams.some(e => e.id === ek.examId);
+      setTpl(t);
+      setStore(next);
+      setLibraryId('');
+      if (own) {
+        setExamId(k.examId);
+        setExamInfo({ loading: false, papers: k.papers, versions: k.versions, sheetName: st.name });
+      } else {
+        setExamId(null);
+        setExamInfo(null);
+        saveLastUsedTemplate(t);
+        saveAnswerKey(next, templateStoreKeyFor(t.mode, t.id));
+        saveAnswerKeyDraft(templateStoreKeyFor(t.mode, t.id), next);
+        keepInLibrary(t, next);
+      }
+      setImportNote({
+        ok: `Đã nạp đáp án từ mã QR: ${k.examName} · ${k.versions.length} mã đề (${k.versions.join(', ')})`
+          + (own ? '' : ' · kết quả lưu vào tài khoản của bạn, chưa gắn kỳ thi'),
+        warnings: [],
+      });
+    } finally {
+      setQrBusy(false);
+    }
+  };
+
   /** Keep a library copy of the sheet's answer key in use, like "Lưu Answer
    *  Key" does — so it can be picked again after another one replaced it. */
   const keepInLibrary = (t: LastUsedTemplate, s: AnswerKeyStore) => {
@@ -743,6 +844,8 @@ export default function QuickGradePage() {
           library={sheetLibrary}
           libraryId={libraryId}
           onPickLibrary={pickLibrary}
+          onQrImage={file => { void qrImage(file); }}
+          qrBusy={qrBusy}
         />
       </>
     );

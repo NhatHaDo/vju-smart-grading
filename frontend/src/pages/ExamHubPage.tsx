@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Shuffle, KeyRound, Camera, Upload, ClipboardList, FileSpreadsheet, BarChart3,
-  Pencil, ChevronRight, ChevronDown, CheckCircle2, Circle,
+  Pencil, ChevronRight, ChevronDown, CheckCircle2, Circle, QrCode, Download,
 } from 'lucide-react';
 import { examPapersApi, examsApi, resultsApi } from '../services/apiClient';
 import type { ExamOut } from '../types/exam';
@@ -63,6 +63,14 @@ export default function ExamHubPage() {
   const [openCode, setOpenCode] = useState<string | null>(null);
   // phiếu saved for this kỳ thi (exam.graded_count isn't kept up to date)
   const [graded, setGraded] = useState<number | null>(null);
+  // mã QR đáp án (object URL of the PNG), loaded when first shown
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const [qrOpen, setQrOpen] = useState(false);
+  useEffect(() => () => { if (qrUrl) URL.revokeObjectURL(qrUrl); }, [qrUrl]);
+  const showQr = () => {
+    setQrOpen(v => !v);
+    if (!qrUrl) examPapersApi.answerQr(examId).then(b => setQrUrl(URL.createObjectURL(b))).catch(() => setQrOpen(false));
+  };
 
   useEffect(() => {
     if (!Number.isFinite(examId)) { setError('Không tìm thấy kỳ thi'); return; }
@@ -136,13 +144,35 @@ export default function ExamHubPage() {
                     {open && (
                       <div className="exam-hub-answers">
                         {Object.entries(ans).map(([q, a]) => (
-                          <span key={q} className="exam-hub-ans"><span style={{ color: '#6B7280' }}>{q.replace(/^Câu\s*/i, '')}</span> <b>{a || '–'}</b></span>
+                          <span key={q} className="exam-hub-ans"><span style={{ color: '#6B7280' }}>{q.match(/(\d+[a-dA-D]?)$/)?.[1] ?? q}</span> <b>{a || '–'}</b></span>
                         ))}
                       </div>
                     )}
                   </div>
                 );
               })}
+              {codes.length > 0 && (
+                <div className="exam-hub-qr">
+                  <button type="button" onClick={showQr} className="exam-hub-qr-btn">
+                    <QrCode size={16} /> {qrOpen ? 'Ẩn mã QR đáp án' : 'Mã QR đáp án'}
+                  </button>
+                  {qrOpen && (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                      {qrUrl
+                        ? <img src={qrUrl} alt="Mã QR đáp án" style={{ width: 200, height: 200, imageRendering: 'pixelated' }} />
+                        : <div style={{ width: 200, height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9CA3AF', fontSize: 13 }}>Đang tạo…</div>}
+                      <div style={{ fontSize: 12.5, color: '#6B7280', textAlign: 'center', lineHeight: 1.5 }}>
+                        Ở <b>Chấm nhanh</b> bấm <b>Quét mã QR</b> (hoặc <b>Ảnh QR</b>) để nạp đáp án {codes.length} mã đề, kể cả trên máy giáo viên khác.
+                      </div>
+                      {qrUrl && (
+                        <a href={qrUrl} download={`Ma QR dap an - ${exam?.name ?? examId}.png`} className="exam-hub-qr-btn" style={{ textDecoration: 'none' }}>
+                          <Download size={15} /> Tải ảnh QR
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               {key.papers.length > 0 && (
                 <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 6 }}>
                   Từ bộ đề: {key.papers.join(', ')}{key.sheetNames && key.sheets?.length ? ` · phiếu ${key.sheets.map(s => key.sheetNames?.[String(s)] ?? s).join(', ')}` : ''}
