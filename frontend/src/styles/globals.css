@@ -482,6 +482,11 @@ body {
      narrower than the list below it; on a phone it takes the full width */
   .exam-wiz-card { width: 100%; box-sizing: border-box; padding: 20px 16px 18px !important; }
   .exam-list-card { padding: 16px 14px !important; }
+  /* Kỳ thi is the phone home screen: list first, form only when opened */
+  .exam-list-card { order: -1; }
+  .exam-wiz-card:not(.is-open) { display: none; }
+  .exam-wiz-card.is-open { order: -2; }
+  .exam-new-btn { display: inline-flex !important; }
   .exam-stepper { margin-bottom: 20px !important; }
   .exam-step-label {
     white-space: normal !important;
@@ -493,4 +498,66 @@ body {
   .exam-list-search input { width: 100% !important; box-sizing: border-box; }
   .exam-table { display: none; }
   .exam-cards { display: flex; flex-direction: column; gap: 10px; }
+}
+
+/* "+ Tạo kỳ thi" in the list header — phone only (desktop shows the form) */
+.exam-new-btn {
+  display: none; align-items: center; margin-left: auto;
+  border: none; border-radius: 9999px; padding: 7px 14px; background: #C8102E; color: #fff;
+  font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+
+/* "← <kỳ thi>" on pages opened from ExamHubPage */
+.hub-back-bar {
+  flex-shrink: 0;
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 10px 16px; border: none; border-bottom: 1px solid #FBD5DB;
+  background: #FEF2F2; color: #C8102E; font: inherit; font-size: 14px; font-weight: 600;
+  cursor: pointer; text-align: left;
+}
+
+/* ── Trang một kỳ thi (ExamHubPage): danh sách việc như app QM ─────────── */
+.exam-hub { min-height: 100%; background: #F3F4F6; }
+.exam-hub-top {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 16px; background: #fff; border-bottom: 1px solid #EEE;
+  position: sticky; top: 0; z-index: 5;
+}
+.exam-hub-back {
+  display: inline-flex; align-items: center; gap: 6px; border: none; background: #F3F4F6;
+  border-radius: 10px; padding: 8px; cursor: pointer; color: #374151; font: inherit;
+}
+.exam-hub-list { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px calc(84px + env(safe-area-inset-bottom, 0px)); max-width: 640px; margin: 0 auto; }
+.exam-hub-row {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  padding: 14px 14px; background: #fff; border: 1px solid #EEE; border-radius: 14px;
+  cursor: pointer; font: inherit; -webkit-tap-highlight-color: transparent;
+}
+.exam-hub-row:active { background: #FAFAFA; }
+.exam-hub-icon {
+  width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: #FEECEC; color: #C8102E;
+}
+.exam-hub-badge {
+  font-size: 12px; font-weight: 700; color: #fff; background: #C8102E;
+  border-radius: 9999px; padding: 2px 8px;
+}
+.exam-hub-keys {
+  margin-top: -4px; padding: 12px 12px 10px; background: #fff;
+  border: 1px solid #EEE; border-top: none; border-radius: 0 0 14px 14px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.exam-hub-code { border: 1px solid #EEE; border-radius: 10px; overflow: hidden; }
+.exam-hub-code-head {
+  width: 100%; display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  border: none; background: #FAFAFA; cursor: pointer; font: inherit; font-size: 14.5px; color: #1F2937;
+}
+.exam-hub-answers { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; padding: 10px 12px; }
+.exam-hub-ans { font-size: 13px; background: #F9FAFB; border-radius: 6px; padding: 4px 6px; text-align: center; white-space: nowrap; }
+.exam-hub-summary { background: #fff; border: 1px solid #EEE; border-radius: 14px; padding: 10px 14px 12px; }
+.exam-hub-edit {
+  margin-top: 8px; display: inline-flex; align-items: center; gap: 6px;
+  border: 1.5px solid #E5E7EB; border-radius: 9999px; padding: 7px 14px;
+  background: #fff; color: #374151; cursor: pointer; font: inherit; font-size: 13px;
 }

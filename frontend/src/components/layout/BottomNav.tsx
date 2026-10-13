@@ -11,15 +11,14 @@ import { NavLink, useLocation } from 'react-router-dom';
 import { MoreHorizontal, X } from 'lucide-react';
 import { NAV_ITEMS, BOTTOM_ITEMS } from './Sidebar';
 
-const PRIMARY_PATHS = ['/app', '/app/exams', '/app/upload', '/app/results'];
+// Kỳ thi is home: open one to reach đáp án, chấm, kết quả, thống kê (ExamHubPage).
+const PRIMARY_PATHS = ['/app/exams', '/app/quick-grade'];
 
 // Short labels for the narrow bottom tab bar (the desktop Sidebar labels
 // are too long to fit 4-across on a phone screen).
 const SHORT_LABEL: Record<string, string> = {
-  '/app':         'Dashboard',
-  '/app/exams':   'Kỳ thi',
-  '/app/upload':  'Chấm phiếu',
-  '/app/results': 'Kết quả',
+  '/app/exams':       'Kỳ thi',
+  '/app/quick-grade': 'Chấm nhanh',
 };
 
 export default function BottomNav() {
@@ -63,6 +62,7 @@ export default function BottomNav() {
                 <NavLink
                   key={item.to}
                   to={item.to}
+                  state={item.to === '/app' ? { dash: true } : undefined}
                   end={item.end}
                   onClick={() => setMoreOpen(false)}
                   style={({ isActive }) => ({

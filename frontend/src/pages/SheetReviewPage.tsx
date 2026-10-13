@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { FileImage, CheckCircle2, AlertTriangle, X, RefreshCw, LayoutTemplate, FolderUp, Trash2, Camera, Zap } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import PageHeader from '../components/layout/PageHeader';
@@ -47,6 +47,9 @@ function isSupportedFile(f: File): boolean {
 
 export default function SheetReviewPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  // opened from a kỳ thi's page (ExamHubPage) → that kỳ thi is pre-selected
+  const presetExamId = (location.state as { examId?: number } | null)?.examId ?? null;
 
   // ── Exam state ───────────────────────────────────────────────────────────
   const [exams,          setExams]          = useState<ExamOut[]>([]);
@@ -112,7 +115,7 @@ export default function SheetReviewPage() {
       const list = await examsApi.list();
       setExams(list);
       if (list.length > 0 && selectedExamId === null) {
-        setSelectedExamId(list[0].id);
+        setSelectedExamId(list.some(e => e.id === presetExamId) ? presetExamId : list[0].id);
       }
     } catch {
       setExamsError(true);
@@ -392,11 +395,11 @@ export default function SheetReviewPage() {
           <div style={{ marginTop: 10, fontSize: 13, color: '#6B7280', display: 'flex', alignItems: 'center', gap: 10 }}>
             <button
               onClick={() => navigate('/app/exams')}
-              style={{ border: '1.5px solid #C8102E', borderRadius: 9999, padding: '5px 14px', color: '#C8102E', background: '#fff', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600 }}>
+              style={{ flexShrink: 0, whiteSpace: 'nowrap', border: '1.5px solid #C8102E', borderRadius: 9999, padding: '5px 14px', color: '#C8102E', background: '#fff', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600 }}>
               Tạo / sửa kỳ thi
             </button>
             {currentExam && (
-              <span>Đang chọn: <strong>{currentExam.name}</strong></span>
+              <span style={{ minWidth: 0, lineHeight: 1.4 }}>Đang chọn: <strong>{currentExam.name}</strong></span>
             )}
           </div>
         </Card>

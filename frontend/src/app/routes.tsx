@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from './providers';
 import AppShell from '../components/layout/AppShell';
 import LandingPage       from '../pages/LandingPage';
@@ -20,6 +20,7 @@ import AnalyticsPage     from '../pages/AnalyticsPage';
 import ExcelPreviewPage  from '../pages/ExcelPreviewPage';
 import QuestionBankPage  from '../pages/QuestionBankPage';
 import ExamPapersPage    from '../pages/ExamPapersPage';
+import ExamHubPage       from '../pages/ExamHubPage';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, userStateReady } = useAuth();
@@ -43,6 +44,15 @@ function RequireAdmin({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// On a phone the kỳ thi list is the home screen (like QM's Danh sách chấm);
+// the Dashboard stays reachable from "Thêm", which links here with { dash: true }.
+function Home() {
+  const location = useLocation();
+  const wantDash = (location.state as { dash?: boolean } | null)?.dash;
+  if (!wantDash && window.matchMedia('(max-width: 768px)').matches) return <Navigate to="/app/exams" replace />;
+  return <DashboardPage />;
+}
+
 export default function AppRoutes() {
   return (
     <Routes>
@@ -61,8 +71,9 @@ export default function AppRoutes() {
           </RequireAuth>
         }
       >
-        <Route index                  element={<DashboardPage />} />
+        <Route index                  element={<Home />} />
         <Route path="exams"           element={<ExamPage />} />
+        <Route path="exams/:id"       element={<ExamHubPage />} />
         <Route path="question-bank"   element={<QuestionBankPage />} />
         <Route path="exam-papers"     element={<ExamPapersPage />} />
         <Route path="upload"          element={<SheetReviewPage />} />

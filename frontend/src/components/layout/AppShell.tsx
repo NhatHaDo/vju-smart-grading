@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import BottomNav from './BottomNav';
+import HubBackBar from './HubBackBar';
 
 export default function AppShell() {
   return (
@@ -42,6 +43,7 @@ export default function AppShell() {
             flexDirection: 'column',
           }}
         >
+          <HubBackBar />
           <Outlet />
         </main>
       </div>

@@ -12,6 +12,7 @@
  *     án từng mã đề tự điền (AnswerKeyPage / Chấm nhanh).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Dices, Download, FileText, FileUp, Plus, Shuffle, Trash2, X } from 'lucide-react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
@@ -811,9 +812,10 @@ const GROUP_RULES: { tag: string; rule: string }[] = [
 const sectionTitle: React.CSSProperties = { fontSize: 13, fontWeight: 700, color: '#C8102E', marginBottom: 4 };
 const code: React.CSSProperties = { fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12.5, background: '#F3F4F6', borderRadius: 4, padding: '1px 5px', color: '#1F2937' };
 
-function QuickMix({ exams, onCreated }: {
+function QuickMix({ exams, onCreated, presetExamId }: {
   exams: ExamOut[];
   onCreated: (paper: ExamPaperOut) => void;
+  presetExamId?: number | null;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   // kept while the teacher visits other pages (draftStore), gone on reload/logout
@@ -825,6 +827,7 @@ function QuickMix({ exams, onCreated }: {
   const [shuffleQuestions, setShuffleQuestions] = useDraft('quickmix.shuffleQuestions', true);
   const [shuffleOptions, setShuffleOptions] = useDraft('quickmix.shuffleOptions', true);
   const [examId, setExamId] = useDraft<number | null>('quickmix.examId', null);
+  useEffect(() => { if (presetExamId != null) setExamId(presetExamId); }, [presetExamId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [forSheet, setForSheet] = useDraft('quickmix.forSheet', true);
   const [sheetId, setSheetId] = useDraft<number | null>('quickmix.sheetId', null);
   const sheets = useSheets();
@@ -1018,6 +1021,9 @@ function QuickMix({ exams, onCreated }: {
 }
 
 export default function ExamPapersPage() {
+  const location = useLocation();
+  // opened from a kỳ thi's page (ExamHubPage) → mix for that kỳ thi
+  const presetExamId = (location.state as { examId?: number } | null)?.examId ?? null;
   const [papers, setPapers] = useState<ExamPaperOut[] | null>(null);
   const [exams, setExams] = useState<ExamOut[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
@@ -1062,7 +1068,7 @@ export default function ExamPapersPage() {
           </Card>
         )}
 
-        <QuickMix exams={exams} onCreated={p => created(p, true)} />
+        <QuickMix exams={exams} presetExamId={presetExamId} onCreated={p => created(p, true)} />
 
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, color: '#1F2937', margin: '4px 0 12px' }}>

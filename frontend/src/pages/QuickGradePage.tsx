@@ -23,7 +23,7 @@
  * luồng Upload/Answer Key hiện có, theo đúng phạm vvi đã chọn.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Zap, X, Hand, Camera as CameraIcon, ArrowLeft, AlertTriangle, CheckCircle2, ListChecks, Settings2, LayoutTemplate, FileUp, Download } from 'lucide-react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
@@ -704,6 +704,13 @@ export default function QuickGradePage() {
       })
       .catch(() => setExamInfo({ loading: false, papers: [], versions: [] }));
   };
+
+  // opened from a kỳ thi's page (ExamHubPage) → start with that kỳ thi chosen
+  const location = useLocation();
+  const presetExamId = (location.state as { examId?: number } | null)?.examId ?? null;
+  useEffect(() => {
+    if (presetExamId != null) selectExam(presetExamId);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!sessionActive) {
     return (

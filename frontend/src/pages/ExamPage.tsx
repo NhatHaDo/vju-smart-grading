@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Pencil, Trash2, Search } from 'lucide-react';
+import { Pencil, Trash2, Search, ChevronRight } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
 import ExamDatePicker from '../components/common/ExamDatePicker';
 import {
@@ -95,6 +95,8 @@ export default function ExamPage() {
   // ── Wizard state ──
   const [form,       setForm]       = useState<ExamFormData>(emptyForm(currentAcademicYear()));
   const [editingId,  setEditingId]  = useState<number | null>(null);
+  // phone: the list is the home screen; the form opens with "+ Tạo kỳ thi" or Sửa
+  const [formOpen,   setFormOpen]   = useState(false);
   const [formError,  setFormError]  = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [step,       setStep]       = useState(0);
@@ -136,6 +138,7 @@ export default function ExamPage() {
 
   const resetWizard = () => {
     setEditingId(null);
+    setFormOpen(false);
     setForm(emptyForm(currentAcademicYear()));
     setFormError('');
     setStep(0);
@@ -143,8 +146,14 @@ export default function ExamPage() {
     setAnimKey(k => k + 1);
   };
 
+  const openNew = () => {
+    setFormOpen(true);
+    setTimeout(() => document.querySelector('.exam-wiz-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  };
+
   const startEdit = (exam: ExamOut) => {
     setEditingId(exam.id);
+    setFormOpen(true);
     setForm(examOutToForm(exam));
     setFormError('');
     setStep(0);
@@ -302,7 +311,7 @@ export default function ExamPage() {
         )}
 
         {/* ── Wizard card ─────────────────────────────────────────────────── */}
-        <div className="exam-wiz-card" style={W.card}>
+        <div className={`exam-wiz-card${formOpen ? ' is-open' : ''}`} style={W.card}>
 
           {/* Stepper */}
           <div className="exam-stepper" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'center', marginBottom: 28 }}>
@@ -489,13 +498,13 @@ export default function ExamPage() {
             )}
           </div>
 
-          {editingId !== null && (
+          {(editingId !== null || formOpen) && (
             <div style={{ marginTop: 14, textAlign: 'center' }}>
               <button
                 onClick={resetWizard}
                 style={{ background: 'none', border: 'none', color: '#9CA3AF', fontSize: 13, cursor: 'pointer', textDecoration: 'underline', fontFamily: 'inherit' }}
               >
-                Huỷ sửa
+                {editingId !== null ? 'Huỷ sửa' : 'Đóng'}
               </button>
             </div>
           )}
@@ -505,6 +514,7 @@ export default function ExamPage() {
         <div className="exam-list-card" style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14, padding: 20 }}>
           <div className="exam-list-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 12 }}>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#1E1E1E' }}>Danh sách kỳ thi</h3>
+            <button type="button" className="exam-new-btn" onClick={openNew}>+ Tạo kỳ thi</button>
             <div className="exam-list-search" style={{ position: 'relative' }}>
               <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF', pointerEvents: 'none' }} />
               <input
@@ -597,8 +607,12 @@ export default function ExamPage() {
                 const when = [exam.exam_date ? fmtExamDate(exam.exam_date) : '', exam.exam_time ?? '', exam.room ?? '']
                   .filter(Boolean).join(' · ');
                 return (
-                  <div key={exam.id} style={{ border: '1px solid #EEE', borderRadius: 12, padding: '12px 14px', background: '#fff' }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: '#1E1E1E', lineHeight: 1.35 }}>{exam.name}</div>
+                  <div key={exam.id} onClick={() => navigate(`/app/exams/${exam.id}`)}
+                    style={{ border: '1px solid #EEE', borderRadius: 12, padding: '12px 14px', background: '#fff', cursor: 'pointer' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      <div style={{ flex: 1, fontSize: 15, fontWeight: 700, color: '#1E1E1E', lineHeight: 1.35 }}>{exam.name}</div>
+                      <ChevronRight size={18} color="#9CA3AF" style={{ flexShrink: 0, marginTop: 1 }} />
+                    </div>
                     <div style={{ fontSize: 13, color: '#374151', marginTop: 4 }}>
                       {exam.subject || '—'}{exam.exam_code ? <span style={{ color: '#9CA3AF' }}> · {exam.exam_code}</span> : null}
                     </div>
@@ -616,14 +630,14 @@ export default function ExamPage() {
                       <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
                         <button
                           title="Sửa"
-                          onClick={() => startEdit(exam)}
+                          onClick={e => { e.stopPropagation(); startEdit(exam); }}
                           style={{ border: '1.5px solid #E5E7EB', borderRadius: 9999, padding: '6px 14px', background: '#fff', color: '#374151', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}
                         >
                           <Pencil size={12} /> Sửa
                         </button>
                         <button
                           title="Xoá"
-                          onClick={() => void handleDelete(exam)}
+                          onClick={e => { e.stopPropagation(); void handleDelete(exam); }}
                           style={{ border: '1.5px solid #FECACA', borderRadius: 9999, padding: '6px 14px', background: '#fff', color: '#C8102E', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}
                         >
                           <Trash2 size={12} /> Xoá

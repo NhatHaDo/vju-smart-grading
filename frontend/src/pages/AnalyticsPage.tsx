@@ -16,6 +16,7 @@
  */
 
 import { useState, useMemo, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   PieChart, Pie, Cell, Legend,
@@ -179,6 +180,8 @@ function lotTime(iso: string): string {
 const selectCls = 'px-3 py-2 bg-white border border-gray-200 rounded-xl text-sm text-gray-700 shadow-sm max-w-full';
 
 export default function AnalyticsPage() {
+  const location = useLocation();
+  const presetExamId = (location.state as { examId?: number } | null)?.examId ?? null;
   // ── Load data: every phiếu saved on the server + the kỳ thi names ─────────
   const [rows, setRows]       = useState<{ r: OmrGradeResult; examId: number | null }[]>([]);
   const [exams, setExams]     = useState<ExamOut[]>([]);
@@ -214,7 +217,7 @@ export default function AnalyticsPage() {
   const answerKey = useMemo(() => loadAnswerKey(), []);
 
   // ── Filters: kỳ thi, then lượt chấm (default: the latest one) ─────────────
-  const [examFilter, setExamFilter] = useState<string>('all');   // 'all' | 'none' | exam id
+  const [examFilter, setExamFilter] = useState<string>(presetExamId != null ? String(presetExamId) : 'all');   // 'all' | 'none' | exam id
   const [lotFilter, setLotFilter]   = useState<string>('latest'); // 'latest' | 'all' | graded_at
 
   const examRows = useMemo(() => rows.filter(x =>
