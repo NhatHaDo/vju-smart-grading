@@ -21,6 +21,7 @@ import ExcelPreviewPage  from '../pages/ExcelPreviewPage';
 import QuestionBankPage  from '../pages/QuestionBankPage';
 import ExamPapersPage    from '../pages/ExamPapersPage';
 import ExamHubPage       from '../pages/ExamHubPage';
+import QrAnswerPage      from '../pages/QrAnswerPage';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, userStateReady } = useAuth();
@@ -44,6 +45,11 @@ function RequireAdmin({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// /app/qr?k=… — the link in mã QR made before the public /qr page existed
+function OldQrLink() {
+  return <Navigate to={`/qr${useLocation().search}`} replace />;
+}
+
 // On a phone the kỳ thi list is the home screen (like QM's Danh sách chấm);
 // the Dashboard stays reachable from "Thêm", which links here with { dash: true }.
 function Home() {
@@ -61,6 +67,9 @@ export default function AppRoutes() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register"        element={<RegisterPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      {/* mã QR đáp án opened by any phone / iPad Camera — no login */}
+      <Route path="/qr"              element={<QrAnswerPage />} />
+      <Route path="/app/qr"          element={<OldQrLink />} />
 
       {/* ── Authenticated app at /app ── */}
       <Route

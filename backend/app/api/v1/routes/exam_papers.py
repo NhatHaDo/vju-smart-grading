@@ -10,7 +10,7 @@ import zipfile
 from typing import Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -279,11 +279,13 @@ def exam_answer_key(exam_id: int, sheet: str | None = None, svc: ExamPaperServic
 # ── Mã QR đáp án (services/answer_qr.py) ─────────────────────────────────────
 
 @router.get("/exam-answer-key/{exam_id}/qr")
-def exam_answer_qr(exam_id: int, svc: ExamPaperService = Depends(_svc)):
+def exam_answer_qr(exam_id: int, request: Request, base: str | None = None, svc: ExamPaperService = Depends(_svc)):
     """PNG of the kỳ thi's mã QR đáp án — scanned in Chấm nhanh to load the
-    answers of every mã đề (on this or another teacher's phone)."""
+    answers of every mã đề (on this or another teacher's phone). base = the
+    site address put in the QR link (default: the page that asked)."""
     exam = svc._exam_or_404(exam_id)
-    return _file_response(answer_qr.png(answer_qr.token(exam.id)), f"Ma QR dap an - {_safe(exam.name)}.png", "image/png")
+    text = answer_qr.link(answer_qr.token(exam.id), base or answer_qr.site_of(request))
+    return _file_response(answer_qr.png(text), f"Ma QR dap an - {_safe(exam.name)}.png", "image/png")
 
 
 class AnswerQrIn(BaseModel):
@@ -312,11 +314,12 @@ def create_answer_qr(body: AnswerQrIn, svc: ExamPaperService = Depends(_svc)):
 
 
 @router.get("/answer-qr/{share_id}/png")
-def answer_qr_png(share_id: int, svc: ExamPaperService = Depends(_svc)):
+def answer_qr_png(share_id: int, request: Request, base: str | None = None, svc: ExamPaperService = Depends(_svc)):
     row = svc.db.get(AnswerKeyShare, share_id)
     if row is None or not svc._mine(row.owner_id):
         raise HTTPException(404, "Không tìm thấy mã QR")
-    return _file_response(answer_qr.png(answer_qr.share_token(row.id)), f"Ma QR dap an - {_safe(row.name)}.png", "image/png")
+    text = answer_qr.link(answer_qr.share_token(row.id), base or answer_qr.site_of(request))
+    return _file_response(answer_qr.png(text), f"Ma QR dap an - {_safe(row.name)}.png", "image/png")
 
 
 @router.get("/shared-answer-key/{qr_text:path}")
@@ -397,7 +400,7 @@ def export_answer_key(paper_id: int, svc: ExamPaperService = Depends(_svc)):
 
 
 @router.get("/{paper_id}/zip")
-def export_zip(paper_id: int, svc: ExamPaperService = Depends(_svc)):
+def export_zip(paper_id: int, request: Request, svc: ExamPaperService = Depends(_svc)):
     """Every mã đề + the đáp án, one .zip."""
     p, subtitle, versions = _versions(svc, paper_id)
     buf = io.BytesIO()
@@ -406,5 +409,5 @@ def export_zip(paper_id: int, svc: ExamPaperService = Depends(_svc)):
             z.writestr(f"Ma de {_safe(code)}.docx", svc.version_word(p, code, snaps, subtitle))
         z.writestr("Dap an.docx", answer_key_docx(p.name, versions))
         if p.exam_id is not None:       # quét trong Chấm nhanh để nạp đáp án của kỳ thi
-            z.writestr("Ma QR dap an.png", answer_qr.png(answer_qr.token(p.exam_id)))
+            z.writestr("Ma QR dap an.png", answer_qr.png(answer_qr.link(answer_qr.token(p.exam_id), answer_qr.site_of(request))))
     return _file_response(buf.getvalue(), f"{_safe(p.name)}.zip", "application/zip")

@@ -58,6 +58,31 @@ def exam_of(text: str) -> int | None:
     return p[1] if p and p[0] == "exam" else None
 
 
+_BASE = re.compile(r"https?://[A-Za-z0-9.\-]+(:\d+)?")
+
+
+def link(text: str, base: str | None) -> str:
+    """The QR content: when the site address is known, a link straight to the
+    đáp án as an Excel file ("quét là tải excel luôn") — any phone / iPad
+    Camera or Zalo downloads it, no login (routes/public_answer_key.py; the
+    API sits under the same address, /api). Without one, a bare token only
+    the app can read (iOS Camera shows "No usable data found" for it). Either
+    form is read by parse(), which finds the token anywhere in the text."""
+    m = _BASE.fullmatch((base or "").strip().rstrip("/"))
+    # short path (routes/public_answer_key.py → /q/<token>) keeps the QR at
+    # version ≤ 6, which every phone camera reads easily
+    return f"{m.group(0)}/api/v1/q/{text}" if m else text
+
+
+def site_of(request) -> str | None:
+    """The address the frontend is served from (browser Origin / Referer)."""
+    for h in ("origin", "referer"):
+        m = _BASE.match(request.headers.get(h) or "")
+        if m:
+            return m.group(0)
+    return None
+
+
 def png(text: str, module_px: int = 12, border: int = 4) -> bytes:
     params = cv2.QRCodeEncoder_Params()
     params.correction_level = cv2.QRCODE_ENCODER_CORRECT_LEVEL_M

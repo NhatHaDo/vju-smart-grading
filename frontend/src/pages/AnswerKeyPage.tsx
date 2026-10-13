@@ -6,7 +6,7 @@ import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import TemplatePreviewThumb, { type TemplateAreaLike } from '../components/common/TemplatePreviewThumb';
 import PageHeader from '../components/layout/PageHeader';
-import { Upload, Trash2, FileSpreadsheet, Save, CheckCircle2, Loader2, ArrowLeft, Zap, AlertTriangle, Layers, Plus, X, Copy, Library, BookmarkPlus, Pencil } from 'lucide-react';
+import { Upload, Trash2, FileSpreadsheet, Save, CheckCircle2, Loader2, ArrowLeft, Zap, AlertTriangle, Layers, Plus, X, Copy, Library, BookmarkPlus, Pencil, ScanQrCode, Image as ImageIcon, QrCode, Download } from 'lucide-react';
 import {
   VJU_PRESET_SCHEMA,
   type AnswerKeyStore,
@@ -45,7 +45,10 @@ import {
   updateAnswerKeyLibraryEntry,
   renameAnswerKeyLibraryEntry,
 } from '../types/grading';
-import { customFormsApi, examPapersApi } from '../services/apiClient';
+import { customFormsApi, examPapersApi, publicAnswerKey, publicAnswerKeyXlsxUrl, type PublicAnswerKey } from '../services/apiClient';
+import Modal from '../components/modals/Modal';
+import AnswerKeyView from '../components/common/AnswerKeyView';
+import AnswerQrModal from '../components/common/AnswerQrModal';
 import type { CustomFormMeta } from '../services/apiClient';
 import { buildSchemaFromDetail, buildSchemaFromAnswerKeys } from '../utils/templateSchema';
 import { buildAnswerKeyWorkbook, buildAnswerKeySampleWorkbook, maDeFromFileName, parseAnswerKeyWorkbook } from '../utils/answerKeyExcel';
@@ -774,6 +777,62 @@ export default function AnswerKeyPage() {
     setLibrary(prev => [entry, ...prev]);
   };
 
+  // ── Mã QR đáp án (2026-10-13): "quét mã QR qua cái nhập đáp án => nhập
+  // đáp án" — scan → see the đáp án → Nạp vào / Tải Excel; and "Tạo mã QR"
+  // from the đáp án on this page.
+  const [qrBusy, setQrBusy] = useState(false);
+  const [qrNote, setQrNote] = useState('');
+  const [qrView, setQrView] = useState<{ text: string; data: PublicAnswerKey } | null>(null);
+  const [qrMake, setQrMake] = useState<{ name: string; templateKey: string; templateLabel: string; store: AnswerKeyStore } | null>(null);
+  const qrCamRef = useRef<HTMLInputElement>(null);
+  const qrPicRef = useRef<HTMLInputElement>(null);
+
+  const scanQr = async (file: File) => {
+    setQrNote('');
+    setQrBusy(true);
+    try {
+      let texts: string[];
+      try { texts = await examPapersApi.qrDecode(file); }
+      catch { setQrNote('Không gửi được ảnh, kiểm tra mạng rồi thử lại.'); return; }
+      if (texts.length === 0) { setQrNote('Không thấy mã QR trong ảnh. Chụp gần hơn, đủ sáng, để cả mã QR nằm trong khung.'); return; }
+      for (const t of texts) {
+        try { setQrView({ text: t, data: await publicAnswerKey(t) }); return; } catch { /* not ours */ }
+      }
+      setQrNote('Mã QR này không phải mã đáp án của VJU Smart Grading.');
+    } finally {
+      setQrBusy(false);
+    }
+  };
+
+  /** The scanned đáp án → a library-style entry, loaded like "Nạp vào". */
+  const loadQr = (d: PublicAnswerKey) => {
+    const scoring = d.scoring ?? { ...DEFAULT_SCORING };
+    const now = new Date().toISOString();
+    const codes = Object.keys(d.byMaDe);
+    const store: AnswerKeyStore = codes.length === 1 && codes[0] === ''
+      ? { answers: d.byMaDe[''], scoring, updatedAt: now }
+      : { answers: {}, scoring, updatedAt: now,
+          byMaDe: Object.fromEntries(codes.map(c => [c, { answers: d.byMaDe[c], scoring, updatedAt: now }])) };
+    const key = templateStoreKeyFor(d.template.mode, d.template.id);
+    setQrView(null);
+    handleLoadFromLibrary({
+      id: `qr-${Date.now()}`, name: d.title, savedAt: now, templateKey: key,
+      templateLabel: d.template.name ?? (d.template.variant === 'sbd4' ? TEMPLATE_VARIANT_LABEL.sbd4 : TEMPLATE_VARIANT_LABEL.sbd8),
+      store,
+    });
+  };
+
+  const makeQr = () => {
+    const name = (window.prompt('Tên bộ đáp án (hiện khi quét mã QR):', currentTemplateLabel) ?? '').trim();
+    if (!name) return;
+    setQrMake({
+      name,
+      templateKey: isGradingMode ? templateStoreKeyFor(templateMode, customTemplateId) : directTemplateKey,
+      templateLabel: currentTemplateLabel,
+      store: buildStore(),
+    });
+  };
+
   const handleLoadFromLibrary = (entry: SavedAnswerKeyEntry) => {
     if (paperLocked) {
       alert('Đáp án đang lấy tự động từ bộ đề trộn. Muốn nạp đáp án khác cho lần chấm này, bấm "Dùng đáp án khác" ở khung xanh trước.');
@@ -1096,8 +1155,34 @@ export default function AnswerKeyPage() {
               Thư viện đáp án {visibleLibrary.length > 0 && <span style={{ color: '#9CA3AF', fontWeight: 600 }}>({visibleLibrary.length})</span>}
               {isGradingMode && <span style={{ fontWeight: 500, color: '#9CA3AF' }}> (đáp án đã lưu cho mẫu đang chấm: {currentTemplateLabel})</span>}
             </h3>
+            <Button size="sm" variant="secondary" icon={<ScanQrCode size={14} />} loading={qrBusy} onClick={() => qrCamRef.current?.click()}>Quét mã QR</Button>
+            <Button size="sm" variant="secondary" icon={<ImageIcon size={14} />} disabled={qrBusy} onClick={() => qrPicRef.current?.click()}>Ảnh QR</Button>
+            <Button size="sm" variant="secondary" icon={<QrCode size={14} />} onClick={makeQr}>Tạo mã QR</Button>
             <Button size="sm" variant="secondary" icon={<BookmarkPlus size={14} />} onClick={handleSaveToLibrary}>Lưu vào thư viện</Button>
+            <input ref={qrCamRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+              onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void scanQr(f); }} />
+            <input ref={qrPicRef} type="file" accept="image/*" style={{ display: 'none' }}
+              onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void scanQr(f); }} />
           </div>
+          {qrNote && <div style={{ fontSize: 12.5, color: '#B45309', marginBottom: 10 }}>⚠ {qrNote}</div>}
+          <Modal open={qrView !== null} onClose={() => setQrView(null)} width={560}
+            title={qrView ? `Đáp án từ mã QR: ${qrView.data.title}` : ''}
+            footer={qrView && (
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <a href={publicAnswerKeyXlsxUrl(qrView.text)} download style={{ textDecoration: 'none' }}>
+                  <Button size="sm" variant="secondary" icon={<Download size={14} />}>Tải Excel</Button>
+                </a>
+                <Button size="sm" variant="primary" onClick={() => loadQr(qrView.data)}>Nạp vào</Button>
+              </div>
+            )}>
+            {qrView && (
+              <>
+                <div style={{ fontSize: 12.5, color: '#6B7280', marginBottom: 10 }}>{qrView.data.template.name ?? ''}</div>
+                <AnswerKeyView data={qrView.data} />
+              </>
+            )}
+          </Modal>
+          <AnswerQrModal open={qrMake !== null} onClose={() => setQrMake(null)} fromStore={qrMake} />
           {visibleLibrary.length === 0 ? (
             <div style={{ fontSize: 13, color: '#9CA3AF' }}>
               {isGradingMode

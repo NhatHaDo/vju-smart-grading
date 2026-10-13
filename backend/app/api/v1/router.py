@@ -8,6 +8,7 @@ from app.api.v1.routes.grading      import router as grading_router
 from app.api.v1.routes.health       import router as health_router
 from app.api.v1.routes.omr          import router as omr_router
 from app.api.v1.routes.question_bank import router as question_bank_router
+from app.api.v1.routes.public_answer_key import router as public_answer_key_router, short_router as qr_short_router
 from app.api.v1.routes.user_state   import router as user_state_router
 from app.api.v1.routes.results      import router as results_router
 from app.api.v1.routes.sheets       import router as sheets_router
@@ -29,3 +30,5 @@ api_router.include_router(results_router)
 api_router.include_router(omr_router)
 api_router.include_router(question_bank_router)
 api_router.include_router(user_state_router)
+api_router.include_router(public_answer_key_router)
+api_router.include_router(qr_short_router)

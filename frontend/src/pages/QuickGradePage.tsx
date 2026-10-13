@@ -684,6 +684,15 @@ export default function QuickGradePage() {
         setImportNote({ ok: '', warnings: ['Không thấy mã QR trong ảnh. Chụp gần hơn, đủ sáng, để cả mã QR nằm trong khung.'] });
         return;
       }
+      await applyQrTexts(texts);
+    } finally {
+      setQrBusy(false);
+    }
+  };
+
+  /** The scanned text(s) → the answer key they point to. */
+  const applyQrTexts = async (texts: string[]) => {
+    {
       let k: Awaited<ReturnType<typeof examPapersApi.sharedAnswerKey>> | null = null;
       for (const t of texts) {
         try { k = await examPapersApi.sharedAnswerKey(t); break; } catch { /* not ours — try the next one */ }
@@ -721,7 +730,8 @@ export default function QuickGradePage() {
       const st = sheetTemplate(k.sheets, k.sheetNames);
       const t: LastUsedTemplate = { mode: st.mode, id: st.id, name: st.name };
       const ek = k;
-      const own = ek.mine && exams.some(e => e.id === ek.examId);
+      // (opened from a link the kỳ thi list may still be loading)
+      const own = ek.mine && (exams.length === 0 || exams.some(e => e.id === ek.examId));
       setTpl(t);
       setStore(next);
       setLibraryId('');
@@ -741,8 +751,6 @@ export default function QuickGradePage() {
           + (own ? '' : ' · kết quả lưu vào tài khoản của bạn, chưa gắn kỳ thi'),
         warnings: [],
       });
-    } finally {
-      setQrBusy(false);
     }
   };
 

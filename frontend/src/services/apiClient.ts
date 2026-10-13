@@ -13,6 +13,29 @@ const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
 /** A question's formula / picture ("[[ct:<id>]]" in its text) as an image URL. */
 export const questionAssetUrl = (id: string) => `${API_BASE}/api/v1/question-bank/assets/${id}.svg`;
 
+// ── Mã QR đáp án opened on any device — no login (routes/public_answer_key.py) ──
+export interface PublicAnswerKey {
+  kind: 'exam' | 'share';
+  title: string;
+  /** code → {label: đáp án}; one "" entry when not split by mã đề */
+  byMaDe: Record<string, Record<string, string>>;
+  scoring: { correct: number; wrong: number; blank: number } | null;
+  template: { mode: 'vju' | 'custom'; id: number | null; name: string | null; variant: string | null };
+}
+/** The token inside a scanned text (the QR may hold the whole /qr?k=… link). */
+export const qrToken = (text: string) => text.match(/VJUAK[12]:\d+\.[a-z2-7]{16}/)?.[0] ?? text.trim();
+export async function publicAnswerKey(text: string): Promise<PublicAnswerKey> {
+  const res = await fetch(`${API_BASE}/api/v1/public/answer-key/${encodeURIComponent(qrToken(text))}`);
+  if (!res.ok) {
+    let msg = 'Mã QR không phải mã đáp án của VJU Smart Grading';
+    try { msg = (await res.json()).detail ?? msg; } catch { /* keep */ }
+    throw new Error(msg);
+  }
+  return res.json();
+}
+export const publicAnswerKeyXlsxUrl = (text: string) =>
+  `${API_BASE}/api/v1/public/answer-key/${encodeURIComponent(qrToken(text))}/xlsx`;
+
 // ── Typed API error ──────────────────────────────────────────────────────────
 
 export class ApiError extends Error {
@@ -769,7 +792,7 @@ export const examPapersApi = {
       `/api/v1/exam-papers/exam-answer-key/${examId}${sheet != null ? `?sheet=${sheet}` : ''}`),
   /** Mã QR đáp án of a kỳ thi (PNG) — scanned in Chấm nhanh to load its answer key. */
   answerQr: async (examId: number): Promise<Blob> => {
-    const res = await requestRaw(`/api/v1/exam-papers/exam-answer-key/${examId}/qr`);
+    const res = await requestRaw(`/api/v1/exam-papers/exam-answer-key/${examId}/qr?base=${encodeURIComponent(window.location.origin)}`);
     return (await rawOrThrow(res)).blob();
   },
   /** The answer key a scanned mã QR đáp án points to (works for any teacher):
@@ -780,13 +803,15 @@ export const examPapersApi = {
           sheetNames?: Record<string, string>; examId: number; examName: string; mine: boolean }
       | { kind: 'share'; name: string; store: AnswerKeyStore;
           template: { mode: 'vju' | 'custom'; id: number | null; name: string | null; variant: string | null } }
-    >(`/api/v1/exam-papers/shared-answer-key/${encodeURIComponent(qrText)}`),
+    // only the token (a QR may hold the whole /app/qr?k=… link — slashes in a
+    // path segment are refused by some proxies)
+    >(`/api/v1/exam-papers/shared-answer-key/${encodeURIComponent(qrToken(qrText))}`),
   /** Tạo mã QR đáp án từ file Excel: the answers are kept on the server. */
   createAnswerQr: (body: { name: string; template_mode: 'vju' | 'custom'; template_id: number | null;
                            template_name: string | null; variant: string | null; store: AnswerKeyStore }) =>
     request<{ id: number; qrText: string }>('/api/v1/exam-papers/answer-qr', { method: 'POST', body: JSON.stringify(body) }),
   answerQrPng: async (id: number): Promise<Blob> => {
-    const res = await requestRaw(`/api/v1/exam-papers/answer-qr/${id}/png`);
+    const res = await requestRaw(`/api/v1/exam-papers/answer-qr/${id}/png?base=${encodeURIComponent(window.location.origin)}`);
     return (await rawOrThrow(res)).blob();
   },
   /** Every QR text found in a photo / screenshot. */

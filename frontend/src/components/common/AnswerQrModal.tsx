@@ -44,12 +44,14 @@ function QrView({ url, fileName, hint }: { url: string | null; fileName: string;
   );
 }
 
-export default function AnswerQrModal({ open, onClose, examId, examName }: {
+export default function AnswerQrModal({ open, onClose, examId, examName, fromStore }: {
   open: boolean;
   onClose: () => void;
   /** set = the kỳ thi's QR; unset = make one from an Excel file */
   examId?: number | null;
   examName?: string;
+  /** Answer Key → "Tạo mã QR": the đáp án on that page */
+  fromStore?: { name: string; templateKey: string; templateLabel: string; store: AnswerKeyStore } | null;
 }) {
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -63,6 +65,21 @@ export default function AnswerQrModal({ open, onClose, examId, examName }: {
     examPapersApi.examAnswerKey(examId).then(k => setCodes(k.versions)).catch(() => setCodes([]));
     examPapersApi.answerQr(examId).then(b => setUrl(URL.createObjectURL(b))).catch(() => setError('Không tạo được mã QR'));
   }, [open, examId]);
+
+  // ── đáp án đang có trên trang Answer Key ──────────────────────────────────
+  useEffect(() => {
+    if (!open || !fromStore) return;
+    setUrl(null); setError('');
+    const custom = fromStore.templateKey.startsWith('custom:');
+    examPapersApi.createAnswerQr({
+      name: fromStore.name, template_mode: custom ? 'custom' : 'vju',
+      template_id: custom ? Number(fromStore.templateKey.slice('custom:'.length)) : null,
+      template_name: fromStore.templateLabel, variant: null, store: fromStore.store,
+    })
+      .then(({ id }) => examPapersApi.answerQrPng(id))
+      .then(b => setUrl(URL.createObjectURL(b)))
+      .catch(() => setError('Không tạo được mã QR, kiểm tra mạng rồi thử lại.'));
+  }, [open, fromStore]);
 
   // ── từ file Excel ─────────────────────────────────────────────────────────
   const [customs, setCustoms] = useState<SheetChoice[]>([]);
@@ -82,7 +99,7 @@ export default function AnswerQrModal({ open, onClose, examId, examName }: {
   const sheet = sheets.find(s => s.key === sheetKey) ?? sheets[0];
 
   useEffect(() => {
-    if (!open || examId != null) return;
+    if (!open || examId != null || fromStore) return;
     setUrl(null); setError(''); setNote([]); setMade(null);
     customFormsApi.list()
       .then(({ forms }) => setCustoms(forms
@@ -152,14 +169,17 @@ export default function AnswerQrModal({ open, onClose, examId, examName }: {
     }
   };
 
-  const scanHint = <>Ở <b>Chấm nhanh</b> bấm <b>Quét mã QR</b> (hoặc <b>Ảnh QR</b>) để nạp đáp án, kể cả trên máy giáo viên khác.</>;
+  const scanHint = <>Trong app: <b>Chấm nhanh</b> hoặc <b>Answer Key</b> → <b>Quét mã QR</b> để nạp đáp án. Quét bằng Camera điện thoại / iPad: tải ngay file Excel đáp án.</>;
 
   return (
     <Modal open={open} onClose={onClose} width={460}
-      title={examId != null ? `Mã QR đáp án${examName ? `: ${examName}` : ''}` : 'Tạo mã QR đáp án từ file Excel'}>
+      title={fromStore ? `Mã QR đáp án: ${fromStore.name}` : examId != null ? `Mã QR đáp án${examName ? `: ${examName}` : ''}` : 'Tạo mã QR đáp án từ file Excel'}>
       {error && <div style={{ fontSize: 13, color: '#C8102E', marginBottom: 10 }}>⚠ {error}</div>}
 
-      {examId != null ? (
+      {fromStore ? (
+        <QrView url={url} fileName={`Ma QR dap an - ${fromStore.name}.png`}
+          hint={<>{fromStore.templateLabel}<br />{scanHint}</>} />
+      ) : examId != null ? (
         codes !== null && codes.length === 0 ? (
           <div style={{ fontSize: 13.5, color: '#6B7280', lineHeight: 1.6 }}>
             Kỳ thi chưa gắn bộ đề trộn nào nên mã QR chưa có đáp án. Trộn đề và gắn vào kỳ thi trước,
@@ -209,7 +229,7 @@ export default function AnswerQrModal({ open, onClose, examId, examName }: {
           )}
         </div>
       )}
-      {examId == null && !made && (
+      {examId == null && !fromStore && !made && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 14, fontSize: 12, color: '#9CA3AF' }}>
           <QrCode size={14} /> Mã QR chỉ trỏ tới đáp án lưu trên máy chủ, nên nhỏ và dễ quét.
         </div>
