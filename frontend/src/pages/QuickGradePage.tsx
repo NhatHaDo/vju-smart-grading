@@ -24,13 +24,14 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Zap, X, Hand, Camera as CameraIcon, ArrowLeft, AlertTriangle, CheckCircle2, ListChecks, Settings2, LayoutTemplate, FileUp, Download, ScanQrCode, Image as ImageIcon } from 'lucide-react';
+import { Zap, X, Hand, Camera as CameraIcon, ArrowLeft, AlertTriangle, CheckCircle2, ListChecks, Settings2, LayoutTemplate, FileUp, Download, ScanQrCode } from 'lucide-react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import PageHeader from '../components/layout/PageHeader';
 import { customFormsApi, examPapersApi, examsApi } from '../services/apiClient';
 import type { ExamOut } from '../types/exam';
 import { buildSchemaFromDetail } from '../utils/templateSchema';
+import QrScannerModal from '../components/common/QrScannerModal';
 import { maDeFromFileName, parseAnswerKeyWorkbook } from '../utils/answerKeyExcel';
 import { saveGradedImages } from '../utils/gradedImages';
 import {
@@ -303,7 +304,7 @@ function libraryLabel(e: SavedAnswerKeyEntry): string {
 
 function SetupScreen({
   store, tpl, variant, sheets, onPickSheet, onEditAnswers, onImportFiles, importNote, importing, onStart, exams, examId, onSelectExam, examInfo,
-  library, libraryId, onPickLibrary, onQrImage, qrBusy,
+  library, libraryId, onPickLibrary, onQrImage, onQrText, qrBusy,
 }: {
   store: AnswerKeyStore | null;
   tpl: LastUsedTemplate | null;
@@ -328,6 +329,8 @@ function SetupScreen({
   onPickLibrary: (id: string) => void;
   /** A photo / screenshot of a mã QR đáp án picked → its answer key. */
   onQrImage: (file: File) => void;
+  /** a mã QR đáp án read by the live scanner → its answer key */
+  onQrText: (text: string) => void;
   qrBusy: boolean;
 }) {
   const mode = tpl?.mode ?? 'vju';
@@ -343,13 +346,7 @@ function SetupScreen({
     : TEMPLATE_VARIANT_LABEL[variant];
   const fromPapers = examId != null && !!examInfo && !examInfo.loading && examInfo.versions.length > 0;
   const fileRef = useRef<HTMLInputElement>(null);
-  const qrCamRef = useRef<HTMLInputElement>(null);
-  const qrPicRef = useRef<HTMLInputElement>(null);
-  const qrPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    e.target.value = '';
-    if (f) onQrImage(f);
-  };
+  const [scanOpen, setScanOpen] = useState(false);
   const importButton = (primary: boolean) => (
     <Button size="sm" variant={primary ? 'primary' : 'secondary'} icon={<FileUp size={14} />} loading={importing}
       onClick={() => fileRef.current?.click()}>
@@ -395,19 +392,13 @@ function SetupScreen({
           )}
         </div>
 
-        {/* Mã QR đáp án (trang kỳ thi / file ZIP trộn đề): like QM's
-            "Quét mã QR" / "Ảnh QR" — loads every mã đề's answers at once. */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 12, color: '#6B7280', fontWeight: 600, flexBasis: '100%' }}>Có mã QR đáp án? (trang kỳ thi → Đáp án → Mã QR đáp án)</span>
-          <Button size="sm" variant="secondary" icon={<ScanQrCode size={14} />} loading={qrBusy} onClick={() => qrCamRef.current?.click()}>
-            Quét mã QR
-          </Button>
-          <Button size="sm" variant="secondary" icon={<ImageIcon size={14} />} disabled={qrBusy} onClick={() => qrPicRef.current?.click()}>
-            Ảnh QR
-          </Button>
-          <input ref={qrCamRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={qrPicked} />
-          <input ref={qrPicRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={qrPicked} />
-        </div>
+        {/* Mã QR đáp án: like QM's "Quét mã QR" — the camera reads it live
+            and every mã đề's answers are filled in at once. */}
+        <Button variant="secondary" icon={<ScanQrCode size={16} />} loading={qrBusy} onClick={() => setScanOpen(true)}
+          style={{ width: '100%' }}>
+          Quét mã QR đáp án để điền sẵn đáp án
+        </Button>
+        <QrScannerModal open={scanOpen} onClose={() => setScanOpen(false)} onText={onQrText} onImage={onQrImage} />
 
         {/* 2026-10-07 "sao ở chấm nhanh ko chọn bộ đáp án thư viện đáp án
             (theo cái mẫu phiếu)": any answer key saved in the Thư viện đáp án
@@ -853,6 +844,7 @@ export default function QuickGradePage() {
           libraryId={libraryId}
           onPickLibrary={pickLibrary}
           onQrImage={file => { void qrImage(file); }}
+          onQrText={text => { setQrBusy(true); setImportNote(null); void applyQrTexts([text]).finally(() => setQrBusy(false)); }}
           qrBusy={qrBusy}
         />
       </>

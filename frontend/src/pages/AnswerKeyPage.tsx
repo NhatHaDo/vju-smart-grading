@@ -6,7 +6,7 @@ import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import TemplatePreviewThumb, { type TemplateAreaLike } from '../components/common/TemplatePreviewThumb';
 import PageHeader from '../components/layout/PageHeader';
-import { Upload, Trash2, FileSpreadsheet, Save, CheckCircle2, Loader2, ArrowLeft, Zap, AlertTriangle, Layers, Plus, X, Copy, Library, BookmarkPlus, Pencil, ScanQrCode, Image as ImageIcon, QrCode, Download } from 'lucide-react';
+import { Upload, Trash2, FileSpreadsheet, Save, CheckCircle2, Loader2, ArrowLeft, Zap, AlertTriangle, Layers, Plus, X, Copy, Library, BookmarkPlus, Pencil, ScanQrCode, QrCode, Download } from 'lucide-react';
 import {
   VJU_PRESET_SCHEMA,
   type AnswerKeyStore,
@@ -49,6 +49,7 @@ import { customFormsApi, examPapersApi, publicAnswerKey, publicAnswerKeyXlsxUrl,
 import Modal from '../components/modals/Modal';
 import AnswerKeyView from '../components/common/AnswerKeyView';
 import AnswerQrModal from '../components/common/AnswerQrModal';
+import QrScannerModal from '../components/common/QrScannerModal';
 import type { CustomFormMeta } from '../services/apiClient';
 import { buildSchemaFromDetail, buildSchemaFromAnswerKeys } from '../utils/templateSchema';
 import { buildAnswerKeyWorkbook, buildAnswerKeySampleWorkbook, maDeFromFileName, parseAnswerKeyWorkbook } from '../utils/answerKeyExcel';
@@ -784,8 +785,16 @@ export default function AnswerKeyPage() {
   const [qrNote, setQrNote] = useState('');
   const [qrView, setQrView] = useState<{ text: string; data: PublicAnswerKey } | null>(null);
   const [qrMake, setQrMake] = useState<{ name: string; templateKey: string; templateLabel: string; store: AnswerKeyStore } | null>(null);
-  const qrCamRef = useRef<HTMLInputElement>(null);
-  const qrPicRef = useRef<HTMLInputElement>(null);
+  const [scanOpen, setScanOpen] = useState(false);
+
+  /** the live scanner read a code → show its đáp án (Nạp vào / Tải Excel) */
+  const qrText = async (t: string) => {
+    setQrNote('');
+    setQrBusy(true);
+    try { setQrView({ text: t, data: await publicAnswerKey(t) }); }
+    catch { setQrNote('Mã QR này không phải mã đáp án của VJU Smart Grading.'); }
+    finally { setQrBusy(false); }
+  };
 
   const scanQr = async (file: File) => {
     setQrNote('');
@@ -1155,14 +1164,11 @@ export default function AnswerKeyPage() {
               Thư viện đáp án {visibleLibrary.length > 0 && <span style={{ color: '#9CA3AF', fontWeight: 600 }}>({visibleLibrary.length})</span>}
               {isGradingMode && <span style={{ fontWeight: 500, color: '#9CA3AF' }}> (đáp án đã lưu cho mẫu đang chấm: {currentTemplateLabel})</span>}
             </h3>
-            <Button size="sm" variant="secondary" icon={<ScanQrCode size={14} />} loading={qrBusy} onClick={() => qrCamRef.current?.click()}>Quét mã QR</Button>
-            <Button size="sm" variant="secondary" icon={<ImageIcon size={14} />} disabled={qrBusy} onClick={() => qrPicRef.current?.click()}>Ảnh QR</Button>
+            <Button size="sm" variant="secondary" icon={<ScanQrCode size={14} />} loading={qrBusy} onClick={() => setScanOpen(true)}>Quét mã QR</Button>
             <Button size="sm" variant="secondary" icon={<QrCode size={14} />} onClick={makeQr}>Tạo mã QR</Button>
             <Button size="sm" variant="secondary" icon={<BookmarkPlus size={14} />} onClick={handleSaveToLibrary}>Lưu vào thư viện</Button>
-            <input ref={qrCamRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
-              onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void scanQr(f); }} />
-            <input ref={qrPicRef} type="file" accept="image/*" style={{ display: 'none' }}
-              onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void scanQr(f); }} />
+            <QrScannerModal open={scanOpen} onClose={() => setScanOpen(false)}
+              onText={t => { void qrText(t); }} onImage={f => { void scanQr(f); }} />
           </div>
           {qrNote && <div style={{ fontSize: 12.5, color: '#B45309', marginBottom: 10 }}>⚠ {qrNote}</div>}
           <Modal open={qrView !== null} onClose={() => setQrView(null)} width={560}

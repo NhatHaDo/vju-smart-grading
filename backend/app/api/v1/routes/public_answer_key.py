@@ -84,9 +84,10 @@ def _rows(answers: dict[str, str]):
 
 
 @router.get("/{token}/xlsx")
-def excel(token: str, db: Session = Depends(get_db)):
+def excel(token: str, db: Session = Depends(get_db), inline: bool = False):
     """The đáp án as Excel — same layout Answer Key → Nhập file đáp án reads
-    back ("Đề 101" sheets, columns Câu / Đáp án)."""
+    back ("Đề 101" sheets, columns Câu / Đáp án). inline = open it in the
+    phone's browser (Safari / Chrome show the sheet) instead of a download."""
     d = _load(token, db)
     wb = Workbook()
     wb.remove(wb.active)
@@ -109,10 +110,10 @@ def excel(token: str, db: Session = Depends(get_db)):
     title = re.sub(r"[^\w\- ]+", "", d["title"]).strip() or "QR"
     name = f"Dap an - {title}.xlsx"
     return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
+                    headers={"Content-Disposition": f"{'inline' if inline else 'attachment'}; filename*=UTF-8''{quote(name)}"})
 
 
 @short_router.get("/{token}")
 def excel_short(token: str, db: Session = Depends(get_db)):
-    """Camera quét mã QR → tải ngay file Excel đáp án."""
-    return excel(token, db)
+    """Camera quét mã QR → mở sẵn file Excel đáp án ("t muốn n mở sẵn ra")."""
+    return excel(token, db, inline=True)
