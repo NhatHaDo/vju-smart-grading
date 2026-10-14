@@ -56,6 +56,8 @@ class FromBankIn(BaseModel):
     # the answer sheet: a template id from GET /exam-papers/sheets ("mau40" /
     # "bgd" = the shared ones, as sent before 2026-10-05); None = Mẫu 40
     sheet:             int | Literal["mau40", "bgd"] | None = None
+    # trình bày đề (services/paper_format.py) + "shuffle_groups" (đảo vị trí nhóm)
+    format:            dict | None = None
 
 
 class PaperUpdate(BaseModel):
@@ -65,6 +67,9 @@ class PaperUpdate(BaseModel):
     # GET /exam-papers/sheets) — a bộ đề mixed for the wrong sheet (or before
     # the sheet could be picked) is switched without mixing again
     sheet:   int | None = None
+    # 2026-10-14: trình bày đề (đầu đề, "Câu 1:", số câu đầu, tiếng Anh) —
+    # changes the Word files only, the mã đề stay as they are
+    format:  dict | None = None
 
 
 class VersionUpdate(BaseModel):
@@ -94,7 +99,7 @@ def create_from_bank(body: FromBankIn, svc: ExamPaperService = Depends(_svc)):
         name=body.name, category_ids=body.category_ids, counts=body.counts.model_dump(),
         num_versions=body.num_versions, start_code=body.start_code,
         shuffle_questions=body.shuffle_questions, shuffle_options=body.shuffle_options, exam_id=body.exam_id,
-        for_sheet=body.for_sheet, sheet=body.sheet)
+        for_sheet=body.for_sheet, sheet=body.sheet, fmt=body.format)
     return {**svc.to_dict(paper), "notes": notes}
 
 
@@ -235,6 +240,7 @@ async def create_from_file(
     for_sheet: bool = Form(True),
     sheet: str | None = Form(None),     # template id (see FromBankIn.sheet)
     answers_json: str | None = Form(None),
+    format_json: str | None = Form(None),     # see FromBankIn.format
     svc: ExamPaperService = Depends(_svc),
 ):
     """Mix đề file(s) directly (không cần đưa vào ngân hàng): .docx with
@@ -246,12 +252,17 @@ async def create_from_file(
         apply_picked_answers(questions, answers_json)
     except ValueError:
         raise HTTPException(422, "answers_json không hợp lệ")
+    try:
+        fmt = json.loads(format_json) if format_json else None
+    except ValueError:
+        raise HTTPException(422, "format_json không hợp lệ")
     given = {"mcq": count_mcq, "tf": count_tf, "short": count_short}
     counts = None if all(v is None for v in given.values()) else {qt: v or 0 for qt, v in given.items()}
     paper, notes = svc.create_from_questions(
         name=name, questions=questions, file_name=fname, num_versions=num_versions, start_code=start_code,
         shuffle_questions=shuffle_questions, shuffle_options=shuffle_options, exam_id=exam_id, counts=counts,
-        for_sheet=for_sheet, source_docx=source_docx, sheet=sheet or None)
+        for_sheet=for_sheet, source_docx=source_docx, sheet=sheet or None,
+        fmt=fmt if isinstance(fmt, dict) else None)
     if duplicates:
         warnings = warnings + [f"Đã bỏ {len(duplicates)} câu trùng (giống hệt một câu khác trong file)"]
     if note and not source_docx:
@@ -384,6 +395,10 @@ def _versions(svc: ExamPaperService, paper_id: int):
     return p, subtitle, {v["code"]: [Snapshot.from_dict(q) for q in v["questions"]] for v in d["versions"]}
 
 
+def _fmt(p) -> dict | None:
+    return json.loads(p.settings_json or "{}").get("format")
+
+
 @router.get("/{paper_id}/versions/{code}/docx")
 def export_version(paper_id: int, code: str, svc: ExamPaperService = Depends(_svc)):
     p, subtitle, versions = _versions(svc, paper_id)
@@ -396,7 +411,7 @@ def export_version(paper_id: int, code: str, svc: ExamPaperService = Depends(_sv
 @router.get("/{paper_id}/answer-key/docx")
 def export_answer_key(paper_id: int, svc: ExamPaperService = Depends(_svc)):
     p, _, versions = _versions(svc, paper_id)
-    return _file_response(answer_key_docx(p.name, versions), f"{_safe(p.name)} - Dap an.docx", DOCX)
+    return _file_response(answer_key_docx(p.name, versions, _fmt(p)), f"{_safe(p.name)} - Dap an.docx", DOCX)
 
 
 @router.get("/{paper_id}/zip")
@@ -407,7 +422,7 @@ def export_zip(paper_id: int, request: Request, svc: ExamPaperService = Depends(
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for code, snaps in versions.items():
             z.writestr(f"Ma de {_safe(code)}.docx", svc.version_word(p, code, snaps, subtitle))
-        z.writestr("Dap an.docx", answer_key_docx(p.name, versions))
+        z.writestr("Dap an.docx", answer_key_docx(p.name, versions, _fmt(p)))
         if p.exam_id is not None:       # quét trong Chấm nhanh để nạp đáp án của kỳ thi
             z.writestr("Ma QR dap an.png", answer_qr.png(answer_qr.link(answer_qr.token(p.exam_id), answer_qr.site_of(request))))
     return _file_response(buf.getvalue(), f"{_safe(p.name)}.zip", "application/zip")

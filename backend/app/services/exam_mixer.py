@@ -186,11 +186,13 @@ def _blocks(part: list[ParsedQuestion]) -> list[list[ParsedQuestion]]:
     return blocks
 
 
-def _order_part(part: list[ParsedQuestion], rng: random.Random, shuffle_questions: bool) -> list[ParsedQuestion]:
+def _order_part(part: list[ParsedQuestion], rng: random.Random, shuffle_questions: bool,
+                shuffle_groups: bool = True) -> list[ParsedQuestion]:
     blocks = _blocks(part)
     if shuffle_questions:
         # Swap block positions, except "<#gN>" blocks which stay where they are
-        movable = [i for i, b in enumerate(blocks) if not b[0].group_fixed]
+        # ("Đảo vị trí nhóm" off: no block moves, only questions inside them)
+        movable = [i for i, b in enumerate(blocks) if not b[0].group_fixed] if shuffle_groups else []
         order = movable[:]
         rng.shuffle(order)
         placed = blocks[:]
@@ -223,6 +225,7 @@ def build_versions(
     *,
     shuffle_questions: bool = True,
     shuffle_options: bool = True,
+    shuffle_groups: bool = True,
     seed: int | None = None,
 ) -> dict[str, list[Snapshot]]:
     """{code: [Snapshot, …]} — trắc nghiệm, Đúng/Sai, trả lời ngắn in that order."""
@@ -231,7 +234,7 @@ def build_versions(
     for code in codes:
         items: list[Snapshot] = []
         for qt in QTYPES:
-            part = _order_part([q for q in questions if q.qtype == qt], rng, shuffle_questions)
+            part = _order_part([q for q in questions if q.qtype == qt], rng, shuffle_questions, shuffle_groups)
             for q in part:
                 if qt == "mcq":
                     opts, ans, order = _shuffle_options(q, rng, shuffle_options)
@@ -328,26 +331,33 @@ def _center(doc, text: str, bold: bool = False, size: float | None = None):
 
 
 def version_docx(title: str, code: str, snaps: list[Snapshot], subtitle: str = "",
-                 assets: dict | None = None) -> bytes:
+                 assets: dict | None = None, fmt: dict | None = None) -> bytes:
     """The exam students receive — no answers marked. Formulas/pictures
-    ("[[ct:<id>]]") are written as the real objects from `assets`."""
+    ("[[ct:<id>]]") are written as the real objects from `assets`. fmt =
+    trình bày đề (paper_format: đầu đề, "Câu 1." / "Câu 1:", số câu đầu, tiếng Anh)."""
+    from app.services import paper_format as pf
     from app.services.rich_objects import add_rich
 
+    fmt = pf.normalize(fmt)
+    w = pf.words(fmt)
     doc = _new_doc()
-    _center(doc, title.upper(), bold=True, size=14)
-    if subtitle:
-        _center(doc, subtitle)
-    _center(doc, f"Mã đề: {code}", bold=True, size=13)
-    doc.add_paragraph("Họ và tên: ……………………………………………   Số báo danh: ……………………")
+    if fmt["header"] == "none":
+        _center(doc, title.upper(), bold=True, size=14)
+        if subtitle:
+            _center(doc, subtitle)
+        _center(doc, f"{w['code']}: {code}", bold=True, size=13)
+        doc.add_paragraph(w["name"])
+    else:
+        pf.header_elements(doc, fmt, code)       # already in place, at the top
 
     for qt in QTYPES:
         part = [s for s in snaps if s.qtype == qt]
         if not part:
             continue
-        doc.add_paragraph().add_run(f"PHẦN {PART_OF[qt]}. {PART_NAME[qt]}").bold = True
+        doc.add_paragraph().add_run(pf.part_heading(fmt, PART_OF[qt], qt)).bold = True
         for n, s in enumerate(part, start=1):
             p = doc.add_paragraph()
-            p.add_run(f"Câu {n}. ").bold = True
+            p.add_run(pf.number(fmt, n)).bold = True
             add_rich(doc, p, s.content, assets)
             if qt == "mcq":
                 for i, o in enumerate(s.options):
@@ -360,14 +370,19 @@ def version_docx(title: str, code: str, snaps: list[Snapshot], subtitle: str = "
                     op = doc.add_paragraph()
                     op.add_run(f"{LETTERS[i].lower()}) ")
                     add_rich(doc, op, o["text"], assets)
-    _center(doc, "— HẾT —", bold=True)
+    _center(doc, w["end"], bold=True)
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
 
 
-def answer_key_docx(title: str, versions: dict[str, list[Snapshot]]) -> bytes:
-    """Đáp án of every mã đề: one table per part, one row per mã đề."""
+def answer_key_docx(title: str, versions: dict[str, list[Snapshot]], fmt: dict | None = None) -> bytes:
+    """Đáp án of every mã đề: one table per part, one row per mã đề (câu
+    numbered like the đề, see paper_format)."""
+    from app.services import paper_format as pf
+
+    fmt = pf.normalize(fmt)
+    w = pf.words(fmt)
     doc = _new_doc()
     _center(doc, f"ĐÁP ÁN: {title.upper()}", bold=True, size=14)
     keys = {code: answer_key(snaps) for code, snaps in versions.items()}
@@ -387,12 +402,12 @@ def answer_key_docx(title: str, versions: dict[str, list[Snapshot]]) -> bytes:
         n = len(keys[codes[0]][qt]) if codes else 0
         if not n:
             continue
-        doc.add_paragraph().add_run(f"PHẦN {PART_OF[qt]}. {PART_NAME[qt]}").bold = True
+        doc.add_paragraph().add_run(pf.part_heading(fmt, PART_OF[qt], qt)).bold = True
         # trắc nghiệm can be 40 wide — split into chunks of 10 questions per table
         step = 10 if qt == "mcq" else n
         for start in range(0, n, step):
             idx = range(start, min(start + step, n))
-            header = ["Mã đề"] + [f"Câu {i + 1}" for i in idx]
+            header = [w["code"]] + [f"{w['q']} {i + fmt['start']}" for i in idx]
             rows = []
             for code in codes:
                 vals = keys[code][qt]

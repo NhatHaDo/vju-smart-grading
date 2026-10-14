@@ -23,6 +23,7 @@ from app.services.exam_mixer import (
     version_codes,
     version_docx,
 )
+from app.services import paper_format
 from app.services import question_assets as qa
 from app.services.question_bank_service import QuestionBankService, question_to_parsed
 from app.services.question_io import PART_OF, QTYPES, ParsedQuestion
@@ -141,7 +142,8 @@ class ExamPaperService:
     # ── Create ────────────────────────────────────────────────────────────
     def _save(self, name: str, source: str, settings: dict, questions: list[ParsedQuestion],
               num_versions: int, start_code: str, shuffle_questions: bool, shuffle_options: bool,
-              exam_id: int | None, for_sheet: bool = True, layout: SheetLayout | None = None) -> ExamPaper:
+              exam_id: int | None, for_sheet: bool = True, layout: SheetLayout | None = None,
+              fmt: dict | None = None) -> ExamPaper:
         if not name.strip():
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Nhập tên bộ đề")
         if exam_id is not None:
@@ -151,8 +153,9 @@ class ExamPaperService:
         except MixError as e:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e))
         seed = secrets.randbits(32)
+        fmt = {**paper_format.normalize(fmt), "shuffle_groups": bool((fmt or {}).get("shuffle_groups", True))}
         versions = build_versions(questions, codes, shuffle_questions=shuffle_questions,
-                                  shuffle_options=shuffle_options, seed=seed)
+                                  shuffle_options=shuffle_options, shuffle_groups=fmt["shuffle_groups"], seed=seed)
         if exam_id is not None:
             for code, snaps in versions.items():
                 self._check_gradable(snaps, code, layout)
@@ -162,7 +165,7 @@ class ExamPaperService:
             owner_id=self.user.id, name=name.strip(), exam_id=exam_id, source=source,
             settings_json=json.dumps({**settings, "num_versions": num_versions, "start_code": start_code,
                                       "shuffle_questions": shuffle_questions, "shuffle_options": shuffle_options,
-                                      "seed": seed}, ensure_ascii=False),
+                                      "format": fmt, "seed": seed}, ensure_ascii=False),
         )
         paper.versions = [
             ExamPaperVersion(code=code, questions_json=json.dumps([s.to_dict() for s in snaps], ensure_ascii=False))
@@ -176,7 +179,8 @@ class ExamPaperService:
     def create_from_bank(self, *, name: str, category_ids: list[int], counts: dict[str, int],
                          num_versions: int, start_code: str, shuffle_questions: bool,
                          shuffle_options: bool, exam_id: int | None,
-                         for_sheet: bool = True, sheet: object = None) -> tuple[ExamPaper, list[str]]:
+                         for_sheet: bool = True, sheet: object = None,
+                         fmt: dict | None = None) -> tuple[ExamPaper, list[str]]:
         """Pick `counts` random questions per part from the categories (own or
         shared with me), the same questions in every version. for_sheet →
         fit the answer sheet `sheet` (template id, None = Mẫu 40; see exam_mixer)."""
@@ -210,7 +214,7 @@ class ExamPaperService:
                                           "category_names": [c.name for c in cats], "counts": counts,
                                           "for_sheet": for_sheet},
                            chosen, num_versions, start_code, shuffle_questions, shuffle_options, exam_id,
-                           for_sheet, layout)
+                           for_sheet, layout, fmt)
         return paper, notes
 
     def create_from_questions(self, *, name: str, questions: list[ParsedQuestion], file_name: str,
@@ -219,7 +223,8 @@ class ExamPaperService:
                               counts: dict[str, int] | None = None,
                               for_sheet: bool = True,
                               source_docx: bytes | None = None,
-                              sheet: object = None) -> tuple[ExamPaper, list[str]]:
+                              sheet: object = None,
+                              fmt: dict | None = None) -> tuple[ExamPaper, list[str]]:
         """Mix one uploaded đề. `counts` None → every usable question of the
         file; otherwise that many random questions per part (a file bigger
         than the sheet, e.g. a 131-câu Moodle export), kept in file order.
@@ -261,14 +266,14 @@ class ExamPaperService:
             (SOURCES_DIR / stored).write_bytes(source_docx)
             settings.update(source_file=stored, keep_format=True)
         paper = self._save(name, "file", settings, questions, num_versions, start_code,
-                           shuffle_questions, shuffle_options, exam_id, for_sheet, layout)
+                           shuffle_questions, shuffle_options, exam_id, for_sheet, layout, fmt)
         if stored is not None:
             # Try one mã đề now: a file the format-keeping mixer can't handle
             # falls back to the plain Word output, and the teacher is told.
             first = paper.versions[0]
             try:
                 from app.services.docx_mixer import version_docx_keep_format
-                version_docx_keep_format(source_docx, first.code, plan_of(_snaps(first)))
+                version_docx_keep_format(source_docx, first.code, plan_of(_snaps(first)), fmt)
                 notes.insert(0, "Giữ nguyên định dạng Word của file gốc (công thức, hình ảnh, bảng)")
             except Exception:
                 logger.exception("keep-format mixing failed for paper %s", paper.id)
@@ -294,11 +299,11 @@ class ExamPaperService:
         if settings.get("keep_format") and path is not None and path.exists():
             try:
                 from app.services.docx_mixer import version_docx_keep_format
-                return version_docx_keep_format(path.read_bytes(), code, plan_of(snaps))
+                return version_docx_keep_format(path.read_bytes(), code, plan_of(snaps), settings.get("format"))
             except Exception:
                 logger.exception("keep-format export failed for paper %s, falling back to text", p.id)
         return version_docx(p.name, code, snaps, subtitle,
-                            assets=qa.load(self.db, qa.ids_in_questions(snaps)))
+                            assets=qa.load(self.db, qa.ids_in_questions(snaps)), fmt=settings.get("format"))
 
     # ── Update / delete ───────────────────────────────────────────────────
     def update(self, paper_id: int, fields: dict) -> ExamPaper:
@@ -323,6 +328,13 @@ class ExamPaperService:
                 settings["sheet"] = lay.id
             else:
                 settings.pop("sheet", None)
+            p.settings_json = json.dumps(settings, ensure_ascii=False)
+        if fields.get("format") is not None:
+            # trình bày đề only changes how the Word files look, not the mã đề
+            settings = json.loads(p.settings_json or "{}")
+            old = settings.get("format") or {}
+            settings["format"] = {**paper_format.normalize(fields["format"]),
+                                  "shuffle_groups": old.get("shuffle_groups", True)}
             p.settings_json = json.dumps(settings, ensure_ascii=False)
         if "exam_id" in fields:
             if fields["exam_id"] is not None:

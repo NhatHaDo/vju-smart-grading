@@ -213,7 +213,7 @@ export default function AnswerQrModal({ open, onClose, examId, examName, fromSto
               onChange={e => { const f = Array.from(e.target.files ?? []); e.target.value = ''; if (f.length) void makeFromFiles(f); }} />
           </div>
           <div style={{ fontSize: 12, color: '#9CA3AF', lineHeight: 1.5 }}>
-            Nhiều mã đề: một file có các sheet “Đề 101”, “Đề 102”… (như Answer Key → Xuất Excel), hoặc chọn nhiều file đặt tên theo mã đề (“Dap an 101.xlsx”).
+            Nhiều mã đề: một file có các sheet “Đề 101”, “Đề 102”… (như Answer Key → Xuất Excel), hoặc chọn nhiều file đặt tên theo mã đề (“Dap an 101.xlsx”). Nhận cả file đáp án Excel của YoungMix (Dap_an_excel_app_QM).
           </div>
           {made && (
             <div style={{ borderTop: '1px dashed #E5E7EB', paddingTop: 12 }}>

@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.security.permissions import get_current_user, require_roles
 from app.database import get_db
+from app.models.batch_result import BatchResult
 from app.models.user import User
 from app.schemas.exam_schema import (
     AnswerKeyCreate,
@@ -21,6 +23,23 @@ def _ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _with_counts(db: Session, exams) -> list[ExamOut]:
+    """graded_count = phiếu saved for the kỳ thi (Kết quả), counted from the
+    results — the stored counter was only bumped by the old one-by-one
+    grading API, so kỳ thi graded by batch / Chấm nhanh showed "0 phiếu"."""
+    ids = [e.id for e in exams]
+    counts = dict(
+        db.query(BatchResult.exam_id, func.count(BatchResult.id))
+        .filter(BatchResult.exam_id.in_(ids)).group_by(BatchResult.exam_id).all()
+    ) if ids else {}
+    out = []
+    for e in exams:
+        o = ExamOut.model_validate(e)
+        o.graded_count = counts.get(e.id, 0)
+        out.append(o)
+    return out
+
+
 @router.get("", response_model=list[ExamOut])
 def list_exams(
     skip: int = 0,
@@ -31,7 +50,7 @@ def list_exams(
 ):
     svc = ExamService(db)
     owner_id = current_user.id if mine or current_user.role == "teacher" else None
-    return svc.list_exams(owner_id=owner_id, skip=skip, limit=limit)
+    return _with_counts(db, svc.list_exams(owner_id=owner_id, skip=skip, limit=limit))
 
 
 @router.post("", response_model=ExamOut, status_code=201)
@@ -61,7 +80,7 @@ def get_exam(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    return ExamService(db).get_or_404(exam_id)
+    return _with_counts(db, [ExamService(db).get_or_404(exam_id)])[0]
 
 
 @router.put("/{exam_id}", response_model=ExamOut)

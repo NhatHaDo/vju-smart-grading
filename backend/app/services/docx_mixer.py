@@ -301,12 +301,17 @@ def _is_section_heading(el) -> bool:
     return bool(_DOCX_SECTION.match(text))
 
 
-def version_docx_keep_format(source: bytes, code: str, plan: list[dict]) -> bytes:
+def version_docx_keep_format(source: bytes, code: str, plan: list[dict], fmt: dict | None = None) -> bytes:
     """The mã đề `code` built from the teacher's own file. plan = the version's
     questions in order: [{"src": question index in parse_docx_layout,
-    "qtype": …, "perm": [original option per position] | None}]."""
+    "qtype": …, "perm": [original option per position] | None}]. fmt =
+    trình bày đề (paper_format): a đầu đề goes above the file's own title."""
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    from app.services import paper_format as pf
+
+    fmt = pf.normalize(fmt)
 
     questions, _, layout = parse_docx_layout(source, allow_unanswered=True)
     if not questions:
@@ -321,10 +326,12 @@ def version_docx_keep_format(source: bytes, code: str, plan: list[dict]) -> byte
     # Title and instructions stay; section headings ("A. PHẦN ĐẠI SỐ",
     # "I/ CĂN THỨC") don't — the mixed questions no longer follow them.
     out = [c for c in children[:prefix_end] if c is not sect and not _is_section_heading(c)]
+    if fmt["header"] != "none":
+        out = pf.header_elements(doc, fmt, code) + out
 
     head = doc.add_paragraph()
     head.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = head.add_run(f"Mã đề: {code}")
+    run = head.add_run(f"{pf.words(fmt)['code']}: {code}")
     # same font as the question text, so it doesn't stand out in Word's default font
     q0 = by_index.get(plan[0]["src"]) if plan else None
     base = next(iter(children[q0.src["qline"]].iterchildren(_R)), None) if q0 and q0.src else None
@@ -332,7 +339,8 @@ def version_docx_keep_format(source: bytes, code: str, plan: list[dict]) -> byte
         run._r.insert(0, copy.deepcopy(base.find(_RPR)))
         _unmark([run._r])
     run.bold = True
-    out.append(head._p)
+    if fmt["header"] == "none":       # the đầu đề already shows the mã đề
+        out.append(head._p)
 
     headings = {}
     for bi, qt in layout.get("parts") or []:
@@ -348,7 +356,7 @@ def version_docx_keep_format(source: bytes, code: str, plan: list[dict]) -> byte
             if q is None or q.src is None:
                 raise DocxMixError(f"question {it['src']} not found in the source file")
             style = q.src["number"].strip()
-            number = f"Câu {n}. " if not style[:1].isdigit() else f"{n}. "
+            number = pf.number(fmt, n, digits_only=style[:1].isdigit())
             out.extend(_question_elements(children, q.src, number, it.get("perm")))
 
     if layout.get("footer") is not None:

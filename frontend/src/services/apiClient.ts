@@ -710,6 +710,21 @@ export interface MixOptions {
   for_sheet?:        boolean;
   /** which answer sheet (when for_sheet): a template id from examPapersApi.sheets(); omitted = Mẫu 40 */
   sheet?:            AnswerSheet;
+  /** trình bày đề (components/common/PaperFormatFields) */
+  format?:           PaperFormat;
+}
+
+/** Trình bày đề (2026-10-14, backend services/paper_format.py): đầu đề,
+ *  "Câu 1." / "Câu 1:", số câu đầu tiên, đề tiếng Anh, đảo vị trí nhóm. */
+export interface PaperFormat {
+  header?:         'none' | 'vju' | 'school';
+  label?:          '.' | ':';
+  start?:          number;
+  english?:        boolean;
+  /** false = các nhóm câu đứng yên (only when mixing) */
+  shuffle_groups?: boolean;
+  org1?: string; org2?: string; org3?: string; title?: string; term?: string;
+  subject?: string; subject_code?: string; duration?: string;
 }
 
 /** An answer sheet a bộ đề can be graded on: the template id (2026-10-05: any
@@ -775,10 +790,11 @@ export const examPapersApi = {
     if (opts.for_sheet != null) fd.append('for_sheet', String(opts.for_sheet));
     if (opts.sheet != null) fd.append('sheet', String(opts.sheet));
     if (opts.answers && Object.keys(opts.answers).length) fd.append('answers_json', JSON.stringify(opts.answers));
+    if (opts.format) fd.append('format_json', JSON.stringify(opts.format));
     const res = await requestRaw('/api/v1/exam-papers/from-file', { method: 'POST', body: fd });
     return (await rawOrThrow(res)).json();
   },
-  update: (id: number, fields: { name?: string; exam_id?: number | null; sheet?: AnswerSheet }) =>
+  update: (id: number, fields: { name?: string; exam_id?: number | null; sheet?: AnswerSheet; format?: PaperFormat }) =>
     request<ExamPaperOut>(`/api/v1/exam-papers/${id}`, { method: 'PUT', body: JSON.stringify(fields) }),
   setInExam: (id: number, versionId: number, inExam: boolean) =>
     request<ExamPaperOut>(`/api/v1/exam-papers/${id}/versions/${versionId}`, { method: 'PUT', body: JSON.stringify({ in_exam: inExam }) }),

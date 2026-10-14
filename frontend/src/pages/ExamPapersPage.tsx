@@ -13,14 +13,15 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { ChevronDown, ChevronRight, Dices, Download, FileText, FileUp, Plus, QrCode, Shuffle, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Dices, Download, FileText, FileUp, Plus, QrCode, Shuffle, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import Modal from '../components/modals/Modal';
 import PageHeader from '../components/layout/PageHeader';
 import AnswerQrModal from '../components/common/AnswerQrModal';
+import PaperFormatFields, { DEFAULT_FORMAT } from '../components/common/PaperFormatFields';
 import { ApiError, examPapersApi, examsApi, questionBankApi } from '../services/apiClient';
-import type { AnswerSheetSpec, ExamPaperOut, MixOptions, ParsedFileInfo, PartCounts, QuestionCategoryOut, QuestionType } from '../services/apiClient';
+import type { AnswerSheetSpec, ExamPaperOut, MixOptions, PaperFormat, ParsedFileInfo, PartCounts, QuestionCategoryOut, QuestionType } from '../services/apiClient';
 import type { ExamOut } from '../types/exam';
 import { FileNote, LOSSY, UnansweredPicker } from '../components/common/UnansweredPicker';
 import { filesSignature, loadPicked, savePicked, useDraft } from '../services/draftStore';
@@ -131,10 +132,11 @@ function versionCodes(spec: string, n: number, forSheet: boolean,
   return { codes };
 }
 
-/** n distinct 3-digit mã đề in increasing order, e.g. "132, 209, 357, 485". */
-function randomCodes(n: number): string {
+/** n distinct 3- or 4-digit mã đề in increasing order, e.g. "132, 209, 357, 485". */
+function randomCodes(n: number, digits: 3 | 4 = 3): string {
   const set = new Set<number>();
-  while (set.size < Math.min(n, 24)) set.add(100 + Math.floor(Math.random() * 900));
+  const low = digits === 4 ? 1000 : 100;
+  while (set.size < Math.min(n, 24)) set.add(low + Math.floor(Math.random() * low * 9));
   return [...set].sort((a, b) => a - b).join(', ');
 }
 
@@ -149,7 +151,14 @@ function VersionCodeFields({ numVersions, setNumVersions, spec, setSpec, forShee
   const isList = /[,;]/.test(spec);
   const isRandom = isList && spec === lastRandom;
   const { codes, error } = versionCodes(spec, numVersions, forSheet, codeDigits);
-  const roll = (n: number) => { const r = randomCodes(n); setLastRandom(r); setSpec(r); };
+  // 4 chữ số only when the sheet's Mã đề field has 4 columns (BGD: 3)
+  const can4 = !forSheet || codeDigits == null || codeDigits >= 4;
+  const [digits, setDigits] = useState<3 | 4>(3);
+  const roll = (n: number, d: 3 | 4 = digits) => { const r = randomCodes(n, d); setDigits(d); setLastRandom(r); setSpec(r); };
+  const count = isList ? codes.length || numVersions : numVersions;
+  const diceBtn = (d: 3 | 4): React.CSSProperties => ({
+    border: 'none', background: 'none', padding: 0, color: '#C8102E', fontWeight: isRandom && digits === d ? 800 : 600,
+    textDecoration: isRandom && digits === d ? 'underline' : 'none', fontSize: 12, lineHeight: 1, cursor: 'pointer', fontFamily: 'inherit' });
   return (
     <>
       <div>
@@ -164,13 +173,16 @@ function VersionCodeFields({ numVersions, setNumVersions, spec, setSpec, forShee
       </div>
       <div style={{ position: 'relative' }}>
         <label style={labelStyle}>Mã đề</label>
-        <button type="button" onClick={() => roll(isList ? codes.length || numVersions : numVersions)}
-          title="Tạo mã đề ngẫu nhiên 3 chữ số"
-          style={{ position: 'absolute', top: 3, right: 0, border: 'none', background: 'none', padding: 0, color: '#C8102E',
-            fontWeight: 700, fontSize: 12, lineHeight: 1, cursor: 'pointer', fontFamily: 'inherit',
-            display: 'flex', alignItems: 'center', gap: 4 }}>
-          <Dices size={13} /> Ngẫu nhiên
-        </button>
+        <span title="Tạo mã đề ngẫu nhiên"
+          style={{ position: 'absolute', top: 3, right: 0, color: '#C8102E', fontSize: 12, lineHeight: 1,
+            display: 'flex', alignItems: 'center', gap: 5 }}>
+          <Dices size={13} />
+          <button type="button" style={diceBtn(3)} title="Mã đề ngẫu nhiên 3 chữ số" onClick={() => roll(count, 3)}>3 số</button>
+          {can4 && <>
+            <span style={{ color: '#D1D5DB' }}>|</span>
+            <button type="button" style={diceBtn(4)} title="Mã đề ngẫu nhiên 4 chữ số" onClick={() => roll(count, 4)}>4 số</button>
+          </>}
+        </span>
         <input value={spec} onChange={e => setSpec(e.target.value)} style={{ ...inputStyle, marginTop: 6 }}
           title="Nhập 1 mã để tự tăng (101 → 102, 103…) hoặc tự gõ danh sách mã đề, cách nhau dấu phẩy"
           placeholder={forSheet ? '101 hoặc 132, 209, 357' : '101, A, Đề 1 hoặc 132, 209, 357'} />
@@ -450,6 +462,7 @@ function CreateModal({ exams, onClose, onCreated }: {
   const [examId, setExamId] = useState<number | null>(null);
   const [forSheet, setForSheet] = useState(true);
   const [sheetId, setSheetId] = useState<number | null>(null);
+  const [format, setFormat] = useState<PaperFormat>(DEFAULT_FORMAT);
   const sheets = useSheets();
   const sheet = specOf(sheets, sheetId);
   const [busy, setBusy] = useState(false);
@@ -488,7 +501,7 @@ function CreateModal({ exams, onClose, onCreated }: {
     if (codeErr) { setError(codeErr); return; }
     const opts: MixOptions = { name: name.trim(), num_versions: numVersions, start_code: startCode.trim(),
       shuffle_questions: shuffleQuestions, shuffle_options: shuffleOptions,
-      exam_id: forSheet ? examId : null, for_sheet: forSheet, sheet: sheet.id || undefined };
+      exam_id: forSheet ? examId : null, for_sheet: forSheet, sheet: sheet.id || undefined, format };
     setBusy(true);
     try {
       let paper: ExamPaperOut;
@@ -600,6 +613,8 @@ function CreateModal({ exams, onClose, onCreated }: {
         <input type="checkbox" checked={shuffleOptions} onChange={e => setShuffleOptions(e.target.checked)} />
         Trộn thứ tự đáp án A/B/C/D (câu đánh dấu "không trộn" hoặc đáp án ghim # giữ nguyên)
       </label>
+      <PaperFormatFields value={format} onChange={setFormat} exam={exams.find(e => e.id === examId) ?? null}
+        keepFormat={source === 'file' && files.length === 1 && /\.docx$/i.test(files[0].name)} />
       {error && <div style={{ color: '#C8102E', fontSize: 13, marginTop: 10 }}>{error}</div>}
     </Modal>
   );
@@ -617,6 +632,7 @@ function PaperCard({ paper, exams, onChanged, onDeleted, onError }: {
   const [showKey, setShowKey] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
+  const [fmtDraft, setFmtDraft] = useState<PaperFormat | null>(null);   // "Trình bày đề" open
   const sheets = useSheets();
 
   const run = async (tag: string, fn: () => Promise<void>) => {
@@ -627,7 +643,7 @@ function PaperCard({ paper, exams, onChanged, onDeleted, onError }: {
   const download = (path: string, filename: string) =>
     run(path, async () => saveBlob(await examPapersApi.download(`${paper.id}/${path}`), filename));
 
-  const settings = paper.settings as { category_names?: string[]; file_name?: string; keep_format?: boolean };
+  const settings = paper.settings as { category_names?: string[]; file_name?: string; keep_format?: boolean; format?: PaperFormat };
   const sourceText = paper.source === 'bank'
     ? `Ngân hàng: ${(settings.category_names ?? []).join(', ') || 'không rõ'}`
     : `File: ${settings.file_name ?? 'không rõ'}`;
@@ -671,8 +687,26 @@ function PaperCard({ paper, exams, onChanged, onDeleted, onError }: {
           onClick={() => download('zip', `${safeName(paper.name)}.zip`)}>Tải tất cả (.zip)</Button>
         <Button size="sm" variant="outline" icon={<FileText size={13} />} loading={busy === 'answer-key/docx'}
           onClick={() => download('answer-key/docx', `${safeName(paper.name)} - Dap an.docx`)}>Đáp án (Word)</Button>
+        <Button size="sm" variant="outline" icon={<SlidersHorizontal size={13} />}
+          onClick={() => setFmtDraft({ ...DEFAULT_FORMAT, ...settings.format })}>Trình bày đề</Button>
         {paper.exam_id != null && (
           <Button size="sm" variant="outline" icon={<QrCode size={13} />} onClick={() => setQrOpen(true)}>Mã QR đáp án</Button>
+        )}
+        {fmtDraft && (
+          <Modal open onClose={() => setFmtDraft(null)} title="Trình bày đề" width={620}
+            footer={<>
+              <Button variant="secondary" onClick={() => setFmtDraft(null)}>Hủy</Button>
+              <Button loading={busy === 'format'} onClick={() => run('format', async () => {
+                onChanged(await examPapersApi.update(paper.id, { format: fmtDraft }));
+                setFmtDraft(null);
+              })}>Lưu</Button>
+            </>}>
+            <div style={{ fontSize: 13, color: '#6B7280', lineHeight: 1.5 }}>
+              Đổi cách trình bày file Word (đầu đề, đánh số câu, tiếng Anh). Câu hỏi và đáp án các mã đề giữ nguyên.
+            </div>
+            <PaperFormatFields value={fmtDraft} onChange={setFmtDraft} showGroups={false} defaultOpen
+              exam={exams.find(e => e.id === paper.exam_id) ?? null} keepFormat={!!settings.keep_format} />
+          </Modal>
         )}
         <AnswerQrModal open={qrOpen} onClose={() => setQrOpen(false)} examId={paper.exam_id}
           examName={exams.find(e => e.id === paper.exam_id)?.name} />
@@ -837,6 +871,7 @@ function QuickMix({ exams, onCreated, presetExamId }: {
   useEffect(() => { if (presetExamId != null) setExamId(presetExamId); }, [presetExamId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [forSheet, setForSheet] = useDraft('quickmix.forSheet', true);
   const [sheetId, setSheetId] = useDraft<number | null>('quickmix.sheetId', null);
+  const [format, setFormat] = useDraft<PaperFormat>('quickmix.format', DEFAULT_FORMAT);
   const sheets = useSheets();
   const sheet = specOf(sheets, sheetId);
   const [busy, setBusy] = useState(false);
@@ -878,6 +913,7 @@ function QuickMix({ exams, onCreated, presetExamId }: {
         name: name.trim(), num_versions: numVersions, start_code: startCode.trim(),
         shuffle_questions: shuffleQuestions, shuffle_options: shuffleOptions,
         exam_id: forSheet ? examId : null, for_sheet: forSheet, sheet: sheet.id || undefined, counts: fc.counts, answers: fc.picked,
+        format,
       });
       saveBlob(await examPapersApi.download(`${paper.id}/zip`), `${safeName(paper.name)}.zip`);
       onCreated(paper);
@@ -935,6 +971,8 @@ function QuickMix({ exams, onCreated, presetExamId }: {
                 </div>
               )}
             </div>
+            <PaperFormatFields value={format} onChange={setFormat} exam={forSheet ? exams.find(e => e.id === examId) ?? null : null}
+              keepFormat={files.length === 1 && /\.docx$/i.test(files[0].name)} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#374151', cursor: 'pointer' }}>
                 <input type="checkbox" checked={shuffleQuestions} onChange={e => setShuffleQuestions(e.target.checked)} /> Trộn câu hỏi

@@ -264,6 +264,70 @@ function parseScoringSheet(wb: ExcelJS.Workbook): ScoringWeights {
   };
 }
 
+// ── File đáp án của YoungMix / app QM (2026-10-14) ───────────────────────────
+// "Dap_an_excel_app_QM_2025.xlsx": one sheet, A1 = "Đề\câu", column A = mã
+// đề (one row each), then columns 1…40 (Phần I, A–D), 1a…8d (Phần II,
+// Đúng/Sai written D / S) and, when present, the trả lời ngắn after them. Our
+// answer sheets list their questions in that same order (Mẫu 40, Phiếu Bộ GD),
+// so the columns map onto the template's labels by position.
+
+const cellText = (v: ExcelJS.CellValue): string => {
+  if (v == null) return '';
+  if (typeof v === 'object' && 'richText' in v) return v.richText.map(r => r.text).join('').trim();
+  if (typeof v === 'object' && 'result' in v) return String(v.result ?? '').trim();
+  return String(v).trim();
+};
+
+function parseYoungMixSheet(ws: ExcelJS.Worksheet, schema: TemplateSchema, scoring: ScoringWeights): ParsedAnswerKeyResult | null {
+  const head = ws.getRow(1);
+  if (!/^đề\s*[\\/]\s*câu$/i.test(cellText(head.getCell(1).value))) return null;
+  const isTF = (o?: string[]) => !!o && o.some(x => /^(đ|d|s)$/i.test(x)) && !o.includes('A');
+  const mcq: string[] = [], tf: string[] = [], text: string[] = [];
+  for (const sec of schema.answerSections) {
+    if (sec.inputType === 'text') text.push(...sec.labels);
+    else if (isTF(sec.options)) tf.push(...sec.labels);
+    else mcq.push(...sec.labels);
+  }
+  const warnings: string[] = [];
+  // column → template label
+  const cols: { col: number; label: string; kind: 'mcq' | 'tf' | 'text' }[] = [];
+  let textIdx = 0;
+  const last = Math.max(head.cellCount, ws.columnCount);
+  for (let c = 2; c <= last; c++) {
+    const h = cellText(head.getCell(c).value).toLowerCase();
+    if (!h) continue;
+    let m: RegExpMatchArray | null;
+    if ((m = h.match(/^(\d+)$/))) {
+      const label = mcq[Number(m[1]) - 1];
+      if (label) cols.push({ col: c, label, kind: 'mcq' }); else warnings.push(`Câu ${m[1]} (Phần I): mẫu phiếu không có câu này, bỏ qua`);
+    } else if ((m = h.match(/^(\d+)([a-d])$/))) {
+      const label = tf[(Number(m[1]) - 1) * 4 + 'abcd'.indexOf(m[2])];
+      if (label) cols.push({ col: c, label, kind: 'tf' }); else warnings.push(`Câu ${h} (Đúng/Sai): mẫu phiếu không có câu này, bỏ qua`);
+    } else {
+      const label = text[textIdx++];
+      if (label) cols.push({ col: c, label, kind: 'text' });
+    }
+  }
+  const now = new Date().toISOString();
+  const byMaDe: Record<string, AnswerKeySet> = {};
+  for (let r = 2; r <= ws.rowCount; r++) {
+    const row = ws.getRow(r);
+    const code = cellText(row.getCell(1).value);
+    if (!code) continue;
+    const answers: Record<string, string> = {};
+    for (const { col, label, kind } of cols) {
+      let v = cellText(row.getCell(col).value);
+      if (!v) continue;
+      if (kind === 'tf') v = /^(d|đ)$/i.test(v) ? 'Đ' : /^s$/i.test(v) ? 'S' : v;
+      else if (kind === 'mcq') v = v.toUpperCase();
+      answers[label] = v;
+    }
+    if (Object.keys(answers).length) byMaDe[code] = { answers, scoring, updatedAt: now };
+  }
+  if (!Object.keys(byMaDe).length) warnings.push('File YoungMix không có dòng mã đề nào có đáp án.');
+  return { store: { answers: {}, scoring, updatedAt: now, byMaDe }, warnings };
+}
+
 /** Parse an uploaded Answer Key .xlsx back into an AnswerKeyStore, matched
  *  against the CURRENT template's schema (so importing a file prepared for
  *  a different mẫu phiếu is caught, not silently misapplied). */
@@ -275,6 +339,11 @@ export async function parseAnswerKeyWorkbook(file: File, schema: TemplateSchema)
   const validLabels = new Set(schema.answerSections.flatMap(s => s.labels));
   const warnings: string[] = [];
   const scoring = parseScoringSheet(wb);
+
+  // the file made by YoungMix for the app QM ("Đề\câu" header)
+  const first = wb.worksheets[0];
+  const ym = first ? parseYoungMixSheet(first, schema, scoring) : null;
+  if (ym) return ym;
 
   const maDeSheets: { code: string; ws: ExcelJS.Worksheet }[] = [];
   let flatSheet: ExcelJS.Worksheet | null = null;
