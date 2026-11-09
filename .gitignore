@@ -89,3 +89,6 @@ backend/test_write.txt
 
 # sample files the app offers for download (Trộn đề → File mẫu)
 !frontend/public/samples/*.xlsx
+
+# Cấu hình deploy (bí mật)
+deploy.env
