@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     omr_upload_dir: str = "./uploads"
     omr_output_dir: str = "./outputs"
 
+    # Thư mục giao diện đã build (frontend/dist). Có thì backend phục vụ luôn
+    # web ở cùng cổng (không cần nginx); để trống khi chạy dev (Vite lo phần web).
+    frontend_dist: str = ""
+
     # Rate limiting
     rate_limit_per_minute: int = 60
 

@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -51,6 +52,24 @@ _uploads_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(_uploads_dir)), name="uploads")
 
 
-@app.get("/")
-async def root():
-    return {"message": "VJU Smart Grading API", "docs": "/docs"}
+_dist = Path(settings.frontend_dist) if settings.frontend_dist else None
+_serve_web = bool(_dist and (_dist / "index.html").is_file())
+
+if not _serve_web:
+    @app.get("/")
+    async def root():
+        return {"message": "VJU Smart Grading API", "docs": "/docs"}
+else:
+    # Phục vụ giao diện React đã build — đăng ký CUỐI CÙNG để không đè /api, /uploads, /outputs
+    _no_cache = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa(full_path: str):
+        if full_path.split("/", 1)[0] in ("api", "uploads", "outputs", "docs", "openapi.json"):
+            raise HTTPException(404)
+        target = (_dist / full_path).resolve()
+        if full_path and target.is_file() and _dist.resolve() in target.parents:
+            # file build có hash trong tên (assets/) → cache lâu được
+            hdr = {"Cache-Control": "public, max-age=31536000, immutable"} if full_path.startswith("assets/") else _no_cache
+            return FileResponse(target, headers=hdr)
+        return FileResponse(_dist / "index.html", headers=_no_cache)

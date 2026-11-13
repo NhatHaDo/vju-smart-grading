@@ -1,52 +1,54 @@
-# Hướng dẫn deploy lên server nội bộ
+# Deploy lên server nội bộ (Python + supervisor, không Docker)
 
-Kiến trúc: `Internet → Cloudflare Tunnel (hoặc reverse proxy) → nginx (web) → FastAPI (backend)`.
-Server nội bộ **không cần mở cổng vào** khi dùng Cloudflare Tunnel.
+Kiến trúc: `Internet → Cloudflare Tunnel / proxy → uvicorn :10000 (FastAPI + giao diện web)`.
+Supervisor giữ backend luôn chạy. Không cần nginx: backend phục vụ luôn giao diện đã build (`FRONTEND_DIST`).
 
-## 1. Yêu cầu server
-- Linux có Docker + Docker Compose plugin, ra được Internet (tải image, kết nối Cloudflare).
-- ~3 GB trống để build (LibreOffice nặng; bỏ bằng `INSTALL_LIBREOFFICE=0` nếu không dùng đề Word có công thức).
+## 1. Chuẩn bị (user `scoring`, không cần sudo nếu server đã có sẵn)
+```bash
+python3 --version      # cần 3.12 hoặc 3.13 (Python 3.14 chưa có sẵn gói numpy/opencv bản đang ghim)
+which supervisorctl git
+```
+Nếu Python là 3.14: cài Python riêng không cần sudo bằng `uv` → `curl -LsSf https://astral.sh/uv/install.sh | sh`, `uv python install 3.13`, rồi tạo venv bằng `~/.local/bin/uv venv --python 3.13 backend/.venv`.
+LibreOffice (chỉ cho đề Word có công thức) cần quyền cài đặt: bỏ qua được, chức năng đó sẽ tắt.
 
 ## 2. Cài lần đầu
 ```bash
-sudo mkdir -p /opt/vju && sudo chown $USER /opt/vju
 git clone https://github.com/NhatHaDo/vju-smart-grading.git ~/vju-smart-grading
 cd ~/vju-smart-grading
-cp deploy.env.example /opt/vju/deploy.env
-nano /opt/vju/deploy.env        # JWT_SECRET_KEY, CORS_ORIGINS, token tunnel
-docker compose --env-file /opt/vju/deploy.env up -d --build   # thử, chưa mở ra ngoài
-curl http://localhost:8080/api/v1/health
+mkdir -p ~/vju-data ~/logs
+cp deploy/env.example backend/.env
+nano backend/.env          # JWT_SECRET_KEY (openssl rand -hex 32), CORS_ORIGINS
 ```
-Dữ liệu (DB, ảnh) nằm trong volume Docker `app_data` → **đưa volume này vào lịch backup hằng ngày**:
+Giao diện: server có `npm` thì `deploy.sh` tự build. Không có thì build trên máy rồi đưa lên:
 ```bash
-docker run --rm -v vju-smart-grading_app_data:/data -v /backup:/backup alpine \
-  tar czf /backup/vju-$(date +%F).tgz -C /data .
+cd frontend && npm ci && VITE_API_BASE= npm run build
+scp -r dist scoring@172.16.12.95:~/vju-smart-grading/frontend/
+```
+Chạy deploy (cài thư viện, khởi động lại, kiểm tra health):
+```bash
+bash ~/vju-smart-grading/deploy.sh
 ```
 
-## 3. Mở ra ngoài
-**Cách A – Cloudflare Tunnel (khuyên dùng):**
-1. Cloudflare Zero Trust → Networks → Tunnels → Create tunnel → copy token vào `CLOUDFLARE_TUNNEL_TOKEN`.
-2. Public hostname: domain của trường → Service `http://web:80`.
-3. `docker compose --env-file /opt/vju/deploy.env --profile tunnel up -d`
-4. Đặt `CORS_ORIGINS=https://<domain trường>`.
+## 3. Supervisor
+Nhờ người quản server (hoặc tự nếu có quyền) đặt `deploy/supervisor/vju-backend.conf` vào thư mục conf của supervisor, rồi:
+```bash
+supervisorctl reread && supervisorctl update && supervisorctl status vju-backend
+```
+User `scoring` cần quyền gọi `supervisorctl` (socket cho phép nhóm/user đó) để `deploy.sh` restart được.
+Log: `~/logs/vju-backend.log`.
 
-**Cách B – Reverse proxy của IT (nginx/Caddy):** trỏ domain → `http://<ip server>:8080`, bật HTTPS ở proxy,
-đặt header `X-Forwarded-Proto`, `client_max_body_size 100m`, `proxy_read_timeout 300s`.
+Mở thử trong mạng trường: `http://172.16.12.95:10000`. **Đổi ngay mật khẩu admin mặc định** (`admin@vju.ac.vn` / `password`).
 
-HTTPS là bắt buộc (camera + quét QR chỉ chạy trên HTTPS).
+## 4. Mở ra ngoài
+**Cloudflare Tunnel:** Zero Trust → Networks → Tunnels → tạo tunnel, hostname = domain trường, Service = `http://localhost:10000`; cài `cloudflared` làm service trên server (cần quyền root/anh Tú). Sau đó thêm `https://<domain>` vào `CORS_ORIGINS` rồi `supervisorctl restart vju-backend`.
+**Reverse proxy của IT:** trỏ domain → `http://172.16.12.95:10000`, bật HTTPS, `client_max_body_size 100m`, `proxy_read_timeout 300s`. HTTPS bắt buộc (camera + quét QR).
 
-## 4. CI/CD bằng GitHub Actions (`.github/workflows/deploy.yml`)
-Push lên `main` → chạy test + build → deploy trên server.
-Server nội bộ GitHub không truy cập được nên dùng **self-hosted runner**:
-1. GitHub repo → Settings → Actions → Runners → New self-hosted runner → làm theo lệnh, thêm label `vju-prod`.
-2. Cài runner thành service: `sudo ./svc.sh install && sudo ./svc.sh start` (user của runner phải thuộc nhóm `docker`).
-3. File `/opt/vju/deploy.env` có sẵn trên server (bí mật không nằm trong GitHub).
-Từ đó mỗi lần merge vào `main` là tự deploy; chạy tay: tab Actions → CI/CD → Run workflow.
+## 5. CI/CD (GitHub Actions)
+Push lên `main` → chạy test + build giao diện → deploy trên server. Server nội bộ GitHub không với tới, nên cần **self-hosted runner** (label `vju-prod`) cài bằng user `scoring`:
+GitHub repo → Settings → Actions → Runners → New self-hosted runner, làm theo lệnh. Chạy nền: `./svc.sh install` cần sudo (nhờ anh Tú), hoặc chạy `./run.sh` trong supervisor/tmux.
 
-Rollback: `git revert` rồi push, hoặc trên server `git checkout <commit> && docker compose ... up -d --build`.
-
-## 5. Lưu ý
-- Domain đổi: chỉ sửa `CORS_ORIGINS` + hostname tunnel (web không build cứng domain). App iOS vẫn cần sửa `frontend/capacitor.config.ts`.
+## 6. Lưu ý
+- Dữ liệu (DB, ảnh) nằm ở `~/vju-data`, **ngoài thư mục code**: đưa vào lịch backup hằng ngày.
+- Backend chạy 1 tiến trình vì dùng SQLite.
+- Đổi domain: chỉ sửa `CORS_ORIGINS` + hostname tunnel. App iOS vẫn phải sửa `frontend/capacitor.config.ts`.
 - Font Be Vietnam Pro cho ảnh debug chưa có trong repo (xem `backend/app/core/omr/assets/fonts/README.md`).
-- Backend chạy 1 worker vì dùng SQLite.
-- Tài khoản admin mặc định `admin@vju.ac.vn` / `password` được tự tạo khi chạy lần đầu: **đăng nhập đổi mật khẩu ngay**.
