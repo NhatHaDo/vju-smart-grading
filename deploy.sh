@@ -33,8 +33,11 @@ SCTL=supervisorctl
 $SCTL restart vju-backend
 
 echo "==> 5. Kiểm tra"
+# cổng lấy từ cấu hình supervisor (mặc định 10000)
+PORT=$(grep -o -- '--port [0-9]*' "$HOME/supervisor/supervisord.conf" 2>/dev/null | head -1 | awk '{print $2}')
+PORT=${PORT:-10000}
 for i in $(seq 1 20); do
-  curl -fs http://localhost:10000/api/v1/health && echo && exit 0
+  curl -fs "http://localhost:$PORT/api/v1/health" && echo && exit 0
   sleep 2
 done
 echo "Backend chưa lên — xem log: ~/logs/vju-backend.log" >&2; exit 1
