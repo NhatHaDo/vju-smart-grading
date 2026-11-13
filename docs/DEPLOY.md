@@ -30,6 +30,13 @@ bash ~/vju-smart-grading/deploy.sh
 ```
 
 ## 3. Supervisor
+**Không có sudo / chưa có supervisor** (trường hợp server `prod01`): chạy 1 lần script cài supervisor + Python 3.13 cho user `scoring`:
+```bash
+bash ~/vju-smart-grading/deploy/setup_user_supervisor.sh
+```
+Script tự cài `uv`, Python 3.13, supervisor, đặt cron `@reboot` để tự chạy lại. Cần server ra Internet (astral.sh, github.com, pypi.org). Làm bước này TRƯỚC `deploy.sh`.
+
+**Có root:** cách chuẩn dưới đây.
 Nhờ người quản server (hoặc tự nếu có quyền) đặt `deploy/supervisor/vju-backend.conf` vào thư mục conf của supervisor, rồi:
 ```bash
 supervisorctl reread && supervisorctl update && supervisorctl status vju-backend

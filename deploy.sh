@@ -11,7 +11,11 @@ git pull --ff-only
 
 echo "==> 2. Backend (venv + thư viện)"
 cd backend
-[ -d .venv ] || python3 -m venv .venv
+if [ ! -d .venv ]; then
+  export PATH="$HOME/.local/bin:$PATH"
+  # Python 3.14 (mặc định Ubuntu 26.04) chưa có gói sẵn cho numpy/opencv bản đang ghim → dùng 3.13
+  if command -v uv >/dev/null; then uv venv --python 3.13 --seed .venv; else python3 -m venv .venv; fi
+fi
 .venv/bin/pip install -q --upgrade pip
 .venv/bin/pip install -q -r requirements.txt
 cd ..
@@ -24,7 +28,9 @@ elif [ ! -f frontend/dist/index.html ]; then
 fi
 
 echo "==> 4. Khởi động lại backend"
-supervisorctl restart vju-backend
+SCTL=supervisorctl
+[ -f "$HOME/supervisor/supervisord.conf" ] && SCTL="$HOME/supervisor/venv/bin/supervisorctl -c $HOME/supervisor/supervisord.conf"
+$SCTL restart vju-backend
 
 echo "==> 5. Kiểm tra"
 for i in $(seq 1 20); do
